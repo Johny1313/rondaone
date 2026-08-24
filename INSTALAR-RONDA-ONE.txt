@@ -1,0 +1,69 @@
+RONDA ONE 0.7 — INSTALAÇÃO SEM NODE NO COMPUTADOR
+=================================================
+
+OBJETIVO
+Um único repositório GitHub chamado `ronda-one` e um único Worker Cloudflare.
+Você não precisa instalar Node.js, Wrangler, Python ou ComfyUI no PC.
+
+ETAPA 1 — GITHUB
+1. Acesse GitHub > New repository.
+2. Nome: ronda-one
+3. Pode deixar Public durante o MVP (ou Private se sua integração Cloudflare
+   tiver acesso ao repositório privado).
+4. Crie o repositório.
+5. Extraia este ZIP no Windows.
+6. No GitHub, use Add file > Upload files.
+7. Envie o CONTEÚDO da pasta extraída, não o ZIP.
+8. Confirme que package.json e wrangler.jsonc ficaram na raiz.
+9. Commit changes.
+
+ETAPA 2 — D1
+Se quiser preservar o histórico da Ronda atual:
+- abra o D1 usado pela Ronda no Cloudflare e copie o Database ID.
+
+Se quiser começar do zero:
+- Cloudflare > Storage & Databases > D1 > Create database
+- nome sugerido: ronda-one-db
+- copie o Database ID.
+
+No GitHub, edite wrangler.jsonc e adicione o bloco descrito em
+CONFIGURAR-D1.txt usando o ID real.
+Faça novo commit.
+
+ETAPA 3 — CLOUDFLARE WORKERS BUILDS
+1. Cloudflare > Workers & Pages > Create application.
+2. Import a repository > Get started.
+3. Selecione o repositório `ronda-one`.
+4. Production branch: main
+5. Root directory: deixe vazio.
+6. Build command: deixe vazio.
+7. Deploy command: npx wrangler deploy
+8. Save and Deploy.
+
+O wrangler.jsonc já declara o binding AI e o Cron */5 * * * *.
+O D1 precisa estar no próprio wrangler.jsonc antes do deploy definitivo.
+
+ETAPA 4 — SECRETS
+No Worker publicado > Settings > Variables and Secrets:
+- se a Ronda atual usa proteção manual, recrie MANUAL_ROUND_TOKEN.
+- se usar GIPHY no Design, cadastre GIPHY_API_KEY como Secret.
+Nunca coloque essas chaves em public/index.html ou no GitHub.
+
+ETAPA 5 — TESTE
+Abra:
+- /api/platform/status
+- /ronda
+- /design/
+- /projects/
+
+No status, confira:
+- platform = RONDA ONE
+- version = 0.7.0
+- ai = true
+- projects = true (quando DB estiver ligado)
+
+Na Ronda:
+1. gere um roteiro de carrossel;
+2. clique RONDA DESIGN;
+3. confirme que 7 pranchetas são abertas;
+4. confirme que título, subtítulo, origem, overlay e imagem estão separados.
