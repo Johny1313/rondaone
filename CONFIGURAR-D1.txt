@@ -1,0 +1,19 @@
+RONDA ONE — CONFIGURAR D1
+=========================
+
+O `database_id` é exclusivo da sua conta Cloudflare.
+
+No wrangler.jsonc, acrescente antes de "triggers":
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ronda-one-db",
+      "database_id": "COLE_AQUI_O_ID_REAL"
+    }
+  ],
+
+Se você reutilizar o D1 atual da Ronda Editorial, mantenha o nome real daquele
+banco em `database_name` e use o respectivo Database ID.
+
+Não faça deploy deixando COLE_AQUI_O_ID_REAL.

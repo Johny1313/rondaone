@@ -1,0 +1,11 @@
+RONDA ONE 0.7.0
+Build: 070-EDITORIAL-DESIGN-20260824
+
+Módulos:
+- Ronda Editorial
+- Ronda Design
+- Ronda AI
+- Ronda Projects
+
+Arquitetura: um repositório GitHub + um Cloudflare Worker modular.
+Modo MVP: free-only, sem fallback pago.
