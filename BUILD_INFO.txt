@@ -24,3 +24,6 @@ MVP sem custo:
 - não adiciona providers pagos
 - filas Cloudflare são opcionais; sem binding, a Ronda usa os fallbacks já previstos pela 2.8.5
 - YouTube fica isolado e opcional até YOUTUBE_DB/API serem configurados
+
+
+Deploy RONDA ONE 0.7.1 - Ronda Editorial 2.8.5
