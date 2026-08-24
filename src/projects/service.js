@@ -21,19 +21,19 @@ async function ensureTable(db){
 }
 
 function shortVisualPrompt(topic, carousel){
-  const title=clean(topic?.title || carousel?.topicTitle || 'notícia em destaque',220);
+  const title=clean(topic?.title || carousel?.topicTitle || 'notícia em destaque',180);
   const who=clean(carousel?.questions?.who || '',130);
   const where=clean(carousel?.questions?.where || '',100);
   const theme=(carousel?.entities?.themes || []).slice(0,3).map(x=>clean(x,60)).filter(Boolean).join(', ');
   let subject=[title, who && `involving ${who}`, where && `in ${where}`, theme && `context: ${theme}`].filter(Boolean).join('. ');
-  subject=subject.slice(0,300);
-  return clean(`Editorial documentary photograph illustrating ${subject}. Neutral realistic news context, natural light, credible environment, negative space for carousel text, no text, no watermark.`,430);
+  subject=subject.slice(0,240);
+  return clean(`Documentary news photograph illustrating ${subject}. Neutral real-world setting, natural light, realistic detail, negative space for layout, no text, no watermark.`,340);
 }
 
 function normalizeProject(input={}){
   const topic=input.topic || {};
   const carousel=input.carousel || {};
-  const slides=(carousel.slides || input.slides || []).slice(0,7).map((s,i)=>({
+  const slides=(carousel.slides || input.slides || []).slice(0,15).map((s,i)=>({
     number:Number(s?.number)||i+1,
     role:clean(s?.role || `Slide ${i+1}`,80),
     title:clean(s?.title || '',180),

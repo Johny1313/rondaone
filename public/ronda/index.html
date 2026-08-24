@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f4">
+  <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
+  <title>Ronda Editorial 24h</title>
+  <link rel="stylesheet" href="/styles.css?v=2.8.5">
+</head>
+<body>
+  <main class="app">
+    <aside class="sidebar">
+      <button class="brand" id="goTop" type="button" aria-label="Voltar ao topo">RE</button>
+      <nav aria-label="Navegação principal">
+        <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
+        <button class="nav" id="navNewsroom" type="button"><span class="nav-icon">M</span><span>Mesa</span></button>
+        <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
+        <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
+        <button class="nav" id="navYouTube" type="button"><span class="nav-icon">Y</span><span>YouTube</span></button>
+        <button class="nav" id="navProfile" type="button"><span class="nav-icon">P</span><span>Perfil</span></button>
+        <button class="nav" id="navHistory" type="button"><span class="nav-icon">H</span><span>Histórico</span></button>
+      </nav>
+      <button class="nav settings" id="openSettings" type="button"><span class="nav-icon">·</span><span>Ajustes</span></button>
+    </aside>
+
+    <section class="workspace" id="workspaceTop">
+      <header class="topbar">
+        <div><p class="eyebrow">Monitoramento editorial</p><h1>Ronda Editorial <span>24h</span></h1></div>
+        <div class="top-actions">
+          <button class="icon-button" id="settingsButton" type="button" aria-label="Abrir ajustes">⚙</button>
+          <button class="run-round" id="runRound" type="button"><span>↻</span>Executar ronda</button>
+          <div class="status"><span class="live" id="liveDot"></span><div><strong id="statusLabel">Conectando</strong><small id="statusSub">Verificando o serviço online</small></div></div>
+        </div>
+      </header>
+
+      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> A ronda e o monitoramento dedicado continuam no Cloudflare mesmo com esta janela fechada; resultados de termos aparecem somente na aba Termos.</div>
+      <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button></div>
+
+      <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
+        <div class="sources-heading">
+          <div><p class="eyebrow">Portais monitorados</p><h2 id="sourcesTitle">Fontes da ronda</h2><p>Clique em um portal para ver somente as notícias recolhidas dele. Conteúdos do Mundo são traduzidos automaticamente para português.</p></div>
+          <button class="secondary" id="showAllSources" type="button">Ver todas as notícias</button>
+        </div>
+        <div class="source-portal-grid" id="sourcePortalGrid"></div>
+      </section>
+
+
+      <section class="management-view" id="monitoringView" hidden aria-labelledby="monitoringTitle">
+        <div class="management-heading">
+          <div><p class="eyebrow">Acompanhamento exclusivo</p><h2 id="monitoringTitle">Monitoramento dedicado</h2><p>Cadastre nomes, marcas ou assuntos. Essas notícias ficam isoladas nesta aba e nunca entram na Ronda principal.</p></div>
+          <span id="monitoringTermsLimit">0/6 ativos</span>
+        </div>
+        <div class="background-note"><strong>Busca automática contínua</strong><span>Enquanto o termo estiver ativo, o Cron buscará novas notícias mesmo sem navegador aberto.</span></div>
+        <form class="config-form config-form-terms" id="monitoringTermForm">
+          <label><span>Termo para acompanhar</span><input id="monitoringTermInput" maxlength="80" required placeholder="Ex.: Vini Jr"></label>
+          <button class="primary" type="submit">Adicionar termo</button>
+        </form>
+        <p class="config-message" id="monitoringTermMessage"></p>
+        <div class="config-list compact-config-list" id="monitoringTermsList"><div class="loading-row">Carregando termos…</div></div>
+        <div class="dedicated-heading"><div><p class="eyebrow">Última ronda automática</p><h3>Notícias dos termos ativos</h3></div><span id="dedicatedMonitoringMeta">Nenhum resultado</span></div>
+        <div class="term-filters" id="monitoringTermFilters"></div>
+        <div class="dedicated-news-list" id="dedicatedNewsList"><div class="empty"><strong>Nenhum termo monitorado</strong><span>Cadastre um termo para iniciar a busca dedicada.</span></div></div>
+      </section>
+
+
+      <section class="newsroom-view" id="newsroomView" hidden aria-labelledby="newsroomTitle">
+        <div class="management-heading newsroom-heading"><div><p class="eyebrow">Operação editorial</p><h2 id="newsroomTitle">Mesa de pauta</h2><p>Pautas persistentes entre rondas, mudanças recentes, responsáveis e passagem de turno.</p></div><button class="secondary" id="refreshNewsroom" type="button">↻ Atualizar mesa</button></div>
+        <div class="background-note"><strong>O que mudou, não o que repetiu</strong><span>A Mesa mantém cada pauta viva entre as rondas e destaca novas fontes, novas publicações, mudança de prioridade e itens que exigem ação.</span></div>
+        <section class="summary newsroom-summary"><div><strong id="newsroomUrgent">0</strong><span>pautar agora</span><small>atenção imediata</small></div><div><strong id="newsroomChanged">0</strong><span>mudaram</span><small>desde a passagem</small></div><div><strong id="newsroomInvestigating">0</strong><span>em apuração</span><small>workflow ativo</small></div><div><strong id="newsroomUnassigned">0</strong><span>sem responsável</span><small>precisam de dono</small></div></section>
+        <div class="newsroom-layout"><section class="newsroom-main"><div class="heading"><div><h2>Filas editoriais</h2><p>Prioridade automática + decisão humana</p></div><span class="last-update" id="newsroomUpdated">Sem dados</span></div><div class="newsroom-board" id="newsroomBoard"></div></section><aside class="newsroom-handoff"><div class="youtube-panel-head"><div><p class="eyebrow">Passagem de turno</p><h3>Desde as últimas 8h</h3></div></div><div id="newsroomHandoff"></div></aside></div>
+      </section>
+
+      <section class="profile-view" id="profileView" hidden aria-labelledby="profileTitle">
+        <div class="management-heading profile-heading">
+          <div><p class="eyebrow">Perfil editorial</p><h2 id="profileTitle">Sua escrita nos carrosséis</h2><p>Crie um perfil com e-mail, envie exemplos de textos e use o estilo identificado na geração dos roteiros.</p></div>
+          <span class="profile-session-status" id="profileSessionStatus">Verificando perfil</span>
+        </div>
+        <div class="background-note"><strong>Adaptação de estilo</strong><span>Os exemplos orientam tom, ritmo, títulos e CTA. A apuração continua limitada aos fatos da matéria selecionada; não ocorre fine-tuning do modelo.</span></div>
+
+        <section class="profile-auth-grid" id="profileLoggedOut">
+          <form class="profile-auth-card" id="loginForm">
+            <div><p class="eyebrow">Já tenho perfil</p><h3>Entrar</h3></div>
+            <label><span>E-mail</span><input id="loginEmail" type="email" maxlength="254" autocomplete="email" required></label>
+            <label><span>Senha</span><input id="loginPassword" type="password" minlength="8" maxlength="72" autocomplete="current-password" required></label>
+            <button class="primary" type="submit">Entrar no perfil</button>
+            <p class="config-message" id="loginMessage"></p>
+          </form>
+          <form class="profile-auth-card" id="registerForm">
+            <div><p class="eyebrow">Primeiro acesso</p><h3>Criar perfil</h3></div>
+            <label><span>Nome</span><input id="registerName" maxlength="80" autocomplete="name" placeholder="Nome ou redação"></label>
+            <label><span>E-mail</span><input id="registerEmail" type="email" maxlength="254" autocomplete="email" required></label>
+            <label><span>Senha</span><input id="registerPassword" type="password" minlength="8" maxlength="72" autocomplete="new-password" required></label>
+            <label><span>Slides padrão</span><select id="registerSlideCount"></select></label>
+            <button class="primary" type="submit">Criar perfil</button>
+            <p class="config-message" id="registerMessage"></p>
+          </form>
+        </section>
+
+        <section id="profileLoggedIn" hidden>
+          <div class="profile-account-bar">
+            <div><small>Perfil conectado</small><strong id="profileUserName">Perfil editorial</strong><span id="profileUserEmail"></span></div>
+            <label><span>Slides padrão</span><select id="profileDefaultSlideCount"></select></label>
+            <button class="secondary" id="logoutProfile" type="button">Sair</button>
+          </div>
+
+          <div class="profile-workspace-grid">
+            <section class="profile-panel">
+              <div class="profile-panel-head"><div><p class="eyebrow">Biblioteca de exemplos</p><h3>Adicionar texto ou post</h3><p>Cole o conteúdo ou carregue um arquivo de texto. O limite evita crescimento excessivo do D1.</p></div><span id="profileSampleUsage">0/8 textos</span></div>
+              <form id="writingSampleForm" class="writing-sample-form">
+                <div class="profile-form-row">
+                  <label><span>Título do exemplo</span><input id="writingSampleTitle" maxlength="120" required placeholder="Ex.: Post de política"></label>
+                  <label><span>Tipo</span><select id="writingSampleType"><option value="post">Post</option><option value="legenda">Legenda</option><option value="roteiro">Roteiro</option><option value="artigo">Artigo</option><option value="texto">Texto</option></select></label>
+                </div>
+                <label><span>Arquivo opcional</span><input id="writingSampleFile" type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json"><small>TXT, MD, CSV ou JSON. O texto é lido no navegador e enviado sem o arquivo binário.</small></label>
+                <label><span>Conteúdo</span><textarea id="writingSampleContent" minlength="40" maxlength="5000" rows="10" required placeholder="Cole aqui um texto já publicado, legenda, roteiro ou post que represente o estilo desejado."></textarea><small id="writingSampleCounter">0/5.000 caracteres</small></label>
+                <button class="primary" type="submit">Adicionar à biblioteca</button>
+                <p class="config-message" id="writingSampleMessage"></p>
+              </form>
+              <div class="writing-sample-list" id="writingSampleList"></div>
+            </section>
+
+            <section class="profile-panel style-profile-panel">
+              <div class="profile-panel-head"><div><p class="eyebrow">Guia de escrita</p><h3>Estilo aplicado aos carrosséis</h3><p>Atualize o guia depois de adicionar ou remover exemplos.</p></div><button class="secondary" id="rebuildWritingStyle" type="button">Atualizar estilo</button></div>
+              <div class="writing-profile-summary" id="writingProfileSummary"><div class="empty"><strong>Perfil ainda não analisado</strong><span>Adicione exemplos e clique em Atualizar estilo.</span></div></div>
+              <p class="config-message" id="writingProfileMessage"></p>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="youtube-view" id="youtubeView" hidden aria-labelledby="youtubeTitle">
+        <div class="management-heading youtube-heading">
+          <div><p class="eyebrow">Radar audiovisual</p><h2 id="youtubeTitle">YouTube Editorial</h2><p>Vídeos, assuntos e termos monitorados somente em canais jornalísticos, em uma coleta independente da Ronda de portais.</p></div>
+          <div class="youtube-heading-actions"><button class="secondary" id="collectYouTube" type="button">↻ Atualizar YouTube</button><span class="youtube-module-status" id="youtubeModuleStatus">Verificando configuração</span></div>
+        </div>
+        <div class="background-note youtube-note"><strong>Curadoria de canais jornalísticos</strong><span>Adicione os canais que a redação quer acompanhar. Quando houver canais ativos, a coleta usa somente os uploads dessa curadoria; sem curadoria, mantém o radar News & Politics como fallback.</span></div>
+        <section class="youtube-panel youtube-curation-panel"><div class="youtube-panel-head"><div><p class="eyebrow">Curadoria</p><h3>Canais monitorados</h3><p>Use @handle, URL do canal ou ID UC…</p></div><span id="youtubeCurationCount">0/30 canais</span></div><form class="youtube-curation-form" id="youtubeCurationForm"><input id="youtubeChannelInput" placeholder="Ex.: @bandjornalismo ou https://youtube.com/@..." maxlength="180" required><button class="primary" type="submit">Adicionar canal</button></form><p class="config-message" id="youtubeCurationMessage"></p><div class="youtube-curation-list" id="youtubeCurationList"></div></section>
+
+        <section class="summary youtube-summary" aria-label="Resumo do YouTube">
+          <div><strong id="youtubeSummaryVideos">0</strong><span>vídeos analisados</span><small>última coleta</small></div>
+          <div><strong id="youtubeSummaryTopics">0</strong><span>assuntos ativos</span><small>agrupamento editorial</small></div>
+          <div><strong id="youtubeSummaryChannels">0</strong><span>canais de notícias</span><small>amostra jornalística</small></div>
+          <div class="attention"><strong id="youtubeSummaryUrgent">0</strong><span>pautar agora</span><small>sinal de alta atenção</small></div>
+        </section>
+
+        <section class="controls youtube-controls" aria-label="Filtros do YouTube">
+          <label class="search"><span>⌕</span><input id="youtubeSearchInput" placeholder="Buscar assunto, vídeo ou canal" aria-label="Buscar assunto, vídeo ou canal"></label>
+          <div class="segmented" id="youtubePeriodFilter" aria-label="Período dos vídeos">
+            <button data-value="6" type="button">6h</button><button class="active" data-value="24" type="button">24h</button><button data-value="168" type="button">7 dias</button>
+          </div>
+          <div class="segmented" id="youtubeDecisionFilter" aria-label="Decisão editorial">
+            <button class="active" data-value="Todos" type="button">Todos</button><button data-value="Pautar agora" type="button">Pautar agora</button><button data-value="Acompanhar" type="button">Acompanhar</button><button data-value="Possível viral" type="button">Possível viral</button>
+          </div>
+        </section>
+
+        <section class="editoria-controls youtube-editoria-controls" aria-label="Filtrar YouTube por editoria">
+          <span>Editorias</span>
+          <div class="editoria-filter" id="youtubeEditoriaFilter">
+            <button class="active" data-youtube-editoria="Todas" type="button">Todas</button>
+            <button data-youtube-editoria="Notícias" type="button">Notícias</button>
+            <button data-youtube-editoria="Política" type="button">Política</button>
+            <button data-youtube-editoria="Esportes" type="button">Esportes</button>
+            <button data-youtube-editoria="Entretenimento" type="button">Entretenimento</button>
+            <button data-youtube-editoria="Tecnologia" type="button">Tecnologia</button>
+            <button data-youtube-editoria="Viral e Redes Sociais" type="button">Viral e Redes Sociais</button>
+          </div>
+        </section>
+
+        <div class="youtube-operational" id="youtubeOperational">
+          <span class="youtube-status-chip">Aguardando primeira coleta</span>
+        </div>
+
+        <div class="heading youtube-section-heading"><div><h2>Assuntos em destaque</h2><p>Agrupados por recorrência, velocidade, canais e atenção editorial</p></div><span class="last-update" id="youtubeLastUpdate">Sem coleta</span></div>
+        <section class="grid youtube-topic-grid" id="youtubeTopicsGrid" aria-live="polite"></section>
+
+        <div class="youtube-columns">
+          <section class="youtube-panel">
+            <div class="youtube-panel-head"><div><p class="eyebrow">Vídeos em atenção</p><h3>Publicações da coleta</h3></div><span id="youtubeVideoCount">0 vídeos</span></div>
+            <div class="youtube-video-list" id="youtubeVideoList"></div>
+          </section>
+          <section class="youtube-side-stack">
+            <article class="youtube-panel">
+              <div class="youtube-panel-head"><div><p class="eyebrow">Canais de notícias</p><h3>Quem está puxando audiência</h3></div></div>
+              <div class="youtube-ranking-list" id="youtubeChannelList"></div>
+            </article>
+            <article class="youtube-panel">
+              <div class="youtube-panel-head"><div><p class="eyebrow">Alertas</p><h3>Sinais editoriais</h3></div></div>
+              <div class="youtube-alert-list" id="youtubeAlertList"></div>
+            </article>
+          </section>
+        </div>
+
+        <section class="youtube-panel youtube-terms-panel">
+          <div class="youtube-panel-head"><div><p class="eyebrow">Termos da Ronda</p><h3>Resultados encontrados no YouTube</h3><p>Um termo ativo é consultado por vez, em rotação, para preservar a cota diária de busca.</p></div><span id="youtubeTermMeta">Nenhum termo coletado</span></div>
+          <div class="youtube-term-list" id="youtubeTermList"></div>
+        </section>
+      </section>
+
+      <div class="round-view" id="roundView">
+      <section class="summary" aria-label="Resumo da ronda">
+        <div><strong id="summaryContents">0</strong><span>novos conteúdos</span><small>período selecionado</small></div>
+        <div><strong id="summaryTopics">0</strong><span>assuntos ativos</span><small>janela atual</small></div>
+        <div><strong id="summaryChannels">0</strong><span>fontes distintas</span><small>portais e redes</small></div>
+        <div class="attention"><strong id="summaryUrgent">0</strong><span>pautar agora</span><small>alta recorrência</small></div>
+      </section>
+
+      <section class="controls" aria-label="Filtros da ronda">
+        <label class="search"><span>⌕</span><input id="searchInput" placeholder="Buscar assunto, veículo ou canal" aria-label="Buscar assunto, veículo ou canal"></label>
+        <div class="segmented" id="periodFilter" aria-label="Período">
+          <button data-value="5" type="button">5 min</button><button data-value="60" type="button">1h</button><button data-value="360" type="button">6h</button><button class="active" data-value="1440" type="button">24h</button>
+        </div>
+        <div class="segmented" id="sourceFilter" aria-label="Tipo de fonte">
+          <button class="active" data-value="Todos" type="button">Todos</button><button data-value="Portal" type="button">Portais</button><button data-value="Rede" type="button">Redes</button>
+        </div>
+        <div class="segmented" id="regionFilter" aria-label="Região das fontes">
+          <button class="active" data-value="Todas" type="button">Todas regiões</button><button data-value="Brasil" type="button">Brasil</button><button data-value="Mundo" type="button">Mundo</button>
+        </div>
+        <button class="show-all-filter" id="clearAllFilters" type="button">Mostrar tudo</button>
+      </section>
+
+      <section class="editoria-controls" aria-label="Filtrar por editoria">
+        <span>Editorias</span>
+        <div class="editoria-filter" id="editoriaFilter">
+          <button class="active" data-editoria="Todas" type="button">Todas</button>
+          <button data-editoria="Notícias" type="button">Notícias</button>
+          <button data-editoria="Política" type="button">Política</button>
+          <button data-editoria="Esportes" type="button">Esportes</button>
+          <button data-editoria="Entretenimento" type="button">Entretenimento</button>
+          <button data-editoria="Fofoca e Celebridades" type="button">Fofoca e Celebridades</button>
+          <button data-editoria="Reality Shows" type="button">Reality Shows</button>
+          <button data-editoria="Curiosidades e Ciência Pop" type="button">Curiosidades e Ciência Pop</button>
+          <button data-editoria="Conteúdo Viral e Redes Sociais" type="button">Viral e Redes Sociais</button>
+          <button data-editoria="Luto e Obituário" type="button">Luto e Obituário</button>
+          <button data-editoria="Segurança e Justiça" type="button">Segurança e Justiça</button>
+          <button data-editoria="Economia" type="button">Economia</button>
+          <button data-editoria="Mundo" type="button">Mundo</button>
+          <button data-editoria="Tecnologia" type="button">Tecnologia</button>
+          <button data-editoria="Saúde" type="button">Saúde</button>
+        </div>
+      </section>
+
+      <div class="portal-filter" id="portalFilter" hidden><span>Exibindo somente:</span><strong id="portalFilterName"></strong><button id="clearPortalFilter" type="button">Mostrar todas as fontes</button></div>
+
+      <div class="heading"><div><h2>Assuntos em destaque</h2><p>Ordenados por relevância editorial, recorrência e atualidade</p></div><span class="last-update" id="lastUpdate">Sem coleta</span></div>
+      <section class="grid" id="topicsGrid" aria-live="polite"></section>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head"><div><p class="eyebrow">Segurança</p><h2 id="settingsTitle">Ajustes da operação</h2></div><button class="close-modal" data-close="settingsModal" type="button" aria-label="Fechar">×</button></div>
+      <p class="modal-copy">Se o Worker possuir a variável secreta <code>MANUAL_ROUND_TOKEN</code>, informe a mesma chave abaixo. Ela fica salva somente neste navegador.</p>
+      <label class="field"><span>Chave para executar ronda manual</span><input id="operationToken" type="password" autocomplete="off" placeholder="Opcional quando não há proteção"></label>
+      <p class="field-message" id="tokenMessage"></p>
+      <div class="modal-actions"><button class="secondary" data-close="settingsModal" type="button">Cancelar</button><button class="primary" id="saveSettings" type="button">Salvar chave</button></div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="historyModal" hidden>
+    <section class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+      <div class="modal-head"><div><p class="eyebrow">Últimas 48 horas</p><h2 id="historyTitle">Histórico de rondas</h2></div><button class="close-modal" data-close="historyModal" type="button" aria-label="Fechar">×</button></div>
+      <button class="history-back" id="historyBack" type="button" hidden>← Voltar para todas as rondas</button>
+      <div class="history-list" id="historyList"><div class="loading-row">Carregando histórico…</div></div>
+      <div class="history-detail" id="historyDetail" hidden></div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="carouselModal" hidden>
+    <section class="modal modal-wide carousel-modal" role="dialog" aria-modal="true" aria-labelledby="carouselTitle">
+      <div class="modal-head"><div><p class="eyebrow">Apoio editorial</p><h2 id="carouselTitle">Roteiro para carrossel</h2></div><button class="close-modal" data-close="carouselModal" type="button" aria-label="Fechar">×</button></div>
+      <section class="carousel-setup" id="carouselSetup">
+        <div><small>Perfil de escrita</small><strong id="carouselProfileStatus">Padrão jornalístico</strong><span id="carouselProfileDetail">Entre no Perfil para adaptar o estilo.</span></div>
+        <label><span>Quantidade de slides</span><select id="carouselSlideCount"></select></label>
+        <button class="primary" id="generateCarousel" type="button">Gerar roteiro</button>
+      </section>
+      <div class="carousel-loading" id="carouselLoading" hidden><span class="reader-spinner">↻</span><div><strong>Abrindo uma matéria…</strong><small>Selecionando uma fonte, extraindo o texto e encerrando o ciclo após o roteiro.</small></div></div>
+      <div class="carousel-slides" id="carouselSlides" aria-label="Cards do carrossel"></div>
+      <div class="carousel-meta" id="carouselMeta" aria-label="Informações editoriais do roteiro"></div>
+      <section class="carousel-reading" id="carouselReading" hidden aria-label="Resumo da leitura inteligente"></section>
+      <section class="carousel-analysis" id="carouselAnalysis" hidden aria-label="Interpretação da notícia"></section>
+      <section class="carousel-evidence" id="carouselEvidence" hidden aria-label="Mapa de fatos e evidências"></section>
+      <section class="carousel-entities" id="carouselEntities" hidden aria-label="Dados estruturados extraídos"></section>
+      <section class="carousel-sources" id="carouselSources" aria-label="Links para apuração"></section>
+      <p class="carousel-disclaimer" id="carouselDisclaimer"></p>
+      <div class="modal-actions"><button class="secondary" data-close="carouselModal" type="button">Fechar</button><button class="secondary" id="approveCarouselLearning" type="button" disabled>Aprovar e ensinar estilo</button><button class="primary" id="copyCarousel" type="button" disabled>Copiar roteiro</button></div>
+      <p class="copy-message" id="copyCarouselMessage"></p>
+    </section>
+  </div>
+
+  <script src="/app.js?v=2.8.5" defer></script>
+</body>
+</html>

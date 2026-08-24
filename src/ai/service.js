@@ -1,7 +1,7 @@
 const IMAGE_MODEL = '@cf/black-forest-labs/flux-2-klein-4b';
 const TEXT_MODEL = '@cf/zai-org/glm-4.7-flash';
-const ENGINE_VERSION = '0.7.0-free-mvp';
-const BUILD_ID = '070-RONDA-ONE-20260824';
+const ENGINE_VERSION = '0.7.1-free-mvp';
+const BUILD_ID = '071-RONDA285-20260824';
 
 function json(data, status = 200, headers = {}) {
   return Response.json(data, {
@@ -224,7 +224,7 @@ export async function handleRondaAiApi(request, env) {
   const url = new URL(request.url);
 
   if (url.pathname === '/api/health') {
-    return json({ ok: true, service: 'ronda-one-design', version: '0.7.0', build: BUILD_ID, runtime: 'cloudflare-workers' });
+    return json({ ok: true, service: 'ronda-one-design', version: '0.7.1', build: BUILD_ID, runtime: 'cloudflare-workers' });
   }
 
   if (url.pathname === '/api/ai/status' && request.method === 'GET') {

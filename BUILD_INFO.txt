@@ -1,11 +1,26 @@
-RONDA ONE 0.7.0
-Build: 070-EDITORIAL-DESIGN-20260824
+RONDA ONE 0.7.1 — RONDA EDITORIAL 2.8.5 INTEGRADA
+Data: 24/08/2026
 
-Módulos:
-- Ronda Editorial
-- Ronda Design
-- Ronda AI
-- Ronda Projects
+Núcleo editorial substituído pela versão exata enviada:
+- Ronda Editorial v2.8.5 — carrossel com origem verificada
+- 82 testes da versão original aprovados antes da integração
+- carrossel flexível de 3 a 15 slides
+- origem verificada, mapa de fatos/evidências, perfil de escrita e memória editorial preservados
 
-Arquitetura: um repositório GitHub + um Cloudflare Worker modular.
-Modo MVP: free-only, sem fallback pago.
+Integração RONDA ONE:
+- botão RONDA DESIGN ao lado de Copiar roteiro
+- textos editados no modal seguem para o Design
+- 3 a 15 pranchetas 1080x1350 criadas automaticamente
+- cada prancheta mantém Fundo/Imagem, Overlay, Função, Título, Subtítulo e Origem em camadas
+- uma imagem editorial de fundo por carrossel via Workers AI Free
+- falha da imagem não bloqueia o editor
+- Project Core compartilhado no D1
+
+Compatibilidade:
+- migração automática da tabela runs criada pela primeira RONDA ONE 0.7
+- mantém o mesmo Worker 'rondaone' e o mesmo DB principal
+
+MVP sem custo:
+- não adiciona providers pagos
+- filas Cloudflare são opcionais; sem binding, a Ronda usa os fallbacks já previstos pela 2.8.5
+- YouTube fica isolado e opcional até YOUTUBE_DB/API serem configurados

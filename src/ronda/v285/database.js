@@ -1,0 +1,1960 @@
+import { DEFAULT_SLIDE_COUNT, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, validateSlideCount } from "./profile.js";
+const initializedBindings = new WeakSet();
+export const MAX_MONITORING_TERMS = 6;
+export const DATABASE_SCHEMA_VERSION = "2.8.0";
+
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    trigger_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    queued_at TEXT NOT NULL,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    completed_at TEXT,
+    items_count INTEGER NOT NULL DEFAULT 0,
+    topics_count INTEGER NOT NULL DEFAULT 0,
+    sources_count INTEGER NOT NULL DEFAULT 0,
+    social_items_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    payload_json TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_runs_completed ON runs(completed_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_runs_status_completed ON runs(status, completed_at DESC)",
+  `CREATE TABLE IF NOT EXISTS locks (
+    name TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS translation_cache (
+    cache_key TEXT PRIMARY KEY,
+    source_lang TEXT NOT NULL,
+    target_lang TEXT NOT NULL,
+    translated_text TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_translation_cache_updated ON translation_cache(updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS intelligent_carousels (
+    cache_key TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_expires ON intelligent_carousels(expires_at)",
+  `CREATE TABLE IF NOT EXISTS intelligent_jobs (
+    cache_key TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    error TEXT,
+    payload_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_expires ON intelligent_jobs(expires_at)",
+  `CREATE TABLE IF NOT EXISTS article_read_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_article_read_cache_expires ON article_read_cache(expires_at)",
+  `CREATE TABLE IF NOT EXISTS article_source_stats (
+    hostname TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    successes INTEGER NOT NULL DEFAULT 0,
+    total_words INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS monitoring_terms (
+    id TEXT PRIMARY KEY,
+    term TEXT NOT NULL,
+    term_key TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_monitoring_terms_active_term ON monitoring_terms(active, term)",
+  `CREATE TABLE IF NOT EXISTS source_state (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    region TEXT NOT NULL,
+    status TEXT NOT NULL,
+    route TEXT NOT NULL,
+    http_status INTEGER,
+    error_code TEXT,
+    error_detail TEXT,
+    items_json TEXT NOT NULL DEFAULT '[]',
+    item_count INTEGER NOT NULL DEFAULT 0,
+    last_url TEXT,
+    validators_json TEXT NOT NULL DEFAULT '{}',
+    last_attempt_at TEXT,
+    last_success_at TEXT,
+    next_check_at TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    response_ms INTEGER,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_source_state_next_check ON source_state(next_check_at)",
+  "CREATE INDEX IF NOT EXISTS idx_source_state_status ON source_state(status, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS youtube_collections (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    region TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    error TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_youtube_collections_completed ON youtube_collections(completed_at DESC)",
+  `CREATE TABLE IF NOT EXISTS youtube_term_results (
+    id TEXT PRIMARY KEY,
+    term_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_youtube_term_results_term ON youtube_term_results(term_id, collected_at DESC)",
+  `CREATE TABLE IF NOT EXISTS youtube_state (
+    state_key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    email_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    password_iterations INTEGER NOT NULL,
+    default_slide_count INTEGER NOT NULL DEFAULT 7,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_users_email_key ON users(email_key)",
+  `CREATE TABLE IF NOT EXISTS user_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, expires_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)",
+  `CREATE TABLE IF NOT EXISTS writing_samples (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    char_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, content_hash)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_writing_samples_user ON writing_samples(user_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS writing_profiles (
+    user_id TEXT PRIMARY KEY,
+    profile_json TEXT NOT NULL,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS carousel_learning_examples (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    slide_count INTEGER NOT NULL,
+    slides_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, content_hash)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_carousel_learning_user ON carousel_learning_examples(user_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS newsroom_stories (
+    id TEXT PRIMARY KEY, topic_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL, editoria TEXT NOT NULL, priority TEXT NOT NULL,
+    editorial_queue TEXT NOT NULL DEFAULT 'watch', workflow_status TEXT NOT NULL DEFAULT 'discovered', score INTEGER NOT NULL DEFAULT 0,
+    assignee_user_id TEXT, verification_level TEXT NOT NULL DEFAULT 'single', first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+    last_changed_at TEXT NOT NULL, source_count INTEGER NOT NULL DEFAULT 0, item_count INTEGER NOT NULL DEFAULT 0, latest_run_id TEXT,
+    snapshot_json TEXT NOT NULL DEFAULT '{}', change_summary_json TEXT NOT NULL DEFAULT '{}', published_at TEXT, updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_newsroom_stories_queue ON newsroom_stories(editorial_queue, last_changed_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_newsroom_stories_status ON newsroom_stories(workflow_status, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS newsroom_story_events (
+    id TEXT PRIMARY KEY, story_id TEXT NOT NULL, event_type TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_newsroom_story_events_story ON newsroom_story_events(story_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS newsroom_story_notes (
+    id TEXT PRIMARY KEY, story_id TEXT NOT NULL, user_id TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS newsroom_story_followers (
+    story_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(story_id, user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS youtube_curated_channels (
+    channel_id TEXT PRIMARY KEY, title TEXT NOT NULL, handle TEXT, uploads_playlist_id TEXT NOT NULL, thumbnail_url TEXT,
+    subscriber_count INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, added_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    last_checked_at TEXT, last_video_at TEXT, failure_count INTEGER NOT NULL DEFAULT 0
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_youtube_curated_active ON youtube_curated_channels(active, title)",
+  `DELETE FROM source_state WHERE source_id IN (
+    'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
+    'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
+    'segredos-do-mundo', 'awebic', 'hypeness'
+  )`,
+];
+
+const STORAGE_GUARD = Object.freeze({
+  // Cada ronda já contém a janela editorial completa; manter centenas de payloads completos
+  // apenas duplica os mesmos dados e enche o D1. Preservamos metadados por 48h, mas
+  // somente as 24 rondas mais recentes mantêm payload detalhado.
+  maxRunRows: 576,
+  maxRunPayloads: 12,
+  maxYouTubeCollections: 12,
+  maxYouTubeTermResults: 12,
+  maxArticleReadCache: 40,
+  maxIntelligentCarousels: 60,
+  maxIntelligentJobs: 120,
+  maxTranslations: 1000,
+  maxCarouselLearningPerUser: MAX_CAROUSEL_LEARNING_EXAMPLES,
+  maxNewsroomStories: 500,
+  maxNewsroomEvents: 3000,
+  maxNewsroomNotes: 1500,
+});
+
+export function isD1StorageLimitError(error) {
+  const text = `${error?.message || ""} ${error?.cause?.message || ""}`.toLowerCase();
+  return text.includes("exceeded maximum db size") || text.includes("maximum database size") || text.includes("maximum account storage");
+}
+
+async function emergencyCleanupRaw(db) {
+  const now = new Date().toISOString();
+  const translationCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const statements = [
+    `DELETE FROM youtube_collections
+     WHERE id NOT IN (
+       SELECT id FROM youtube_collections
+       ORDER BY completed_at DESC
+       LIMIT ${STORAGE_GUARD.maxYouTubeCollections}
+     )`,
+    `DELETE FROM youtube_term_results
+     WHERE id NOT IN (
+       SELECT id FROM youtube_term_results
+       ORDER BY collected_at DESC
+       LIMIT ${STORAGE_GUARD.maxYouTubeTermResults}
+     )`,
+    `UPDATE runs SET payload_json = NULL
+     WHERE payload_json IS NOT NULL
+       AND status NOT IN ('queued', 'running')
+       AND id NOT IN (
+         SELECT id FROM runs
+         WHERE status = 'success' AND payload_json IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT ${STORAGE_GUARD.maxRunPayloads}
+       )`,
+    `DELETE FROM runs
+     WHERE status NOT IN ('queued', 'running')
+       AND id NOT IN (
+         SELECT id FROM runs
+         WHERE status NOT IN ('queued', 'running')
+         ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
+         LIMIT ${STORAGE_GUARD.maxRunRows}
+       )`,
+    `DELETE FROM intelligent_carousels WHERE expires_at < '${now}'`,
+    `DELETE FROM intelligent_carousels WHERE cache_key NOT IN (SELECT cache_key FROM intelligent_carousels ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentCarousels})`,
+    `DELETE FROM intelligent_jobs WHERE expires_at < '${now}'`,
+    `DELETE FROM intelligent_jobs WHERE job_id NOT IN (SELECT job_id FROM intelligent_jobs ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentJobs})`,
+    `DELETE FROM article_read_cache WHERE expires_at < '${now}'`,
+    `DELETE FROM article_read_cache WHERE cache_key NOT IN (SELECT cache_key FROM article_read_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxArticleReadCache})`,
+    `DELETE FROM translation_cache WHERE updated_at < '${translationCutoff}'`,
+    `DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`,
+    `DELETE FROM locks WHERE expires_at < ${Date.now() - 5 * 60 * 1000}`,
+    `DELETE FROM user_sessions WHERE expires_at < '${now}'`,
+    `DELETE FROM carousel_learning_examples WHERE id NOT IN (SELECT id FROM carousel_learning_examples ORDER BY created_at DESC LIMIT 240)`,
+    `DELETE FROM newsroom_story_events WHERE id NOT IN (SELECT id FROM newsroom_story_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomEvents})`,
+    `DELETE FROM newsroom_story_notes WHERE id NOT IN (SELECT id FROM newsroom_story_notes ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomNotes})`,
+    `DELETE FROM newsroom_stories WHERE workflow_status IN ('published','discarded') AND id NOT IN (SELECT id FROM newsroom_stories ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomStories})`,
+  ];
+  for (const statement of statements) {
+    try { await db.prepare(statement).run(); } catch {}
+  }
+}
+
+
+export async function preflightCoreStorage(db, { purgeLegacyYouTube = false } = {}) {
+  if (!db) return false;
+  const statements = [
+    `UPDATE runs SET payload_json = NULL
+     WHERE payload_json IS NOT NULL
+       AND status NOT IN ('queued', 'running')
+       AND id NOT IN (
+         SELECT id FROM runs
+         WHERE status = 'success' AND payload_json IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT ${STORAGE_GUARD.maxRunPayloads}
+       )`,
+    `DELETE FROM intelligent_carousels WHERE expires_at < '${new Date().toISOString()}'`,
+    `DELETE FROM intelligent_jobs WHERE expires_at < '${new Date().toISOString()}'`,
+    `DELETE FROM article_read_cache WHERE expires_at < '${new Date().toISOString()}'`,
+  ];
+  if (purgeLegacyYouTube) {
+    statements.unshift(
+      `DELETE FROM youtube_collections`,
+      `DELETE FROM youtube_term_results`,
+      `DELETE FROM youtube_state`,
+    );
+  }
+  let changed = false;
+  for (const statement of statements) {
+    try {
+      const result = await db.prepare(statement).run();
+      if (Number(result?.meta?.changes || 0) > 0) changed = true;
+    } catch {}
+  }
+  return changed;
+}
+export async function emergencyDatabaseCleanup(db) {
+  if (!db) return false;
+  await emergencyCleanupRaw(db);
+  return true;
+}
+
+function compactYouTubeVideo(video, { includeScores = true } = {}) {
+  if (!video || typeof video !== "object") return null;
+  const output = {
+    id: video.id || null,
+    rank: Number(video.rank) || 0,
+    title: String(video.title || "Sem título").slice(0, 300),
+    channel: String(video.channel || "Canal não informado").slice(0, 160),
+    channelId: String(video.channelId || "").slice(0, 120),
+    publishedAt: video.publishedAt || null,
+    ageHours: Number(video.ageHours) || 0,
+    views: Number(video.views) || 0,
+    likes: Number(video.likes) || 0,
+    comments: Number(video.comments) || 0,
+    viewsPerHour: Number(video.viewsPerHour) || 0,
+    engagementRate: Number(video.engagementRate) || 0,
+    commentRate: Number(video.commentRate) || 0,
+    thumbnail: String(video.thumbnail || "").slice(0, 500),
+    durationSeconds: Number(video.durationSeconds) || 0,
+    url: String(video.url || "").slice(0, 500),
+    attentionIndex: Number(video.attentionIndex) || 0,
+    reasons: Array.isArray(video.reasons) ? video.reasons.slice(0, 4).map((value) => String(value).slice(0, 120)) : [],
+    decision: video.decision || null,
+    decisionLevel: video.decisionLevel || null,
+    decisionReason: video.decisionReason || null,
+    movement: video.movement || null,
+    movementLabel: video.movementLabel || null,
+    deltaIndex: Number(video.deltaIndex) || 0,
+  };
+  if (includeScores) {
+    output.viewsScore = Number(video.viewsScore) || 0;
+    output.speedScore = Number(video.speedScore) || 0;
+    output.engagementScore = Number(video.engagementScore) || 0;
+    output.commentScore = Number(video.commentScore) || 0;
+    output.recencyScore = Number(video.recencyScore) || 0;
+  }
+  return output;
+}
+
+export function compactYouTubeCollectionForStorage(collection) {
+  if (!collection || typeof collection !== "object") return collection;
+  const videos = (collection.videos || []).map((video) => compactYouTubeVideo(video)).filter(Boolean).slice(0, 30);
+  const videoById = new Map(videos.map((video) => [video.id, video]));
+  const topics = (collection.topics || []).slice(0, 24).map((topic) => ({
+    id: topic.id || null,
+    rank: Number(topic.rank) || 0,
+    label: String(topic.label || "").slice(0, 220),
+    editoria: topic.editoria || "Viral e Redes Sociais",
+    attentionIndex: Number(topic.attentionIndex) || 0,
+    videoCount: Number(topic.videoCount) || 0,
+    channelCount: Number(topic.channelCount) || 0,
+    channels: Array.isArray(topic.channels) ? topic.channels.slice(0, 8).map((value) => String(value).slice(0, 160)) : [],
+    views: Number(topic.views) || 0,
+    viewsPerHour: Number(topic.viewsPerHour) || 0,
+    comments: Number(topic.comments) || 0,
+    firstPublishedAt: topic.firstPublishedAt || null,
+    latestPublishedAt: topic.latestPublishedAt || null,
+    decision: topic.decision || null,
+    decisionLevel: topic.decisionLevel || null,
+    decisionReason: topic.decisionReason || null,
+    movement: topic.movement || null,
+    movementLabel: topic.movementLabel || null,
+    deltaIndex: Number(topic.deltaIndex) || 0,
+    videos: (topic.videos || []).slice(0, 5).map((video) => {
+      const known = videoById.get(video.id);
+      return known ? compactYouTubeVideo(known, { includeScores: false }) : compactYouTubeVideo(video, { includeScores: false });
+    }).filter(Boolean),
+  }));
+  const channels = (collection.channels || []).slice(0, 12).map((channel) => ({
+    id: channel.id || null,
+    rank: Number(channel.rank) || 0,
+    channel: String(channel.channel || "").slice(0, 160),
+    videoCount: Number(channel.videoCount) || 0,
+    views: Number(channel.views) || 0,
+    viewsPerHour: Number(channel.viewsPerHour) || 0,
+    comments: Number(channel.comments) || 0,
+    attentionIndex: Number(channel.attentionIndex) || 0,
+    topVideo: channel.topVideo ? {
+      id: channel.topVideo.id || null,
+      title: String(channel.topVideo.title || "").slice(0, 300),
+      url: String(channel.topVideo.url || "").slice(0, 500),
+    } : null,
+  }));
+  return {
+    id: collection.id || null,
+    collectedAt: collection.collectedAt || null,
+    region: collection.region || "BR",
+    cached: Boolean(collection.cached),
+    curated: Boolean(collection.curated),
+    curatedChannelCount: Number(collection.curatedChannelCount) || 0,
+    videos,
+    topics,
+    channels,
+    alerts: Array.isArray(collection.alerts) ? collection.alerts.slice(0, 20) : [],
+    stats: collection.stats || {},
+  };
+}
+
+export function compactYouTubeTermResultForStorage(result) {
+  if (!result || typeof result !== "object") return result;
+  const videos = (result.videos || []).slice(0, 3).map((video) => compactYouTubeVideo(video, { includeScores: false })).filter(Boolean);
+  const topVideo = result.summary?.topVideo ? compactYouTubeVideo(result.summary.topVideo, { includeScores: false }) : videos[0] || null;
+  return {
+    id: result.id || null,
+    termId: result.termId || "",
+    term: String(result.term || "").slice(0, 160),
+    collectedAt: result.collectedAt || null,
+    region: result.region || "BR",
+    windowHours: Number(result.windowHours) || 24,
+    videos,
+    summary: {
+      videoCount: Number(result.summary?.videoCount) || videos.length,
+      views: Number(result.summary?.views) || 0,
+      viewsPerHour: Number(result.summary?.viewsPerHour) || 0,
+      comments: Number(result.summary?.comments) || 0,
+      topVideo,
+    },
+  };
+}
+
+async function currentSchemaVersion(db) {
+  try {
+    const row = await db.prepare("SELECT value FROM app_state WHERE key = 'schema_version' LIMIT 1").first();
+    return String(row?.value || "");
+  } catch {
+    return "";
+  }
+}
+
+async function migrateLegacyRunsTableIfNeeded(db, rows = []) {
+  const byName = new Map((rows || []).map((row) => [String(row?.name || ""), row]));
+  const legacyNotNull = Number(byName.get("started_at")?.notnull) === 1 || Number(byName.get("completed_at")?.notnull) === 1;
+  if (!legacyNotNull) return false;
+
+  const now = new Date().toISOString();
+  const hasQueuedAt = byName.has("queued_at");
+  const hasHeartbeatAt = byName.has("heartbeat_at");
+  await db.prepare("DROP TABLE IF EXISTS runs_rondaone_v285").run();
+  await db.prepare(`CREATE TABLE runs_rondaone_v285 (
+    id TEXT PRIMARY KEY,
+    trigger_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    queued_at TEXT NOT NULL,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    completed_at TEXT,
+    items_count INTEGER NOT NULL DEFAULT 0,
+    topics_count INTEGER NOT NULL DEFAULT 0,
+    sources_count INTEGER NOT NULL DEFAULT 0,
+    social_items_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    payload_json TEXT
+  )`).run();
+
+  const queuedExpr = hasQueuedAt
+    ? "COALESCE(NULLIF(queued_at, ''), NULLIF(started_at, ''), NULLIF(completed_at, ''), ?)"
+    : "COALESCE(NULLIF(started_at, ''), NULLIF(completed_at, ''), ?)";
+  const heartbeatExpr = hasHeartbeatAt
+    ? "COALESCE(NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), NULLIF(completed_at, ''), ?)"
+    : "COALESCE(NULLIF(started_at, ''), NULLIF(completed_at, ''), ?)";
+
+  await db.prepare(`
+    INSERT INTO runs_rondaone_v285 (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    )
+    SELECT
+      id, trigger_type, status, ${queuedExpr},
+      CASE WHEN status IN ('running','success','failed','expired') THEN NULLIF(started_at, '') ELSE NULL END,
+      ${heartbeatExpr},
+      CASE WHEN status IN ('success','failed','expired') THEN NULLIF(completed_at, '') ELSE NULL END,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    FROM runs
+  `).bind(now, now).run();
+
+  await db.prepare("DROP INDEX IF EXISTS idx_runs_completed").run();
+  await db.prepare("DROP INDEX IF EXISTS idx_runs_status_completed").run();
+  await db.prepare("DROP INDEX IF EXISTS idx_runs_status_activity").run();
+  await db.prepare("DROP TABLE runs").run();
+  await db.prepare("ALTER TABLE runs_rondaone_v285 RENAME TO runs").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_runs_completed ON runs(completed_at DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_runs_status_completed ON runs(status, completed_at DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_runs_status_activity ON runs(status, heartbeat_at DESC, queued_at DESC)").run();
+  return true;
+}
+
+async function ensureRunStateColumns(db) {
+  let result = await db.prepare("PRAGMA table_info(runs)").all();
+  const migrated = await migrateLegacyRunsTableIfNeeded(db, result?.results || []);
+  if (migrated) result = await db.prepare("PRAGMA table_info(runs)").all();
+  const columns = new Set((result?.results || []).map((row) => String(row?.name || "")));
+  if (!columns.has("queued_at")) await db.prepare("ALTER TABLE runs ADD COLUMN queued_at TEXT").run();
+  if (!columns.has("heartbeat_at")) await db.prepare("ALTER TABLE runs ADD COLUMN heartbeat_at TEXT").run();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    UPDATE runs
+    SET queued_at = COALESCE(NULLIF(queued_at, ''), NULLIF(started_at, ''), NULLIF(completed_at, ''), ?),
+        heartbeat_at = COALESCE(NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), NULLIF(queued_at, ''), ?)
+    WHERE queued_at IS NULL OR queued_at = '' OR heartbeat_at IS NULL OR heartbeat_at = ''
+  `).bind(now, now).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_runs_status_activity ON runs(status, heartbeat_at DESC, queued_at DESC)").run();
+}
+
+export async function ensureSchema(db) {
+  if (!db) throw new Error("Binding D1 'DB' não configurado.");
+  if (initializedBindings.has(db)) return;
+  const initialize = async () => {
+    const version = await currentSchemaVersion(db);
+    if (version !== DATABASE_SCHEMA_VERSION) {
+      for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
+    }
+    await ensureRunStateColumns(db);
+    if (version !== DATABASE_SCHEMA_VERSION) {
+      const now = new Date().toISOString();
+      await db.prepare(`
+        INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).bind(DATABASE_SCHEMA_VERSION, now).run();
+    }
+  };
+  try {
+    await initialize();
+  } catch (error) {
+    if (!isD1StorageLimitError(error)) throw error;
+    await emergencyCleanupRaw(db);
+    await initialize();
+  }
+  initializedBindings.add(db);
+}
+
+export async function acquireLock(db, name, ttlMs, nowMs = Date.now()) {
+  await ensureSchema(db);
+  const token = crypto.randomUUID();
+  const expiresAt = nowMs + ttlMs;
+  await db
+    .prepare(`
+      INSERT INTO locks (name, token, expires_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at
+      WHERE locks.expires_at < ?
+    `)
+    .bind(name, token, expiresAt, nowMs)
+    .run();
+  const row = await db.prepare("SELECT token, expires_at FROM locks WHERE name = ?").bind(name).first();
+  return row?.token === token ? { name, token, expiresAt } : null;
+}
+
+export async function renewLock(db, lock, ttlMs, nowMs = Date.now()) {
+  if (!db || !lock) return null;
+  const expiresAt = nowMs + Math.max(1_000, Number(ttlMs) || 1_000);
+  await db.prepare("UPDATE locks SET expires_at = ? WHERE name = ? AND token = ?")
+    .bind(expiresAt, lock.name, lock.token)
+    .run();
+  const row = await db.prepare("SELECT token, expires_at FROM locks WHERE name = ? LIMIT 1").bind(lock.name).first();
+  if (row?.token !== lock.token) return null;
+  lock.expiresAt = Number(row.expires_at) || expiresAt;
+  return lock;
+}
+
+export async function releaseLock(db, lock) {
+  if (!db || !lock) return;
+  await db.prepare("DELETE FROM locks WHERE name = ? AND token = ?").bind(lock.name, lock.token).run();
+}
+
+
+function monitoringTermRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    term: row.term,
+    active: Number(row.active) === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function monitoringTermKey(value) {
+  return String(value || "")
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+
+export async function listMonitoringTerms(db, { activeOnly = false } = {}) {
+  await ensureSchema(db);
+  const result = await db
+    .prepare(`SELECT * FROM monitoring_terms ${activeOnly ? "WHERE active = 1" : ""} ORDER BY active DESC, term COLLATE NOCASE`)
+    .all();
+  return (result?.results || []).map(monitoringTermRow);
+}
+
+export async function createMonitoringTerm(db, term) {
+  await ensureSchema(db);
+  const termKey = monitoringTermKey(term);
+  const existing = await db.prepare("SELECT id FROM monitoring_terms WHERE term_key = ? LIMIT 1").bind(termKey).first();
+  if (existing) throw new Error("Este termo já está cadastrado.");
+  const count = await db.prepare("SELECT COUNT(*) AS total FROM monitoring_terms WHERE active = 1").first();
+  if (Number(count?.total) >= MAX_MONITORING_TERMS) throw new Error(`O limite é de ${MAX_MONITORING_TERMS} termos ativos.`);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO monitoring_terms (id, term, term_key, active, created_at, updated_at)
+    VALUES (?, ?, ?, 1, ?, ?)
+  `).bind(id, term, termKey, now, now).run();
+  return monitoringTermRow(await db.prepare("SELECT * FROM monitoring_terms WHERE id = ?").bind(id).first());
+}
+
+export async function setMonitoringTermActive(db, id, active) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM monitoring_terms WHERE id = ? LIMIT 1").bind(id).first();
+  if (!current) return null;
+  if (active && Number(current.active) !== 1) {
+    const count = await db.prepare("SELECT COUNT(*) AS total FROM monitoring_terms WHERE active = 1").first();
+    if (Number(count?.total) >= MAX_MONITORING_TERMS) throw new Error(`O limite é de ${MAX_MONITORING_TERMS} termos ativos.`);
+  }
+  const updatedAt = new Date().toISOString();
+  await db.prepare("UPDATE monitoring_terms SET active = ?, updated_at = ? WHERE id = ?")
+    .bind(active ? 1 : 0, updatedAt, id)
+    .run();
+  return monitoringTermRow(await db.prepare("SELECT * FROM monitoring_terms WHERE id = ?").bind(id).first());
+}
+
+export async function deleteMonitoringTerm(db, id) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM monitoring_terms WHERE id = ? LIMIT 1").bind(id).first();
+  if (!current) return null;
+  await db.prepare("DELETE FROM monitoring_terms WHERE id = ?").bind(id).run();
+  return monitoringTermRow(current);
+}
+
+export async function queueRun(db, { id, triggerType, queuedAt = new Date().toISOString() }) {
+  await ensureSchema(db);
+  await db.prepare(`
+    INSERT INTO runs (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    ) VALUES (?, ?, 'queued', ?, '', ?, '', 0, 0, 0, 0, NULL, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      trigger_type = excluded.trigger_type,
+      status = 'queued',
+      queued_at = excluded.queued_at,
+      started_at = '',
+      heartbeat_at = excluded.heartbeat_at,
+      completed_at = '',
+      error = NULL
+  `).bind(id, triggerType, queuedAt, queuedAt).run();
+  return { id, status: "queued", queuedAt };
+}
+
+export async function markRunStarted(db, { id, triggerType, queuedAt, startedAt = new Date().toISOString() }) {
+  await ensureSchema(db);
+  const safeQueuedAt = queuedAt || startedAt;
+  await db.prepare(`
+    INSERT INTO runs (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    ) VALUES (?, ?, 'running', ?, ?, ?, '', 0, 0, 0, 0, NULL, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      trigger_type = excluded.trigger_type,
+      status = 'running',
+      queued_at = COALESCE(NULLIF(runs.queued_at, ''), excluded.queued_at),
+      started_at = excluded.started_at,
+      heartbeat_at = excluded.heartbeat_at,
+      completed_at = '',
+      error = NULL
+  `).bind(id, triggerType, safeQueuedAt, startedAt, startedAt).run();
+  return { id, status: "running", queuedAt: safeQueuedAt, startedAt };
+}
+
+export async function touchRun(db, id, heartbeatAt = new Date().toISOString()) {
+  await ensureSchema(db);
+  await db.prepare("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running'")
+    .bind(heartbeatAt, id)
+    .run();
+  return heartbeatAt;
+}
+
+export async function expireStaleRuns(db, { queuedTimeoutMs = 2 * 60 * 1000, runningTimeoutMs = 10 * 60 * 1000 } = {}) {
+  await ensureSchema(db);
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const queuedCutoff = new Date(nowMs - Math.max(30_000, Number(queuedTimeoutMs) || 120_000)).toISOString();
+  const runningCutoff = new Date(nowMs - Math.max(60_000, Number(runningTimeoutMs) || 600_000)).toISOString();
+  const results = await db.batch([
+    db.prepare(`
+      UPDATE runs
+      SET status = 'expired', completed_at = ?, heartbeat_at = ?, error = 'Ronda expirada antes de iniciar no consumidor.'
+      WHERE status = 'queued'
+        AND COALESCE(NULLIF(queued_at, ''), NULLIF(started_at, ''), NULLIF(completed_at, '')) < ?
+    `).bind(now, now, queuedCutoff),
+    db.prepare(`
+      UPDATE runs
+      SET status = 'expired', completed_at = ?, heartbeat_at = ?, error = 'Ronda expirada por ausência de progresso.'
+      WHERE status = 'running'
+        AND COALESCE(NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), NULLIF(queued_at, '')) < ?
+    `).bind(now, now, runningCutoff),
+  ]);
+  return (results || []).reduce((sum, result) => sum + Number(result?.meta?.changes || 0), 0);
+}
+
+export async function startRun(db, { id, triggerType, startedAt }) {
+  return markRunStarted(db, { id, triggerType, queuedAt: startedAt, startedAt });
+}
+
+export async function saveRun(db, { id, triggerType, startedAt, payload }) {
+  await ensureSchema(db);
+  await preflightCoreStorage(db).catch(() => null);
+  const safePayload = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload
+    : {
+        ok: false,
+        collectedAt: new Date().toISOString(),
+        error: "A coleta terminou sem retornar dados válidos.",
+        sources: [],
+        totals: { items: 0, topics: 0, sources: 0, socialItems: 0 },
+        items: [],
+        topics: [],
+      };
+  const completedAt = safePayload.collectedAt || new Date().toISOString();
+  const totals = safePayload.totals ?? {};
+  const status = safePayload.ok ? "success" : "failed";
+  const payloadJson = JSON.stringify(safePayload);
+  const write = () => db.prepare(`
+    INSERT INTO runs (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      trigger_type = excluded.trigger_type,
+      status = excluded.status,
+      queued_at = COALESCE(NULLIF(runs.queued_at, ''), excluded.queued_at),
+      started_at = excluded.started_at,
+      heartbeat_at = excluded.heartbeat_at,
+      completed_at = excluded.completed_at,
+      items_count = excluded.items_count,
+      topics_count = excluded.topics_count,
+      sources_count = excluded.sources_count,
+      social_items_count = excluded.social_items_count,
+      error = excluded.error,
+      payload_json = excluded.payload_json
+  `).bind(
+    id,
+    triggerType,
+    status,
+    startedAt,
+    startedAt,
+    completedAt,
+    completedAt,
+    Number(totals.items) || 0,
+    Number(totals.topics) || 0,
+    Number(totals.sources) || 0,
+    Number(totals.socialItems) || 0,
+    safePayload.error || null,
+    payloadJson,
+  ).run();
+  try {
+    await write();
+  } catch (error) {
+    if (!isD1StorageLimitError(error)) throw error;
+    await emergencyCleanupRaw(db);
+    await write();
+  }
+  return { id, status, completedAt };
+}
+
+export async function getCachedTranslations(db, keys = []) {
+  await ensureSchema(db);
+  const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  const output = new Map();
+  for (let offset = 0; offset < uniqueKeys.length; offset += 80) {
+    const chunk = uniqueKeys.slice(offset, offset + 80);
+    const placeholders = chunk.map(() => "?").join(",");
+    const result = await db
+      .prepare(`SELECT cache_key, translated_text FROM translation_cache WHERE cache_key IN (${placeholders})`)
+      .bind(...chunk)
+      .all();
+    for (const row of result?.results || []) {
+      if (row?.cache_key && row?.translated_text) output.set(row.cache_key, row.translated_text);
+    }
+  }
+  return output;
+}
+
+export async function saveCachedTranslations(db, entries = []) {
+  await ensureSchema(db);
+  const validEntries = entries.filter((entry) => entry?.key && entry?.translatedText);
+  const updatedAt = new Date().toISOString();
+  for (let offset = 0; offset < validEntries.length; offset += 80) {
+    const chunk = validEntries.slice(offset, offset + 80);
+    await db.batch(chunk.map((entry) => db
+      .prepare(`
+        INSERT INTO translation_cache (cache_key, source_lang, target_lang, translated_text, updated_at)
+        VALUES (?, ?, 'pt', ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET
+          translated_text = excluded.translated_text,
+          updated_at = excluded.updated_at
+      `)
+      .bind(entry.key, entry.sourceLanguage, entry.translatedText, updatedAt)));
+  }
+}
+
+export async function getLatestRound(db) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT id, trigger_type, completed_at, payload_json FROM runs WHERE status = 'success' ORDER BY completed_at DESC LIMIT 1")
+    .first();
+  if (!row?.payload_json) return null;
+  try {
+    const payload = JSON.parse(row.payload_json);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    return { ...payload, runId: row.id, triggerType: row.trigger_type, storedAt: row.completed_at };
+  } catch {
+    throw new Error("A última ronda armazenada está corrompida.");
+  }
+}
+
+export async function getRunHistory(db, limit = 30) {
+  await ensureSchema(db);
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 30));
+  const result = await db
+    .prepare(`
+      SELECT id, trigger_type, status, queued_at,
+             NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at,
+             items_count, topics_count, sources_count, social_items_count, error
+      FROM runs
+      ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
+      LIMIT ?
+    `)
+    .bind(safeLimit)
+    .all();
+  return result?.results ?? [];
+}
+
+export async function getRunStatus(db, id) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare(`
+      SELECT id, trigger_type, status, queued_at,
+             NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at,
+             items_count, topics_count, sources_count, social_items_count, error, payload_json
+      FROM runs WHERE id = ? LIMIT 1
+    `)
+    .bind(id)
+    .first();
+  if (!row) return null;
+  let diagnostics = null;
+  let detail = null;
+  let collectionStatus = null;
+  if (row.payload_json) {
+    try {
+      const payload = JSON.parse(row.payload_json);
+      diagnostics = payload?.diagnostics || null;
+      detail = payload?.detail || null;
+      collectionStatus = payload?.collectionStatus || null;
+    } catch {}
+  }
+  delete row.payload_json;
+  return {
+    ...row,
+    collectionStatus,
+    detail,
+    diagnostics,
+  };
+}
+
+export async function getRunPayload(db, id) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare(`
+      SELECT id, trigger_type, status, queued_at,
+             NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at, error, payload_json
+      FROM runs WHERE id = ? LIMIT 1
+    `)
+    .bind(id)
+    .first();
+  if (!row) return null;
+  let payload = null;
+  if (row.payload_json) {
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      throw new Error("Os dados desta ronda estão corrompidos.");
+    }
+  }
+  return {
+    id: row.id,
+    triggerType: row.trigger_type,
+    status: row.status,
+    queuedAt: row.queued_at || null,
+    startedAt: row.started_at || null,
+    completedAt: row.completed_at || null,
+    error: row.error,
+    payload,
+  };
+}
+
+export async function getArticleReadCache(db, cacheKey) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT payload_json, expires_at FROM article_read_cache WHERE cache_key = ? LIMIT 1")
+    .bind(cacheKey)
+    .first();
+  if (!row?.payload_json || Date.parse(row.expires_at) <= Date.now()) return null;
+  try {
+    const payload = JSON.parse(row.payload_json);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveArticleReadCache(db, cacheKey, payload, ttlHours = 12) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(ttlHours) || 12) * 60 * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO article_read_cache (cache_key, payload_json, updated_at, expires_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at,
+      expires_at = excluded.expires_at
+  `).bind(cacheKey, JSON.stringify(payload), updatedAt, expiresAt).run();
+  return { updatedAt, expiresAt };
+}
+
+function hostnameFromUrl(value) {
+  try { return new URL(String(value || "")).hostname.toLocaleLowerCase("pt-BR").replace(/^www\./, ""); } catch { return ""; }
+}
+
+export async function getArticleSourceStats(db, urls = []) {
+  await ensureSchema(db);
+  const hostnames = [...new Set(urls.map(hostnameFromUrl).filter(Boolean))];
+  if (!hostnames.length) return {};
+  const output = {};
+  for (let offset = 0; offset < hostnames.length; offset += 80) {
+    const chunk = hostnames.slice(offset, offset + 80);
+    const placeholders = chunk.map(() => "?").join(",");
+    const result = await db
+      .prepare(`SELECT hostname, attempts, successes, total_words, updated_at FROM article_source_stats WHERE hostname IN (${placeholders})`)
+      .bind(...chunk)
+      .all();
+    for (const row of result?.results || []) {
+      output[row.hostname] = {
+        attempts: Number(row.attempts) || 0,
+        successes: Number(row.successes) || 0,
+        totalWords: Number(row.total_words) || 0,
+        updatedAt: row.updated_at,
+      };
+    }
+  }
+  return output;
+}
+
+export async function recordArticleSourceAttempt(db, { url, success, wordCount = 0 } = {}) {
+  await ensureSchema(db);
+  const hostname = hostnameFromUrl(url);
+  if (!hostname) return null;
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO article_source_stats (hostname, attempts, successes, total_words, updated_at)
+    VALUES (?, 1, ?, ?, ?)
+    ON CONFLICT(hostname) DO UPDATE SET
+      attempts = article_source_stats.attempts + 1,
+      successes = article_source_stats.successes + excluded.successes,
+      total_words = article_source_stats.total_words + excluded.total_words,
+      updated_at = excluded.updated_at
+  `).bind(hostname, success ? 1 : 0, Math.max(0, Number(wordCount) || 0), updatedAt).run();
+  return { hostname, updatedAt };
+}
+
+
+export async function getIntelligentCarousel(db, cacheKey) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT payload_json, expires_at FROM intelligent_carousels WHERE cache_key = ? LIMIT 1")
+    .bind(cacheKey)
+    .first();
+  if (!row?.payload_json || Date.parse(row.expires_at) <= Date.now()) return null;
+  try {
+    const payload = JSON.parse(row.payload_json);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveIntelligentCarousel(db, { cacheKey, runId, topicId, payload, ttlHours = 48 }) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(ttlHours) || 48) * 60 * 60 * 1000).toISOString();
+  await db
+    .prepare(`
+      INSERT INTO intelligent_carousels (cache_key, run_id, topic_id, payload_json, updated_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cache_key) DO UPDATE SET
+        run_id = excluded.run_id,
+        topic_id = excluded.topic_id,
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at,
+        expires_at = excluded.expires_at
+    `)
+    .bind(cacheKey, runId, topicId, JSON.stringify(payload), updatedAt, expiresAt)
+    .run();
+  return { updatedAt, expiresAt };
+}
+
+
+function parseIntelligentJob(row) {
+  if (!row) return null;
+  let payload = null;
+  if (row.payload_json) {
+    try { payload = JSON.parse(row.payload_json); } catch {}
+  }
+  const updatedAt = row.updated_at || row.created_at;
+  const active = row.status === "queued" || row.status === "running";
+  return {
+    cacheKey: row.cache_key,
+    jobId: row.job_id,
+    runId: row.run_id,
+    topicId: row.topic_id,
+    status: row.status,
+    progress: Math.max(0, Math.min(100, Number(row.progress) || 0)),
+    message: row.message || "",
+    error: row.error || null,
+    payload,
+    createdAt: row.created_at,
+    updatedAt,
+    expiresAt: row.expires_at,
+    stale: active && Date.now() - Date.parse(updatedAt) > 2 * 60 * 1000,
+  };
+}
+
+export async function getIntelligentJob(db, jobId) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT * FROM intelligent_jobs WHERE job_id = ? LIMIT 1")
+    .bind(jobId)
+    .first();
+  return parseIntelligentJob(row);
+}
+
+export async function createIntelligentJob(db, {
+  cacheKey,
+  runId,
+  topicId,
+  staleMs = 2 * 60 * 1000,
+  ttlMinutes = 120,
+  replaceCompleted = false,
+} = {}) {
+  await ensureSchema(db);
+  const existingRow = await db
+    .prepare("SELECT * FROM intelligent_jobs WHERE cache_key = ? LIMIT 1")
+    .bind(cacheKey)
+    .first();
+  const existing = parseIntelligentJob(existingRow);
+  const existingAge = existing?.updatedAt ? Date.now() - Date.parse(existing.updatedAt) : Number.POSITIVE_INFINITY;
+  if (existing && (
+    (["queued", "running"].includes(existing.status) && existingAge <= staleMs)
+    || (!replaceCompleted && existing.status === "succeeded" && existing.payload)
+  )) {
+    return { created: false, job: existing };
+  }
+
+  const now = new Date().toISOString();
+  const jobId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + Math.max(15, Number(ttlMinutes) || 120) * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO intelligent_jobs (
+      cache_key, job_id, run_id, topic_id, status, progress, message, error,
+      payload_json, created_at, updated_at, expires_at
+    ) VALUES (?, ?, ?, ?, 'queued', 1, ?, NULL, NULL, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      job_id = excluded.job_id,
+      run_id = excluded.run_id,
+      topic_id = excluded.topic_id,
+      status = excluded.status,
+      progress = excluded.progress,
+      message = excluded.message,
+      error = NULL,
+      payload_json = NULL,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      expires_at = excluded.expires_at
+  `).bind(cacheKey, jobId, runId, topicId, "Leitura adicionada à fila.", now, now, expiresAt).run();
+  return {
+    created: true,
+    job: {
+      cacheKey,
+      jobId,
+      runId,
+      topicId,
+      status: "queued",
+      progress: 1,
+      message: "Leitura adicionada à fila.",
+      error: null,
+      payload: null,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt,
+      stale: false,
+    },
+  };
+}
+
+export async function updateIntelligentJob(db, {
+  jobId,
+  status,
+  progress = 0,
+  message = "",
+  error = null,
+  payload = null,
+  ttlMinutes = 120,
+} = {}) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(15, Number(ttlMinutes) || 120) * 60 * 1000).toISOString();
+  await db.prepare(`
+    UPDATE intelligent_jobs
+    SET status = ?, progress = ?, message = ?, error = ?, payload_json = ?, updated_at = ?, expires_at = ?
+    WHERE job_id = ?
+  `).bind(
+    status,
+    Math.max(0, Math.min(100, Number(progress) || 0)),
+    message || "",
+    error ? String(error).slice(0, 300) : null,
+    payload ? JSON.stringify(payload) : null,
+    updatedAt,
+    expiresAt,
+    jobId,
+  ).run();
+  return getIntelligentJob(db, jobId);
+}
+
+
+function parseJsonObject(value, fallback) {
+  try {
+    const parsed = JSON.parse(value || "");
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function sourceStateRow(row) {
+  if (!row) return null;
+  return {
+    sourceId: row.source_id,
+    name: row.name,
+    region: row.region,
+    status: row.status,
+    route: row.route,
+    httpStatus: row.http_status == null ? null : Number(row.http_status),
+    errorCode: row.error_code || null,
+    errorDetail: row.error_detail || null,
+    items: Array.isArray(parseJsonObject(row.items_json, [])) ? parseJsonObject(row.items_json, []) : [],
+    itemCount: Number(row.item_count) || 0,
+    lastUrl: row.last_url || null,
+    validators: parseJsonObject(row.validators_json, {}),
+    lastAttemptAt: row.last_attempt_at || null,
+    lastSuccessAt: row.last_success_at || null,
+    nextCheckAt: row.next_check_at || null,
+    failureCount: Number(row.failure_count) || 0,
+    responseMs: row.response_ms == null ? null : Number(row.response_ms),
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getSourceStates(db, sourceIds = []) {
+  await ensureSchema(db);
+  const ids = [...new Set(sourceIds.map((value) => String(value || "").trim()).filter(Boolean))];
+  const output = new Map();
+  for (let offset = 0; offset < ids.length; offset += 80) {
+    const chunk = ids.slice(offset, offset + 80);
+    const placeholders = chunk.map(() => "?").join(",");
+    const result = await db.prepare(`SELECT * FROM source_state WHERE source_id IN (${placeholders})`).bind(...chunk).all();
+    for (const row of result?.results || []) {
+      const parsed = sourceStateRow(row);
+      if (parsed) output.set(parsed.sourceId, parsed);
+    }
+  }
+  return output;
+}
+
+export async function saveSourceStates(db, entries = []) {
+  await ensureSchema(db);
+  const valid = entries.filter((entry) => entry?.sourceId && entry?.name);
+  if (!valid.length) return 0;
+  for (let offset = 0; offset < valid.length; offset += 40) {
+    const chunk = valid.slice(offset, offset + 40);
+    await db.batch(chunk.map((entry) => db.prepare(`
+      INSERT INTO source_state (
+        source_id, name, region, status, route, http_status, error_code, error_detail,
+        items_json, item_count, last_url, validators_json, last_attempt_at, last_success_at,
+        next_check_at, failure_count, response_ms, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id) DO UPDATE SET
+        name = excluded.name,
+        region = excluded.region,
+        status = excluded.status,
+        route = excluded.route,
+        http_status = excluded.http_status,
+        error_code = excluded.error_code,
+        error_detail = excluded.error_detail,
+        items_json = excluded.items_json,
+        item_count = excluded.item_count,
+        last_url = excluded.last_url,
+        validators_json = excluded.validators_json,
+        last_attempt_at = excluded.last_attempt_at,
+        last_success_at = excluded.last_success_at,
+        next_check_at = excluded.next_check_at,
+        failure_count = excluded.failure_count,
+        response_ms = excluded.response_ms,
+        updated_at = excluded.updated_at
+    `).bind(
+      entry.sourceId,
+      entry.name,
+      entry.region || "Brasil",
+      entry.status || "unknown",
+      entry.route || "unknown",
+      entry.httpStatus ?? null,
+      entry.errorCode || null,
+      entry.errorDetail ? String(entry.errorDetail).slice(0, 300) : null,
+      JSON.stringify(Array.isArray(entry.items) ? entry.items : []),
+      Number(entry.itemCount) || 0,
+      entry.lastUrl || null,
+      JSON.stringify(entry.validators && typeof entry.validators === "object" ? entry.validators : {}),
+      entry.lastAttemptAt || null,
+      entry.lastSuccessAt || null,
+      entry.nextCheckAt || null,
+      Number(entry.failureCount) || 0,
+      entry.responseMs == null ? null : Math.max(0, Number(entry.responseMs) || 0),
+      entry.updatedAt || new Date().toISOString(),
+    )));
+  }
+  return valid.length;
+}
+
+export async function listSourceDiagnostics(db) {
+  await ensureSchema(db);
+  const result = await db.prepare(`
+    SELECT source_id, name, region, status, route, http_status, error_code, error_detail,
+           item_count, last_attempt_at, last_success_at, next_check_at, failure_count,
+           response_ms, updated_at
+    FROM source_state
+    ORDER BY region, name COLLATE NOCASE
+  `).all();
+  return (result?.results || []).map((row) => ({
+    sourceId: row.source_id,
+    name: row.name,
+    region: row.region,
+    status: row.status,
+    route: row.route,
+    httpStatus: row.http_status == null ? null : Number(row.http_status),
+    errorCode: row.error_code || null,
+    errorDetail: row.error_detail || null,
+    itemCount: Number(row.item_count) || 0,
+    lastAttemptAt: row.last_attempt_at || null,
+    lastSuccessAt: row.last_success_at || null,
+    nextCheckAt: row.next_check_at || null,
+    failureCount: Number(row.failure_count) || 0,
+    responseMs: row.response_ms == null ? null : Number(row.response_ms),
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function getLatestRunSummary(db, { successOnly = false } = {}) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT id, trigger_type, status, queued_at,
+           NULLIF(started_at, '') AS started_at, NULLIF(heartbeat_at, '') AS heartbeat_at,
+           NULLIF(completed_at, '') AS completed_at,
+           items_count, topics_count, sources_count, social_items_count, error
+    FROM runs
+    ${successOnly ? "WHERE status = 'success'" : ""}
+    ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
+    LIMIT 1
+  `).first();
+  if (!row) return null;
+  return {
+    id: row.id,
+    triggerType: row.trigger_type,
+    status: row.status,
+    queuedAt: row.queued_at || null,
+    startedAt: row.started_at || null,
+    heartbeatAt: row.heartbeat_at || null,
+    completedAt: row.completed_at || null,
+    items: Number(row.items_count) || 0,
+    topics: Number(row.topics_count) || 0,
+    sources: Number(row.sources_count) || 0,
+    socialItems: Number(row.social_items_count) || 0,
+    error: row.error || null,
+  };
+}
+
+export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
+  await ensureSchema(db);
+  const nowMs = Date.now();
+  const row = await db.prepare("SELECT value FROM app_state WHERE key = 'last_maintenance_at' LIMIT 1").first();
+  const lastMs = Date.parse(row?.value || "");
+  if (Number.isFinite(lastMs) && nowMs - lastMs < Math.max(1, Number(intervalHours) || 12) * 60 * 60 * 1000) return false;
+  const now = new Date(nowMs).toISOString();
+  const retentionCutoff = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+  const translationCutoff = new Date(nowMs - 14 * 24 * 60 * 60 * 1000).toISOString();
+  await db.batch([
+    db.prepare("DELETE FROM runs WHERE status IN ('success', 'failed', 'expired') AND NULLIF(completed_at, '') < ?").bind(retentionCutoff),
+    db.prepare(`UPDATE runs SET payload_json = NULL WHERE payload_json IS NOT NULL AND status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status = 'success' AND payload_json IS NOT NULL ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxRunPayloads})`),
+    db.prepare(`DELETE FROM runs WHERE status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status NOT IN ('queued', 'running') ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC LIMIT ${STORAGE_GUARD.maxRunRows})`),
+    db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
+    db.prepare("DELETE FROM user_sessions WHERE expires_at < ?").bind(now),
+    db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
+    db.prepare(`DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`),
+    db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
+    db.prepare(`DELETE FROM intelligent_carousels WHERE cache_key NOT IN (SELECT cache_key FROM intelligent_carousels ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentCarousels})`),
+    db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(now),
+    db.prepare(`DELETE FROM intelligent_jobs WHERE job_id NOT IN (SELECT job_id FROM intelligent_jobs ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentJobs})`),
+    db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
+    db.prepare(`DELETE FROM article_read_cache WHERE cache_key NOT IN (SELECT cache_key FROM article_read_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxArticleReadCache})`),
+    db.prepare(`DELETE FROM youtube_collections WHERE id NOT IN (SELECT id FROM youtube_collections ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeCollections})`),
+    db.prepare(`DELETE FROM youtube_term_results WHERE id NOT IN (SELECT id FROM youtube_term_results ORDER BY collected_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeTermResults})`),
+    db.prepare(`
+      INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(now, now),
+  ]);
+  return true;
+}
+
+
+export async function getYouTubeStateValue(db, key, fallback = null) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT value_json FROM youtube_state WHERE state_key = ? LIMIT 1").bind(String(key)).first();
+  return parseJsonObject(row?.value_json, fallback);
+}
+
+export async function setYouTubeStateValue(db, key, value) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO youtube_state (state_key, value_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+  `).bind(String(key), JSON.stringify(value ?? null), now).run();
+  return value;
+}
+
+export async function saveYouTubeCollection(db, collection, { status = "success", error = null } = {}) {
+  await ensureSchema(db);
+  await emergencyCleanupRaw(db);
+  const compact = compactYouTubeCollectionForStorage(collection);
+  const completedAt = compact?.collectedAt || new Date().toISOString();
+  const id = compact?.id || crypto.randomUUID();
+  const write = () => db.prepare(`
+    INSERT INTO youtube_collections (id, status, region, collected_at, completed_at, payload_json, error)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      region = excluded.region,
+      collected_at = excluded.collected_at,
+      completed_at = excluded.completed_at,
+      payload_json = excluded.payload_json,
+      error = excluded.error
+  `).bind(
+    id,
+    status,
+    compact?.region || "BR",
+    completedAt,
+    completedAt,
+    JSON.stringify({ ...compact, id }),
+    error ? String(error).slice(0, 500) : null,
+  ).run();
+  try {
+    await write();
+  } catch (writeError) {
+    if (!isD1StorageLimitError(writeError)) throw writeError;
+    await emergencyCleanupRaw(db);
+    await write();
+  }
+  return { ...compact, id };
+}
+
+export async function getLatestYouTubeCollection(db) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT payload_json FROM youtube_collections
+    WHERE status = 'success'
+    ORDER BY completed_at DESC
+    LIMIT 1
+  `).first();
+  return parseJsonObject(row?.payload_json, null);
+}
+
+export async function getYouTubeCollectionHistory(db, limit = 24) {
+  await ensureSchema(db);
+  const safeLimit = Math.max(1, Math.min(96, Number(limit) || 24));
+  const result = await db.prepare(`
+    SELECT payload_json FROM youtube_collections
+    WHERE status = 'success'
+    ORDER BY completed_at DESC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean).reverse();
+}
+
+export async function saveYouTubeTermResult(db, result) {
+  await ensureSchema(db);
+  await emergencyCleanupRaw(db);
+  const compact = compactYouTubeTermResultForStorage(result);
+  const id = compact?.id || crypto.randomUUID();
+  const collectedAt = compact?.collectedAt || new Date().toISOString();
+  const write = () => db.prepare(`
+    INSERT INTO youtube_term_results (id, term_id, term, collected_at, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, collected_at = excluded.collected_at
+  `).bind(id, compact?.termId || "", compact?.term || "", collectedAt, JSON.stringify({ ...compact, id })).run();
+  try {
+    await write();
+  } catch (writeError) {
+    if (!isD1StorageLimitError(writeError)) throw writeError;
+    await emergencyCleanupRaw(db);
+    await write();
+  }
+  return { ...compact, id };
+}
+
+export async function getLatestYouTubeTermResults(db, limit = 12) {
+  await ensureSchema(db);
+  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
+  const result = await db.prepare(`
+    SELECT payload_json FROM youtube_term_results
+    WHERE id IN (
+      SELECT id FROM youtube_term_results AS latest
+      WHERE collected_at = (
+        SELECT MAX(collected_at) FROM youtube_term_results WHERE term_id = latest.term_id
+      )
+    )
+    ORDER BY collected_at DESC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean);
+}
+
+export async function cleanupYouTubeData(db) {
+  await ensureSchema(db);
+  await emergencyCleanupRaw(db);
+}
+
+function newsroomStoryRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id, topicKey: row.topic_key, title: row.title, editoria: row.editoria, priority: row.priority,
+    queue: row.editorial_queue, workflowStatus: row.workflow_status, score: Number(row.score) || 0,
+    assigneeUserId: row.assignee_user_id || null, verificationLevel: row.verification_level || "single",
+    firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at, lastChangedAt: row.last_changed_at,
+    sourceCount: Number(row.source_count) || 0, itemCount: Number(row.item_count) || 0, latestRunId: row.latest_run_id || null,
+    snapshot: parseJsonObject(row.snapshot_json, {}), changeSummary: parseJsonObject(row.change_summary_json, {}),
+    publishedAt: row.published_at || null, updatedAt: row.updated_at,
+  };
+}
+
+function compactTopicSnapshot(topic = {}) {
+  const items = Array.isArray(topic.items) ? topic.items : [];
+  return {
+    title: String(topic.title || "").slice(0, 220),
+    sourceNames: [...new Set((topic.sourceNames || items.map((item) => item?.sourceName)).filter(Boolean))].slice(0, 20),
+    itemKeys: items.slice(0, 20).map((item) => `${item?.sourceName || ""}|${item?.title || ""}|${item?.publishedAt || ""}`).filter(Boolean),
+    lastPublishedAt: topic.lastPublishedAt || null,
+    score: Number(topic.score) || 0,
+    priority: topic.priority || "Em observação",
+  };
+}
+
+function newsroomVerification(topic = {}) {
+  const names = (topic.sourceNames || []).map((value) => String(value).toLocaleLowerCase("pt-BR"));
+  if (names.some((name) => /agência brasil|agencia brasil|gov\.br|tse|stf|senado|câmara|camara dos deputados/.test(name))) return "official";
+  return Number(topic.sourceCount) >= 2 ? "cross" : "single";
+}
+
+function newsroomQueue(topic = {}, changed = false) {
+  const score = Number(topic.score) || 0;
+  if (topic.priority === "Pautar agora" || score >= 72) return "now";
+  if (changed && score >= 48) return "rising";
+  if (score >= 38 || Number(topic.sourceCount) >= 2) return "watch";
+  return "quiet";
+}
+
+function newsroomChanges(previous = {}, current = {}) {
+  const oldSources = new Set(previous.sourceNames || []);
+  const oldItems = new Set(previous.itemKeys || []);
+  const newSources = (current.sourceNames || []).filter((name) => !oldSources.has(name));
+  const newItems = (current.itemKeys || []).filter((key) => !oldItems.has(key));
+  const scoreDelta = (Number(current.score) || 0) - (Number(previous.score) || 0);
+  const priorityChanged = Boolean(previous.priority && previous.priority !== current.priority);
+  const changed = !previous.title || newSources.length > 0 || newItems.length > 0 || Math.abs(scoreDelta) >= 8 || priorityChanged;
+  const parts = [];
+  if (!previous.title) parts.push("Pauta identificada nesta ronda");
+  if (newSources.length) parts.push(`${newSources.length} ${newSources.length === 1 ? "nova fonte" : "novas fontes"}`);
+  if (newItems.length) parts.push(`${newItems.length} ${newItems.length === 1 ? "nova publicação" : "novas publicações"}`);
+  if (scoreDelta >= 8) parts.push(`índice subiu ${scoreDelta} pontos`);
+  if (scoreDelta <= -8) parts.push(`índice caiu ${Math.abs(scoreDelta)} pontos`);
+  if (priorityChanged) parts.push(`prioridade mudou para ${current.priority}`);
+  return { changed, newSources, newItemsCount: newItems.length, scoreDelta, priorityChanged, text: parts.join(" · ") || "Sem mudança editorial relevante" };
+}
+
+export async function syncNewsroomStories(db, topics = [], { runId = null, at = new Date().toISOString() } = {}) {
+  await ensureSchema(db);
+  const output = [];
+  for (const topic of Array.isArray(topics) ? topics : []) {
+    const topicKey = String(topic?.id || "").trim();
+    if (!topicKey) continue;
+    const id = topicKey.replace(/^topic-/, "story-");
+    const existingRow = await db.prepare("SELECT * FROM newsroom_stories WHERE topic_key = ? LIMIT 1").bind(topicKey).first();
+    const existing = newsroomStoryRow(existingRow);
+    const current = compactTopicSnapshot(topic);
+    const changes = newsroomChanges(existing?.snapshot || {}, current);
+    const queue = newsroomQueue(topic, changes.changed);
+    const verification = newsroomVerification(topic);
+    const firstSeenAt = existing?.firstSeenAt || at;
+    const lastChangedAt = changes.changed ? at : existing?.lastChangedAt || at;
+    const workflow = existing?.workflowStatus || "discovered";
+    const assignee = existing?.assigneeUserId || null;
+    await db.prepare(`
+      INSERT INTO newsroom_stories (
+        id, topic_key, title, editoria, priority, editorial_queue, workflow_status, score, assignee_user_id,
+        verification_level, first_seen_at, last_seen_at, last_changed_at, source_count, item_count, latest_run_id,
+        snapshot_json, change_summary_json, published_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(topic_key) DO UPDATE SET
+        title=excluded.title, editoria=excluded.editoria, priority=excluded.priority, editorial_queue=excluded.editorial_queue,
+        score=excluded.score, verification_level=excluded.verification_level, last_seen_at=excluded.last_seen_at,
+        last_changed_at=excluded.last_changed_at, source_count=excluded.source_count, item_count=excluded.item_count,
+        latest_run_id=excluded.latest_run_id, snapshot_json=excluded.snapshot_json, change_summary_json=excluded.change_summary_json,
+        updated_at=excluded.updated_at
+    `).bind(
+      id, topicKey, String(topic.title || "Assunto em acompanhamento").slice(0, 240), topic.editoria || "Notícias",
+      topic.priority || "Em observação", queue, workflow, Number(topic.score) || 0, assignee, verification,
+      firstSeenAt, at, lastChangedAt, Number(topic.sourceCount) || 0, Number(topic.itemCount) || 0, runId,
+      JSON.stringify(current), JSON.stringify(changes), existing?.publishedAt || null, at,
+    ).run();
+    if (changes.changed) {
+      await db.prepare("INSERT INTO newsroom_story_events (id, story_id, event_type, summary, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), id, existing ? "changed" : "discovered", changes.text, JSON.stringify(changes), at).run();
+    }
+    output.push(await getNewsroomStory(db, id));
+  }
+  return output.filter(Boolean);
+}
+
+export async function getNewsroomStory(db, id) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM newsroom_stories WHERE id = ? LIMIT 1").bind(id).first();
+  if (!row) return null;
+  const story = newsroomStoryRow(row);
+  const [events, notes, followers] = await Promise.all([
+    db.prepare("SELECT * FROM newsroom_story_events WHERE story_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
+    db.prepare("SELECT n.*, u.display_name FROM newsroom_story_notes n LEFT JOIN users u ON u.id=n.user_id WHERE story_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
+    db.prepare("SELECT COUNT(*) AS count FROM newsroom_story_followers WHERE story_id = ?").bind(id).first(),
+  ]);
+  story.events = (events?.results || []).map((event) => ({ id:event.id, type:event.event_type, summary:event.summary, payload:parseJsonObject(event.payload_json, {}), createdAt:event.created_at }));
+  story.notes = (notes?.results || []).map((note) => ({ id:note.id, userId:note.user_id, displayName:note.display_name || "Redação", note:note.note, createdAt:note.created_at }));
+  story.followerCount = Number(followers?.count) || 0;
+  return story;
+}
+
+export async function listNewsroomStories(db, { limit = 80, queue = null, status = null } = {}) {
+  await ensureSchema(db);
+  const clauses = ["workflow_status <> 'discarded'"];
+  const binds = [];
+  if (queue) { clauses.push("editorial_queue = ?"); binds.push(queue); }
+  if (status) { clauses.push("workflow_status = ?"); binds.push(status); }
+  const safeLimit = Math.max(1, Math.min(150, Number(limit) || 80));
+  const result = await db.prepare(`SELECT * FROM newsroom_stories WHERE ${clauses.join(" AND ")} ORDER BY CASE editorial_queue WHEN 'now' THEN 1 WHEN 'rising' THEN 2 WHEN 'watch' THEN 3 ELSE 4 END, last_changed_at DESC LIMIT ?`).bind(...binds, safeLimit).all();
+  return (result?.results || []).map(newsroomStoryRow);
+}
+
+export async function updateNewsroomStory(db, id, patch = {}, actorUserId = null) {
+  await ensureSchema(db);
+  const current = await getNewsroomStory(db, id);
+  if (!current) return null;
+  const allowedStatuses = new Set(["discovered","selected","investigating","confirmed","production","published","discarded"]);
+  const status = allowedStatuses.has(patch.workflowStatus) ? patch.workflowStatus : current.workflowStatus;
+  const assignee = patch.assignToSelf ? actorUserId : patch.clearAssignee ? null : current.assigneeUserId;
+  const publishedAt = status === "published" ? (current.publishedAt || new Date().toISOString()) : current.publishedAt;
+  const now = new Date().toISOString();
+  await db.prepare("UPDATE newsroom_stories SET workflow_status=?, assignee_user_id=?, published_at=?, updated_at=? WHERE id=?")
+    .bind(status, assignee, publishedAt, now, id).run();
+  const changes = [];
+  if (status !== current.workflowStatus) changes.push(`status: ${status}`);
+  if (assignee !== current.assigneeUserId) changes.push(assignee ? "pauta assumida" : "responsável removido");
+  if (changes.length) await db.prepare("INSERT INTO newsroom_story_events (id, story_id, event_type, summary, payload_json, created_at) VALUES (?, ?, 'workflow', ?, ?, ?)")
+    .bind(crypto.randomUUID(), id, changes.join(" · "), JSON.stringify({ status, assigneeUserId:assignee }), now).run();
+  return getNewsroomStory(db, id);
+}
+
+export async function addNewsroomStoryNote(db, id, userId, note) {
+  await ensureSchema(db);
+  const text = String(note || "").replace(/\s+/g, " ").trim().slice(0, 800);
+  if (!text) throw new Error("Nota vazia.");
+  const now = new Date().toISOString();
+  await db.prepare("INSERT INTO newsroom_story_notes (id, story_id, user_id, note, created_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), id, userId, text, now).run();
+  await db.prepare("INSERT INTO newsroom_story_events (id, story_id, event_type, summary, payload_json, created_at) VALUES (?, ?, 'note', ?, '{}', ?)")
+    .bind(crypto.randomUUID(), id, "Nova nota editorial", now).run();
+  return getNewsroomStory(db, id);
+}
+
+export async function toggleNewsroomStoryFollow(db, id, userId) {
+  await ensureSchema(db);
+  const existing = await db.prepare("SELECT 1 AS ok FROM newsroom_story_followers WHERE story_id=? AND user_id=?").bind(id,userId).first();
+  if (existing) await db.prepare("DELETE FROM newsroom_story_followers WHERE story_id=? AND user_id=?").bind(id,userId).run();
+  else await db.prepare("INSERT INTO newsroom_story_followers (story_id,user_id,created_at) VALUES (?,?,?)").bind(id,userId,new Date().toISOString()).run();
+  return { following: !existing, story: await getNewsroomStory(db,id) };
+}
+
+export async function getNewsroomHandoff(db, { hours = 8 } = {}) {
+  await ensureSchema(db);
+  const safeHours = Math.max(1, Math.min(24, Number(hours) || 8));
+  const cutoff = new Date(Date.now() - safeHours * 3600000).toISOString();
+  const [stories, events] = await Promise.all([
+    listNewsroomStories(db, { limit: 80 }),
+    db.prepare("SELECT e.*, s.title, s.editoria FROM newsroom_story_events e JOIN newsroom_stories s ON s.id=e.story_id WHERE e.created_at>=? ORDER BY e.created_at DESC LIMIT 80").bind(cutoff).all(),
+  ]);
+  const pending = stories.filter((story) => !["published","discarded"].includes(story.workflowStatus));
+  return {
+    since: cutoff,
+    counters: {
+      changed: (events?.results || []).filter((event) => event.event_type === "changed").length,
+      discovered: (events?.results || []).filter((event) => event.event_type === "discovered").length,
+      urgent: pending.filter((story) => story.queue === "now").length,
+      investigating: pending.filter((story) => story.workflowStatus === "investigating").length,
+      unassigned: pending.filter((story) => !story.assigneeUserId).length,
+    },
+    attention: pending.filter((story) => story.queue === "now" || story.workflowStatus === "investigating").slice(0, 12),
+    events: (events?.results || []).slice(0, 30).map((event) => ({ id:event.id, storyId:event.story_id, title:event.title, editoria:event.editoria, type:event.event_type, summary:event.summary, createdAt:event.created_at })),
+  };
+}
+
+function curatedChannelRow(row) {
+  if (!row) return null;
+  return { channelId:row.channel_id, title:row.title, handle:row.handle || null, uploadsPlaylistId:row.uploads_playlist_id, thumbnail:row.thumbnail_url || "", subscriberCount:Number(row.subscriber_count)||0, active:Number(row.active)===1, addedAt:row.added_at, updatedAt:row.updated_at, lastCheckedAt:row.last_checked_at || null, lastVideoAt:row.last_video_at || null, failureCount:Number(row.failure_count)||0 };
+}
+
+export async function listYouTubeCuratedChannels(db, { activeOnly = false } = {}) {
+  await ensureSchema(db);
+  const result = await db.prepare(`SELECT * FROM youtube_curated_channels ${activeOnly ? "WHERE active=1" : ""} ORDER BY active DESC, title COLLATE NOCASE`).all();
+  return (result?.results || []).map(curatedChannelRow);
+}
+
+export async function saveYouTubeCuratedChannel(db, channel) {
+  await ensureSchema(db);
+  const count = await db.prepare("SELECT COUNT(*) AS count FROM youtube_curated_channels").first();
+  if (Number(count?.count) >= 30) throw new Error("Limite de 30 canais na curadoria atingido.");
+  const now = new Date().toISOString();
+  await db.prepare(`INSERT INTO youtube_curated_channels (channel_id,title,handle,uploads_playlist_id,thumbnail_url,subscriber_count,active,added_at,updated_at) VALUES (?,?,?,?,?,?,1,?,?) ON CONFLICT(channel_id) DO UPDATE SET title=excluded.title,handle=excluded.handle,uploads_playlist_id=excluded.uploads_playlist_id,thumbnail_url=excluded.thumbnail_url,subscriber_count=excluded.subscriber_count,active=1,updated_at=excluded.updated_at`)
+    .bind(channel.channelId, channel.title, channel.handle || null, channel.uploadsPlaylistId, channel.thumbnail || "", Number(channel.subscriberCount)||0, now, now).run();
+  return curatedChannelRow(await db.prepare("SELECT * FROM youtube_curated_channels WHERE channel_id=?").bind(channel.channelId).first());
+}
+
+export async function setYouTubeCuratedChannelActive(db, channelId, active) {
+  await ensureSchema(db); await db.prepare("UPDATE youtube_curated_channels SET active=?,updated_at=? WHERE channel_id=?").bind(active?1:0,new Date().toISOString(),channelId).run();
+  return curatedChannelRow(await db.prepare("SELECT * FROM youtube_curated_channels WHERE channel_id=?").bind(channelId).first());
+}
+
+export async function deleteYouTubeCuratedChannel(db, channelId) {
+  await ensureSchema(db); await db.prepare("DELETE FROM youtube_curated_channels WHERE channel_id=?").bind(channelId).run(); return { deleted:true, channelId };
+}
+
+export async function databaseHealth(db) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT 1 AS ok").first();
+  return Number(row?.ok) === 1;
+}
+
+export async function databaseSelfTest(db) {
+  await ensureSchema(db);
+  const id = `self-test-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  let lock = null;
+  try {
+    await db
+      .prepare(`
+        INSERT INTO runs (
+          id, trigger_type, status, started_at, completed_at,
+          items_count, topics_count, sources_count, social_items_count,
+          error, payload_json
+        ) VALUES (?, 'self-test', 'self-test', ?, ?, 0, 0, 0, 0, NULL, NULL)
+      `)
+      .bind(id, now, now)
+      .run();
+    const written = await db.prepare("SELECT id FROM runs WHERE id = ?").bind(id).first();
+    lock = await acquireLock(db, `self-test-lock-${id}`, 10_000);
+    return written?.id === id && Boolean(lock);
+  } finally {
+    await releaseLock(db, lock);
+    await db.prepare("DELETE FROM runs WHERE id = ?").bind(id).run();
+  }
+}
+
+
+function publicUserRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    defaultSlideCount: validateSlideCount(row.default_slide_count, DEFAULT_SLIDE_COUNT),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function createEditorialUser(db, {
+  id = crypto.randomUUID(), email, emailKey, displayName, passwordHash, passwordSalt,
+  passwordIterations, defaultSlideCount = DEFAULT_SLIDE_COUNT,
+} = {}) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO users (
+      id, email, email_key, display_name, password_hash, password_salt,
+      password_iterations, default_slide_count, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id, email, emailKey, displayName, passwordHash, passwordSalt,
+    Number(passwordIterations) || 120000, validateSlideCount(defaultSlideCount), now, now,
+  ).run();
+  return { id, email, displayName, defaultSlideCount: validateSlideCount(defaultSlideCount), createdAt: now, updatedAt: now };
+}
+
+export async function getEditorialUserByEmailKey(db, emailKey) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM users WHERE email_key = ? LIMIT 1").bind(emailKey).first();
+  if (!row) return null;
+  return {
+    ...publicUserRow(row),
+    passwordHash: row.password_hash,
+    passwordSalt: row.password_salt,
+    passwordIterations: Number(row.password_iterations) || 120000,
+  };
+}
+
+export async function getEditorialUserById(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(userId).first();
+  return publicUserRow(row);
+}
+
+export async function createUserSession(db, { tokenHash, userId, ttlDays = 30 } = {}) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(ttlDays) || 30) * 24 * 60 * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO user_sessions (token_hash, user_id, created_at, last_seen_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(tokenHash, userId, now, now, expiresAt).run();
+  return { createdAt: now, expiresAt };
+}
+
+export async function getUserBySessionHash(db, tokenHash) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT u.*, s.expires_at AS session_expires_at
+    FROM user_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.expires_at > ?
+    LIMIT 1
+  `).bind(tokenHash, new Date().toISOString()).first();
+  if (!row) return null;
+  db.prepare("UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?")
+    .bind(new Date().toISOString(), tokenHash).run().catch(() => null);
+  return { ...publicUserRow(row), sessionExpiresAt: row.session_expires_at };
+}
+
+export async function deleteUserSession(db, tokenHash) {
+  await ensureSchema(db);
+  await db.prepare("DELETE FROM user_sessions WHERE token_hash = ?").bind(tokenHash).run();
+  return true;
+}
+
+export async function updateUserDefaultSlideCount(db, userId, slideCount) {
+  await ensureSchema(db);
+  const count = validateSlideCount(slideCount);
+  const updatedAt = new Date().toISOString();
+  await db.prepare("UPDATE users SET default_slide_count = ?, updated_at = ? WHERE id = ?")
+    .bind(count, updatedAt, userId).run();
+  return { defaultSlideCount: count, updatedAt };
+}
+
+function parseWritingSample(row) {
+  return row ? {
+    id: row.id,
+    title: row.title,
+    sourceType: row.source_type,
+    content: row.content,
+    charCount: Number(row.char_count) || String(row.content || "").length,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null;
+}
+
+export async function listWritingSamples(db, userId, limit = MAX_STYLE_SAMPLES) {
+  await ensureSchema(db);
+  const result = await db.prepare(`
+    SELECT * FROM writing_samples WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+  `).bind(userId, Math.max(1, Math.min(MAX_STYLE_SAMPLES, Number(limit) || MAX_STYLE_SAMPLES))).all();
+  return (result?.results || []).map(parseWritingSample);
+}
+
+export async function getWritingSampleStats(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT COUNT(*) AS sample_count, COALESCE(SUM(char_count), 0) AS total_chars
+    FROM writing_samples WHERE user_id = ?
+  `).bind(userId).first();
+  return { sampleCount: Number(row?.sample_count) || 0, totalChars: Number(row?.total_chars) || 0 };
+}
+
+export async function createWritingSample(db, userId, sample) {
+  await ensureSchema(db);
+  const stats = await getWritingSampleStats(db, userId);
+  if (stats.sampleCount >= MAX_STYLE_SAMPLES) throw new Error(`O perfil aceita no máximo ${MAX_STYLE_SAMPLES} textos.`);
+  if (stats.totalChars + sample.charCount > MAX_STYLE_TOTAL_CHARS) throw new Error(`O perfil aceita até ${MAX_STYLE_TOTAL_CHARS.toLocaleString("pt-BR")} caracteres somados.`);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO writing_samples (
+      id, user_id, title, source_type, content, content_hash, char_count, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, userId, sample.title, sample.sourceType, sample.content, sample.contentHash, sample.charCount, now, now).run();
+  return { id, ...sample, createdAt: now, updatedAt: now };
+}
+
+export async function deleteWritingSample(db, userId, sampleId) {
+  await ensureSchema(db);
+  const result = await db.prepare("DELETE FROM writing_samples WHERE id = ? AND user_id = ?")
+    .bind(sampleId, userId).run();
+  return Number(result?.meta?.changes) > 0;
+}
+
+
+function parseCarouselLearningExample(row) {
+  if (!row) return null;
+  let slides = [];
+  try { slides = JSON.parse(row.slides_json || "[]"); } catch {}
+  return {
+    id: row.id,
+    topicId: row.topic_id,
+    sourceName: row.source_name,
+    slideCount: Number(row.slide_count) || slides.length,
+    slides: Array.isArray(slides) ? slides : [],
+    createdAt: row.created_at,
+  };
+}
+
+export async function listCarouselLearningExamples(db, userId, limit = MAX_CAROUSEL_LEARNING_EXAMPLES) {
+  await ensureSchema(db);
+  const result = await db.prepare(`
+    SELECT * FROM carousel_learning_examples
+    WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+  `).bind(userId, Math.max(1, Math.min(MAX_CAROUSEL_LEARNING_EXAMPLES, Number(limit) || MAX_CAROUSEL_LEARNING_EXAMPLES))).all();
+  return (result?.results || []).map(parseCarouselLearningExample).filter(Boolean);
+}
+
+export async function getCarouselLearningStats(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT COUNT(*) AS example_count, MAX(created_at) AS updated_at
+    FROM carousel_learning_examples WHERE user_id = ?
+  `).bind(userId).first();
+  return { count: Number(row?.example_count) || 0, updatedAt: row?.updated_at || null };
+}
+
+export async function createCarouselLearningExample(db, userId, example) {
+  await ensureSchema(db);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO carousel_learning_examples (
+      id, user_id, topic_id, source_name, slide_count, slides_json, content_hash, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, content_hash) DO UPDATE SET created_at = excluded.created_at
+  `).bind(id, userId, example.topicId, example.sourceName, example.slideCount, JSON.stringify(example.slides), example.contentHash, now).run();
+  await db.prepare(`
+    DELETE FROM carousel_learning_examples
+    WHERE user_id = ? AND id NOT IN (
+      SELECT id FROM carousel_learning_examples WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+    )
+  `).bind(userId, userId, MAX_CAROUSEL_LEARNING_EXAMPLES).run();
+  const stats = await getCarouselLearningStats(db, userId);
+  return { id, ...example, createdAt: now, ...stats };
+}
+
+export async function invalidateWritingProfile(db, userId) {
+  await ensureSchema(db);
+  await db.prepare("DELETE FROM writing_profiles WHERE user_id = ?").bind(userId).run();
+  return true;
+}
+
+export async function getWritingProfile(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM writing_profiles WHERE user_id = ? LIMIT 1").bind(userId).first();
+  if (!row?.profile_json) return null;
+  try {
+    return {
+      profile: JSON.parse(row.profile_json),
+      sampleCount: Number(row.sample_count) || 0,
+      updatedAt: row.updated_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function saveWritingProfile(db, userId, profile, sampleCount) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO writing_profiles (user_id, profile_json, sample_count, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      profile_json = excluded.profile_json,
+      sample_count = excluded.sample_count,
+      updated_at = excluded.updated_at
+  `).bind(userId, JSON.stringify(profile), Math.max(0, Number(sampleCount) || 0), updatedAt).run();
+  return { profile, sampleCount: Math.max(0, Number(sampleCount) || 0), updatedAt };
+}

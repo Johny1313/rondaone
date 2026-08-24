@@ -1183,7 +1183,7 @@
   }
   function buildRondaBoards(project){
     const W=1080,H=1350,sources=(project.verificationLinks||[]).map(s=>s.sourceName).filter(Boolean),sourceLabel=sources.length?`Fonte: ${[...new Set(sources)].slice(0,3).join(' · ')}`:'Origem verificada na Ronda Editorial';
-    return (project.slides||[]).slice(0,7).map((slide,i)=>{
+    return (project.slides||[]).slice(0,15).map((slide,i)=>{
       const title=slide.title||slide.role||`Slide ${i+1}`,subtitle=slide.subtitle||'';
       const elements=[
         rondaRect('Fundo editorial',0,0,W,H,'#242424',100,0),
@@ -1212,7 +1212,7 @@
     try{
       const res=await fetch('/api/ai/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:project.visualPrompt,negative:'text, watermark, logo, fake headline, sensationalism',format:'4:5'})});
       const out=await res.json();if(!res.ok||!out.ok||!out.images?.[0])throw new Error(out.error||'A IA não retornou imagem');
-      applyGeneratedBackground(out.images[0]);setPlatformImportStatus('Ronda + imagem IA','ok');showToast('Imagem editorial aplicada às 7 pranchetas');
+      applyGeneratedBackground(out.images[0]);setPlatformImportStatus('Ronda + imagem IA','ok');showToast(`Imagem editorial aplicada às ${state.artboards.length} pranchetas`);
     }catch(err){setPlatformImportStatus('Ronda · imagem pendente','error');showToast('Projeto aberto. A imagem pode ser gerada novamente pela aba IA.',3400);}
   }
   function applyRondaProject(project,id=''){
@@ -1229,7 +1229,7 @@
     try{
       let project=null;
       if(projectId){const res=await fetch('/api/projects/'+encodeURIComponent(projectId),{cache:'no-store'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Projeto não encontrado');project=out.project;}
-      else {const raw=localStorage.getItem('rondaOne.handoff');if(!raw)throw new Error('Handoff local não encontrado');const input=JSON.parse(raw),topic=input.topic||{},carousel=input.carousel||{};project={contractVersion:'ronda-one-import-v1',source:'ronda-editorial',title:topic.title||carousel.topicTitle||'Projeto da Ronda',editoria:topic.editoria||'Notícias',slides:carousel.slides||[],questions:carousel.questions||{},entities:carousel.entities||{},reading:carousel.reading||{},verificationLinks:carousel.verificationLinks||[],disclaimer:carousel.disclaimer||'',visualPrompt:`Editorial documentary photograph illustrating ${String(topic.title||carousel.topicTitle||'news story').slice(0,220)}. Neutral realistic news context, natural light, credible environment, negative space for carousel text, no text, no watermark.`};localStorage.removeItem('rondaOne.handoff');}
+      else {const raw=localStorage.getItem('rondaOne.handoff');if(!raw)throw new Error('Handoff local não encontrado');const input=JSON.parse(raw),topic=input.topic||{},carousel=input.carousel||{};project={contractVersion:'ronda-one-import-v1',source:'ronda-editorial',sourceVersion:input.sourceVersion||'ronda-editorial',title:topic.title||carousel.topicTitle||'Projeto da Ronda',editoria:topic.editoria||'Notícias',slides:carousel.slides||[],questions:carousel.questions||{},entities:carousel.entities||{},reading:carousel.reading||{},verificationLinks:carousel.verificationLinks||[],disclaimer:carousel.disclaimer||'',visualPrompt:`Editorial documentary photograph illustrating ${String(topic.title||carousel.topicTitle||'news story').slice(0,220)}. Neutral realistic news context, natural light, credible environment, negative space for carousel text, no text, no watermark.`};localStorage.removeItem('rondaOne.handoff');}
       if(!applyRondaProject(project,projectId||''))throw new Error('Projeto sem slides compatíveis');
     }catch(err){setPlatformImportStatus('Falha na importação','error');showToast(err.message||'Não foi possível importar a Ronda',3600);}
   }

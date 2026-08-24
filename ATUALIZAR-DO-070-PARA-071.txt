@@ -1,0 +1,25 @@
+RONDA ONE 0.7.1 — ATUALIZAÇÃO DA INSTALAÇÃO ATUAL
+
+Esta atualização substitui o módulo editorial antigo pela Ronda Editorial v2.8.5 exata enviada.
+
+FORMA MAIS SEGURA NO GITHUB
+1. Faça backup/Download ZIP do repositório atual.
+2. Extraia o PATCH 0.7.1.
+3. No GitHub, substitua as pastas/arquivos do patch preservando a estrutura.
+4. Apague src/ronda/legacy-bundle.js se ele ainda existir.
+5. Faça Commit changes.
+6. O Cloudflare conectado ao GitHub fará novo deploy.
+7. Depois do deploy, abra /ronda e use Ctrl+F5.
+
+BANCO D1
+O mesmo ronda-one-db é reutilizado. Na primeira chamada, o código cria as tabelas novas e migra automaticamente a tabela runs legada para o estado queued/running/success da 2.8.5.
+
+YOUTUBE
+A Ronda 2.8.5 possui módulo YouTube isolado. Ele não impede a Ronda de portais. Nesta fase MVP, YOUTUBE_DB, API key e filas continuam opcionais para evitar complexidade/custo.
+
+TESTE
+- /ronda/api/health deve responder version 2.8.5 e database connected.
+- Execute uma ronda manual.
+- Gere um carrossel.
+- Após o ciclo editorial ser liberado, o botão RONDA DESIGN deve habilitar junto com Copiar roteiro.
+- O Design deve abrir com o mesmo número de slides/pranchetas e os textos em camadas.

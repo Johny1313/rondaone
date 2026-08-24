@@ -1,0 +1,19 @@
+RONDA EDITORIAL v2.8.5
+
+1. Preserve a estrutura de pastas do ZIP.
+2. Confirme no GitHub:
+   - src/index.js -> const VERSION = "2.8.5"
+   - public/index.html -> app.js?v=2.8.5 e styles.css?v=2.8.5
+3. O build deve executar: npm run build
+4. Deploy: npx wrangler deploy
+5. Não há nova migration D1 nesta versão.
+
+TESTES EXECUTADOS
+- 82 testes automatizados
+- 50 cenários válidos de stress concluídos
+- 10 cenários de agregador rejeitados corretamente
+- npm run check aprovado
+
+REGRA FACTUAL
+O carrossel só gera quando existe material verificável de um veículo publicador.
+Leitura direta da página é preferida. Conteúdo amplo do feed próprio do portal pode ser usado quando a página bloqueia o Worker. Agregadores e snippets curtos não são aceitos.
