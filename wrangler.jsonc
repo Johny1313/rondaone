@@ -3,12 +3,18 @@
   "name": "ronda-one",
   "main": "src/index.js",
   "compatibility_date": "2026-08-24",
+
   "ai": {
     "binding": "AI"
   },
 
-  // Antes do deploy definitivo, adicione aqui o bloco d1_databases
-  // usando o Database ID real. Veja CONFIGURAR-D1.txt.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ronda-one-db",
+      "database_id": "COLE_AQUI_O_ID_REAL"
+    }
+  ],
 
   "assets": {
     "directory": "./public",
@@ -19,21 +25,14 @@
       "/ronda/*"
     ],
     "not_found_handling": "404-page"
-
- "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "ronda-one-db",
-      "database_id": "COLE_AQUI_O_ID_REAL"
-    }
-  ],
-
   },
+
   "triggers": {
     "crons": [
       "*/5 * * * *"
     ]
   },
+
   "observability": {
     "enabled": true
   }
