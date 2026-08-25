@@ -1,12 +1,12 @@
 {
-  "name": "ronda-one-v074",
-  "version": "0.7.4",
+  "name": "ronda-one-v070",
+  "version": "0.7.5",
   "private": true,
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "check": "node --check src/index.js && node --check src/ronda/router.js && node --check src/projects/service.js && node --check src/ai/service.js && node --check src/ronda/v285/index.js && node --check src/ronda/v285/database.js && node --check src/ronda/v285/article-reader.js && node --check src/ronda/v285/collector.js"
+    "check": "node --check src/index.js && node --check src/ronda/router.js && node --check src/projects/service.js && node --check src/ai/service.js && node --check src/ronda/v285/index.js && node --check src/ronda/v285/database.js && node --check src/ronda/v285/article-reader.js && node --check src/ronda/v285/collector.js && node --check public/ronda/ronda-one-integration.js"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
