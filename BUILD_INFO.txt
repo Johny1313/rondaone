@@ -1,27 +1,24 @@
-RONDA ONE 0.7.2 — STABILITY FIRST
-Data: 24/08/2026
+RONDA ONE 0.7.4 — MULTI IMAGE ENGINE + STABILITY FIRST
+Data: 25/08/2026
 
-Base editorial: Ronda Editorial 2.8.5 com origem verificada.
+Base cumulativa:
+- inclui as correções Queue First da 0.7.3
+- Ronda Editorial 2.8.5 mantida
+- YouTube removido
 
-Alterações:
-- YouTube removido da interface
-- YouTube removido da API
-- YouTube removido do cron e das filas
-- removidos requisitos YOUTUBE_DB e YOUTUBE_API_KEY
-- removido src/ronda/v285/youtube.js
-- health agora reflete somente o núcleo operacional
-- cron de 5 minutos executa apenas a ronda principal
-- schema novo não cria mais tabelas YouTube
-- tabelas legadas existentes não são apagadas automaticamente
-- foco: estabilidade, menor superfície de falha e menor complexidade operacional
+Imagem / IA:
+- SDXL Lightning como motor padrão rápido
+- FLUX.1 Schnell como fallback rápido
+- FLUX.2 Klein 4B como fallback de qualidade
+- modo auto com fallback transparente
+- modo quality prioriza FLUX.2 Klein
+- endpoint /api/ai/engines
+- /api/ai/status informa toda a cadeia de motores
+- resposta de geração informa engine usada, tentativas e fallback
+- não adiciona fornecedor externo nem API paga
 
-Modo de cobrança: free-only.
-
-VALIDAÇÃO — 3 RODADAS
-1. Sintaxe: módulos principais e frontend aprovados.
-2. Regressão do núcleo: 70 testes aprovados, 0 falhas; 4 testes antigos do YouTube marcados como obsoletos.
-3. Estabilidade: importação dos módulos aprovada e 0 referências de YouTube no runtime editorial.
-
-REDUÇÃO APROXIMADA
-- src/ronda: 399.849 -> 333.699 bytes (~16,5% menor)
-- public/ronda: 190.478 -> 157.208 bytes (~17,5% menor)
+Estabilidade:
+- mantém Queue First para Ronda e carrossel
+- arquivos estáticos da Ronda não passam pelo Worker-first
+- nenhuma alteração no banco D1 principal
+- nenhuma nova chave/API necessária para os motores de imagem

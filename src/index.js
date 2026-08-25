@@ -10,10 +10,13 @@ export default {
     if(url.pathname==='/') return Response.redirect(new URL('/ronda',request.url).toString(),302);
     if(url.pathname==='/design') return Response.redirect(new URL('/design/',request.url).toString(),302);
     if(url.pathname==='/projects') return Response.redirect(new URL('/projects/',request.url).toString(),302);
-    if(url.pathname==='/api/platform/status') return json({ok:true,platform:'RONDA ONE',version:'0.7.2',modules:{ronda:true,editorialVersion:'2.8.5',design:true,ai:!!env.AI,projects:!!env.DB},billingMode:'free-only'});
+    if(url.pathname==='/api/platform/status') return json({ok:true,platform:'RONDA ONE',version:'0.7.4',modules:{ronda:true,editorialVersion:'2.8.5',design:true,ai:!!env.AI,projects:!!env.DB,queues:{round:!!env.ROUND_JOBS_QUEUE,intelligent:!!env.INTELLIGENT_JOBS_QUEUE}},billingMode:'free-first',stabilityMode:'queue-first',imageEngine:{mode:'multi-engine',default:'sdxl',fallbacks:['flux1','flux2']}});
     if(url.pathname.startsWith('/api/projects')) return handleProjectsApi(request,env);
     if(url.pathname.startsWith('/api/ai/') || url.pathname.startsWith('/api/giphy/')) return handleRondaAiApi(request,env);
-    if(url.pathname==='/api/health') return handleRondaAiApi(new Request(new URL('/api/health',request.url),request),env);
+
+    // O frontend da Ronda 2.8.5 continua usando /api/* original. Todas as rotas
+    // restantes pertencem ao módulo editorial.
+    if(url.pathname.startsWith('/api/')) return handleRonda(request,env,ctx);
     if(url.pathname.startsWith('/ronda')) return handleRonda(request,env,ctx);
     return env.ASSETS.fetch(request);
   },

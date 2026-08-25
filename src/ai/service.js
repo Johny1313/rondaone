@@ -1,7 +1,23 @@
-const IMAGE_MODEL = '@cf/black-forest-labs/flux-2-klein-4b';
+const IMAGE_MODELS = {
+  sdxl: {
+    id: 'sdxl',
+    model: '@cf/bytedance/stable-diffusion-xl-lightning',
+    label: 'SDXL Lightning',
+  },
+  flux1: {
+    id: 'flux1',
+    model: '@cf/black-forest-labs/flux-1-schnell',
+    label: 'FLUX.1 Schnell',
+  },
+  flux2: {
+    id: 'flux2',
+    model: '@cf/black-forest-labs/flux-2-klein-4b',
+    label: 'FLUX.2 Klein 4B',
+  },
+};
 const TEXT_MODEL = '@cf/zai-org/glm-4.7-flash';
-const ENGINE_VERSION = '0.7.1-free-mvp';
-const BUILD_ID = '071-RONDA285-20260824';
+const ENGINE_VERSION = '0.7.4-multi-image-engine';
+const BUILD_ID = '074-MULTI-IMAGE-20260825';
 
 function json(data, status = 200, headers = {}) {
   return Response.json(data, {
@@ -27,7 +43,6 @@ function normalizeFormat(format = '1:1') {
   };
   return presets[format] || presets['1:1'];
 }
-
 
 async function readJson(request) {
   try {
@@ -73,26 +88,133 @@ function friendlyAiError(error) {
   return { code: 'AI_ERROR', status: 500, message };
 }
 
-function buildImagePrompt(input) {
-  const prompt = dedupePrompt(input.prompt, 520);
-  const avoid = dedupePrompt(input.negative, 220);
+function buildImagePromptParts(input = {}) {
+  const positive = dedupePrompt(input.prompt, 520);
+  const negative = dedupePrompt(input.negative ?? input.negativePrompt, 220);
   const format = String(input.format || '1:1');
-  if (!prompt) throw new Error('Prompt vazio');
+  if (!positive) throw new Error('Prompt vazio');
   const aspectHint = format === '16:9' ? 'wide 16:9 composition' :
     format === '9:16' ? 'vertical 9:16 composition' :
     format === '4:5' ? 'vertical 4:5 editorial composition' :
     'square 1:1 composition';
-  return dedupePrompt(`${prompt}. ${aspectHint}.${avoid ? ` Avoid ${avoid}.` : ''}`, 760);
+  return {
+    prompt: dedupePrompt(`${positive}. ${aspectHint}.`, 700),
+    negative: negative || 'text, watermark, logo, distorted anatomy, duplicated objects, low quality',
+  };
 }
 
-async function runFlux2Free(env, prompt, width, height) {
+function normalizeMode(value) {
+  const raw = String(value || 'balanced').toLowerCase().trim();
+  if (['fast', 'rapido', 'rápido'].includes(raw)) return 'fast';
+  if (['quality', 'qualidade', 'high'].includes(raw)) return 'quality';
+  return 'balanced';
+}
+
+function normalizeEngine(value) {
+  const raw = String(value || 'auto').toLowerCase().trim();
+  if (['sdxl', 'sdxl-lightning', 'stable-diffusion-xl-lightning'].includes(raw)) return 'sdxl';
+  if (['flux1', 'flux-1', 'flux1-schnell', 'flux-1-schnell', 'schnell'].includes(raw)) return 'flux1';
+  if (['flux2', 'flux-2', 'flux2-klein', 'flux-2-klein-4b', 'klein'].includes(raw)) return 'flux2';
+  return 'auto';
+}
+
+function engineChain(mode, requestedEngine, allowFallback = true) {
+  const base = mode === 'quality'
+    ? ['flux2', 'flux1', 'sdxl']
+    : ['sdxl', 'flux1', 'flux2'];
+  const requested = normalizeEngine(requestedEngine);
+  if (requested === 'auto') return base;
+  if (!allowFallback) return [requested];
+  return [requested, ...base.filter((id) => id !== requested)];
+}
+
+function canContinueFallback(error) {
+  const msg = String(error?.message || error || '');
+  return !/3036|daily free allocation|10,?000 neurons/i.test(msg);
+}
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function imageResultToDataUrl(result, fallbackType = 'image/png') {
+  if (!result) throw new Error('Modelo não retornou imagem');
+  if (typeof result?.image === 'string' && result.image) {
+    return `data:image/jpeg;base64,${result.image}`;
+  }
+  if (typeof result === 'string') {
+    if (/^data:image\//i.test(result)) return result;
+    return `data:${fallbackType};base64,${result}`;
+  }
+
+  let arrayBuffer;
+  let contentType = fallbackType;
+  if (result instanceof Response) {
+    contentType = result.headers.get('content-type') || contentType;
+    arrayBuffer = await result.arrayBuffer();
+  } else if (typeof ReadableStream !== 'undefined' && result instanceof ReadableStream) {
+    arrayBuffer = await new Response(result).arrayBuffer();
+  } else if (result instanceof ArrayBuffer) {
+    arrayBuffer = result;
+  } else if (ArrayBuffer.isView(result)) {
+    arrayBuffer = result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
+  } else {
+    throw new Error('Formato de imagem retornado pelo modelo não reconhecido');
+  }
+  if (!arrayBuffer?.byteLength) throw new Error('Modelo retornou uma imagem vazia');
+  return `data:${contentType};base64,${toBase64(arrayBuffer)}`;
+}
+
+async function runSdxl(env, prompt, negative, width, height, seed) {
+  const payload = {
+    prompt,
+    negative_prompt: negative,
+    width,
+    height,
+    num_steps: 4,
+    guidance: 7.5,
+  };
+  if (Number.isFinite(seed)) payload.seed = Math.abs(Math.trunc(seed));
+  const result = await env.AI.run(IMAGE_MODELS.sdxl.model, payload);
+  return {
+    image: await imageResultToDataUrl(result, 'image/png'),
+    model: IMAGE_MODELS.sdxl.model,
+    modelLabel: IMAGE_MODELS.sdxl.label,
+    engine: 'sdxl',
+  };
+}
+
+async function runFlux1(env, prompt, negative) {
+  const combined = dedupePrompt(`${prompt}${negative ? ` Avoid ${negative}.` : ''}`, 1024);
+  const result = await env.AI.run(IMAGE_MODELS.flux1.model, {
+    prompt: combined,
+    steps: 4,
+  });
+  if (!result?.image) throw new Error('FLUX.1 Schnell não retornou imagem');
+  return {
+    image: `data:image/jpeg;base64,${result.image}`,
+    model: IMAGE_MODELS.flux1.model,
+    modelLabel: IMAGE_MODELS.flux1.label,
+    engine: 'flux1',
+  };
+}
+
+async function runFlux2(env, prompt, negative, width, height, seed) {
+  const combined = dedupePrompt(`${prompt}${negative ? ` Avoid ${negative}.` : ''}`, 1200);
   const form = new FormData();
-  form.append('prompt', prompt);
+  form.append('prompt', combined);
   form.append('width', String(width));
   form.append('height', String(height));
+  if (Number.isFinite(seed)) form.append('seed', String(Math.abs(Math.trunc(seed))));
 
   const serialized = new Response(form);
-  const result = await env.AI.run(IMAGE_MODEL, {
+  const result = await env.AI.run(IMAGE_MODELS.flux2.model, {
     multipart: {
       body: serialized.body,
       contentType: serialized.headers.get('content-type'),
@@ -101,15 +223,60 @@ async function runFlux2Free(env, prompt, width, height) {
   if (!result?.image) throw new Error('FLUX.2 Klein não retornou imagem');
   return {
     image: `data:image/jpeg;base64,${result.image}`,
-    model: IMAGE_MODEL,
-    modelLabel: 'FLUX.2 Klein 4B · Free MVP',
+    model: IMAGE_MODELS.flux2.model,
+    modelLabel: IMAGE_MODELS.flux2.label,
+    engine: 'flux2',
   };
+}
+
+async function runImageEngine(env, engineId, input, promptParts, width, height) {
+  const rawSeed = input.seed;
+  const seed = rawSeed === null || rawSeed === undefined || String(rawSeed).trim() === '' ? NaN : Number(rawSeed);
+  if (engineId === 'sdxl') return runSdxl(env, promptParts.prompt, promptParts.negative, width, height, seed);
+  if (engineId === 'flux1') return runFlux1(env, promptParts.prompt, promptParts.negative);
+  if (engineId === 'flux2') return runFlux2(env, promptParts.prompt, promptParts.negative, width, height, seed);
+  throw new Error(`Engine de imagem desconhecida: ${engineId}`);
 }
 
 async function generateOne(env, input) {
   const [width, height] = normalizeFormat(input.format);
-  const prompt = buildImagePrompt(input);
-  return runFlux2Free(env, prompt, width, height);
+  const promptParts = buildImagePromptParts(input);
+  const mode = normalizeMode(input.mode ?? input.qualityMode ?? input.quality);
+  const requestedEngine = normalizeEngine(input.engine ?? input.model);
+  const allowFallback = input.allowFallback !== false;
+  const chain = engineChain(mode, requestedEngine, allowFallback);
+  const attempts = [];
+  let lastError = null;
+
+  for (const engineId of chain) {
+    const meta = IMAGE_MODELS[engineId];
+    try {
+      const result = await runImageEngine(env, engineId, input, promptParts, width, height);
+      attempts.push({ engine: engineId, model: meta.model, label: meta.label, ok: true });
+      return {
+        ...result,
+        mode,
+        requestedEngine,
+        fallbackUsed: attempts.length > 1,
+        attempts,
+      };
+    } catch (error) {
+      lastError = error;
+      attempts.push({
+        engine: engineId,
+        model: meta.model,
+        label: meta.label,
+        ok: false,
+        error: safePrompt(error?.message || String(error), 300),
+      });
+      if (!canContinueFallback(error)) break;
+    }
+  }
+
+  const details = attempts.map((a) => `${a.label}: ${a.ok ? 'ok' : a.error}`).join(' | ');
+  const failure = new Error(details || lastError?.message || 'Todos os motores de imagem falharam');
+  failure.attempts = attempts;
+  throw failure;
 }
 
 function extractTextModelOutput(output) {
@@ -220,31 +387,51 @@ async function giphyProxy(request, env, mode) {
   return json({ ok: true, data });
 }
 
+function publicEngines() {
+  return [
+    { id: 'auto', label: 'Automático', description: 'Escolhe o motor e aplica fallback automaticamente.' },
+    { id: 'sdxl', label: IMAGE_MODELS.sdxl.label, model: IMAGE_MODELS.sdxl.model, role: 'default-fast' },
+    { id: 'flux1', label: IMAGE_MODELS.flux1.label, model: IMAGE_MODELS.flux1.model, role: 'fallback-fast' },
+    { id: 'flux2', label: IMAGE_MODELS.flux2.label, model: IMAGE_MODELS.flux2.model, role: 'quality' },
+  ];
+}
+
 export async function handleRondaAiApi(request, env) {
   const url = new URL(request.url);
 
   if (url.pathname === '/api/health') {
-    return json({ ok: true, service: 'ronda-one-design', version: '0.7.1', build: BUILD_ID, runtime: 'cloudflare-workers' });
+    return json({ ok: true, service: 'ronda-one-design', version: '0.7.4', build: BUILD_ID, runtime: 'cloudflare-workers' });
   }
 
-  if (url.pathname === '/api/ai/status' && request.method === 'GET') {
+  if ((url.pathname === '/api/ai/status' || url.pathname === '/api/ai/engines') && request.method === 'GET') {
     if (!env.AI) return json({ ok: false, error: 'Workers AI binding ausente' }, 503);
     return json({
       ok: true,
-      engine: 'RONDA AI Engine',
+      engine: 'RONDA Multi Image Engine',
       provider: 'Cloudflare Workers AI',
+      defaultMode: 'balanced',
+      modes: {
+        fast: ['sdxl', 'flux1', 'flux2'],
+        balanced: ['sdxl', 'flux1', 'flux2'],
+        quality: ['flux2', 'flux1', 'sdxl'],
+      },
+      engines: publicEngines(),
       models: {
-        imagePrimary: IMAGE_MODEL,
-        imagePrimaryLabel: 'FLUX.2 Klein 4B · Free MVP',
+        imagePrimary: IMAGE_MODELS.sdxl.model,
+        imagePrimaryLabel: IMAGE_MODELS.sdxl.label,
+        imageFallback1: IMAGE_MODELS.flux1.model,
+        imageFallback1Label: IMAGE_MODELS.flux1.label,
+        imageFallback2: IMAGE_MODELS.flux2.model,
+        imageFallback2Label: IMAGE_MODELS.flux2.label,
         text: TEXT_MODEL,
         textLabel: 'GLM-4.7-Flash · Free MVP',
       },
       engineVersion: ENGINE_VERSION,
       build: BUILD_ID,
-      billingMode: 'free-only',
+      billingMode: 'free-first',
       paidFallbacks: false,
       freeAllocation: '10,000 Neurons/day',
-      capabilities: ['text-to-image', 'article-analysis', 'free-only', 'short-editorial-prompts'],
+      capabilities: ['text-to-image', 'multi-engine', 'automatic-fallback', 'article-analysis', 'free-first', 'short-editorial-prompts'],
     });
   }
 
@@ -252,22 +439,31 @@ export async function handleRondaAiApi(request, env) {
     if (!env.AI) return json({ ok: false, error: 'Workers AI binding ausente' }, 503);
     try {
       const input = await readJson(request);
-      const quantity = 1; // MVP gratuito: uma imagem por pedido para preservar a cota diária.
-      const results = [await generateOne(env, input)];
-      const modelsUsed = [results[0].modelLabel];
+      const quantity = 1;
+      const result = await generateOne(env, input);
       return json({
         ok: true,
-        images: results.map(x => x.image),
-        model: results[0]?.model || IMAGE_MODEL,
-        modelLabel: modelsUsed.join(' + '),
-        modelsUsed,
-        fallbackUsed: false,
-        billingMode: 'free-only',
+        images: [result.image],
+        model: result.model,
+        modelLabel: result.modelLabel,
+        modelsUsed: result.attempts.filter((x) => x.ok).map((x) => x.label),
+        engine: result.engine,
+        requestedEngine: result.requestedEngine,
+        mode: result.mode,
+        attempts: result.attempts,
+        fallbackUsed: result.fallbackUsed,
+        billingMode: 'free-first',
         quantity,
       });
     } catch (error) {
       const friendly = friendlyAiError(error);
-      return json({ ok: false, code: friendly.code, error: friendly.message, billingMode: 'free-only' }, friendly.status);
+      return json({
+        ok: false,
+        code: friendly.code,
+        error: friendly.message,
+        attempts: Array.isArray(error?.attempts) ? error.attempts : undefined,
+        billingMode: 'free-first',
+      }, friendly.status);
     }
   }
 
@@ -279,7 +475,7 @@ export async function handleRondaAiApi(request, env) {
       return json({ ok: true, analysis, model: TEXT_MODEL, modelLabel: 'GLM-4.7-Flash' });
     } catch (error) {
       const friendly = friendlyAiError(error);
-      return json({ ok: false, code: friendly.code, error: friendly.message, billingMode: 'free-only' }, friendly.status);
+      return json({ ok: false, code: friendly.code, error: friendly.message, billingMode: 'free-first' }, friendly.status);
     }
   }
 
