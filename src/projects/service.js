@@ -43,10 +43,21 @@ function normalizeProject(input={}){
   const verificationLinks=(carousel.verificationLinks || input.verificationLinks || []).slice(0,20).map(x=>({
     title:clean(x?.title || '',240), sourceName:clean(x?.sourceName || '',120), url:clean(x?.url || '',1200), publishedAt:clean(x?.publishedAt || '',80)
   })).filter(x=>x.url);
+
+  const editorialGate=carousel.editorialGate && typeof carousel.editorialGate==='object'
+    ? carousel.editorialGate
+    : {};
+  const editorialReviewRequired=Boolean(
+    input.editorialReviewRequired
+    || editorialGate.copyAllowed===false
+    || carousel.validation?.reviewRequired
+  );
+
   return {
-    contractVersion:'ronda-one-import-v1',
+    contractVersion:'ronda-one-import-v2',
     source:'ronda-editorial',
     sourceVersion:clean(input.sourceVersion || 'ronda-module',80),
+    handoffVersion:clean(input.handoffVersion || 'ronda-one-0.7.5',80),
     title:clean(topic.title || input.title || carousel.topicTitle || 'Projeto da Ronda',240),
     editoria:clean(topic.editoria || input.editoria || 'Notícias',80),
     runId:clean(input.runId || '',120),
@@ -56,8 +67,12 @@ function normalizeProject(input={}){
     questions:carousel.questions || {},
     entities:carousel.entities || {},
     reading:carousel.reading || {},
+    facts:Array.isArray(carousel.facts)?carousel.facts.slice(0,80):[],
     verificationLinks,
     disclaimer:clean(carousel.disclaimer || 'Revise e confirme as informações nas fontes originais antes de publicar.',1000),
+    editorialGate,
+    editorialReviewRequired,
+    editorialStatus:editorialReviewRequired?'review-required':'ready-for-design',
     visualPrompt:shortVisualPrompt(topic,carousel),
     imagePolicy:{mode:'one-background-per-carousel',status:'not-generated',provider:'Workers AI Free'},
   };
