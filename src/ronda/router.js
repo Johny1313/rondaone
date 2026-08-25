@@ -1,8 +1,8 @@
 import rondaWorker from './v285/index.js';
 
-const MODULE_BAR = `<div id="rondaOneBar"><strong>RONDA ONE <span>0.7.5</span></strong><a class="active" href="/ronda">RONDA</a><a href="/design/">DESIGN</a><a href="/projects/">PROJETOS</a><em>Ronda Editorial 2.8.5 · Design + IA · Stability First</em></div>`;
-const SHELL_CSS = '<link rel="stylesheet" href="/ronda/ronda-one-shell.css?v=0.7.5">';
-const INTEGRATION_SCRIPT = '<script src="/ronda/ronda-one-integration.js?v=0.7.5" defer></script>';
+const MODULE_BAR = `<div id="rondaOneBar"><strong>RONDA ONE <span>0.7.6</span></strong><a class="active" href="/ronda">RONDA</a><a href="/design/">DESIGN</a><a href="/projects/">PROJETOS</a><em>Ronda Editorial 2.8.5 · Design + IA · Stability First</em></div>`;
+const SHELL_CSS = '<link rel="stylesheet" href="/ronda/ronda-one-shell.css?v=0.7.6">';
+const INTEGRATION_SCRIPT = '<script src="/ronda/ronda-one-integration.js?v=0.7.6" defer></script>';
 
 function modifiedHeaders(response, contentType){
   const headers=new Headers(response.headers);
@@ -16,6 +16,12 @@ function rewriteHtml(text){
   out=out.replace('<button class="primary" id="copyCarousel" type="button" disabled>Copiar roteiro</button>', '<button class="primary" id="copyCarousel" type="button" disabled>Copiar roteiro</button><button class="primary ronda-one-design-btn" id="openRondaDesign" type="button" disabled>RONDA DESIGN</button>');
   out=out.replace(/href="\\\/styles\.css/g,'href="/ronda/styles.css').replace(/src="\\\/app\.js/g,'src="/ronda/app.js');
   out=out.replace(/href="\/styles\.css/g,'href="/ronda/styles.css').replace(/src="\/app\.js/g,'src="/ronda/app.js');
+
+  // Força o navegador a revalidar os assets principais quando a plataforma muda,
+  // evitando que uma versão antiga do app.js fique presa no cache.
+  out=out.replace(/\/ronda\/styles\.css\?v=[^"']+/g,'/ronda/styles.css?v=2.8.5-076');
+  out=out.replace(/\/ronda\/app\.js\?v=[^"']+/g,'/ronda/app.js?v=2.8.5-076');
+
   if(!out.includes('ronda-one-shell.css')) out=out.replace('</head>', SHELL_CSS+'\n</head>');
   if(!out.includes('ronda-one-integration.js')) out=out.replace('</body>', INTEGRATION_SCRIPT+'\n</body>');
   return out;

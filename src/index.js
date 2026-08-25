@@ -13,7 +13,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.7.5',
+      version:'0.7.6',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -30,11 +30,16 @@ export default {
         clientHardTimeoutMinutes:8,
         designHandoff:'decoupled-from-copy-gate'
       },
+      uiRecovery:{
+        staleJobMinutes:12,
+        automatic:true,
+        reloadRequired:false,
+        assetCacheBust:'2.8.5-076'
+      },
       imageEngine:{mode:'multi-engine',default:'sdxl',fallbacks:['flux1','flux2']}
     });
     if(url.pathname.startsWith('/api/projects')) return handleProjectsApi(request,env);
     if(url.pathname.startsWith('/api/ai/') || url.pathname.startsWith('/api/giphy/')) return handleRondaAiApi(request,env);
-
     if(url.pathname.startsWith('/api/')) return handleRonda(request,env,ctx);
     if(url.pathname.startsWith('/ronda')) return handleRonda(request,env,ctx);
     return env.ASSETS.fetch(request);
