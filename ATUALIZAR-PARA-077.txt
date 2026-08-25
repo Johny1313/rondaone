@@ -1,0 +1,68 @@
+RONDA ONE 0.7.7 — CONSOLIDAÇÃO 0.7.4 + 0.7.5 + 0.7.6 / NAVIGATION GUARD
+Data: 25/08/2026
+
+BASE CONSOLIDADA
+- 0.7.4: Queue First + Multi Image Engine (SDXL Lightning, FLUX.1 Schnell, FLUX.2 Klein 4B).
+- 0.7.5: polling resiliente do carrossel + handoff desacoplado do botão Copiar roteiro.
+- 0.7.6: recuperação automática da UI + proteção contra job local stale.
+
+AJUSTES 0.7.7
+1. Cache bust definitivo de /ronda/app.js e /ronda/styles.css:
+   - funciona com asset sem query string;
+   - substitui query antiga automaticamente;
+   - revisão atual: 2.8.5-077.
+
+2. Navegação e shell mais resistentes:
+   - injeta a barra RONDA/DESIGN/PROJETOS mesmo se <body> possuir atributos;
+   - evita duplicar barra, botão RONDA DESIGN e scripts se o HTML for reprocessado;
+   - mantém compatibilidade com /ronda/api/*.
+
+3. Recuperação de fila/carrossel:
+   - 70 s continua sendo somente aviso;
+   - polling segue até 8 min;
+   - até 5 oscilações consecutivas de rede são toleradas;
+   - se a conexão com o job é abandonada, o job local é removido e deixa de bloquear a UI;
+   - job local com mais de 12 min é descartado;
+   - a UI tenta recuperar ao voltar a ficar online e quando a aba volta ao foco.
+
+4. Handoff Ronda -> Design:
+   - continua disponível quando existem slides, mesmo com revisão editorial pendente;
+   - preserva reading, facts, verificationLinks, editorialGate e editorialStatus;
+   - fallback localStorage continua disponível se /api/projects estiver indisponível.
+
+5. Landing page atualizada para 0.7.7.
+
+INSTALAÇÃO
+- Este ZIP é um PATCH CUMULATIVO a partir da linha 0.7.4.
+- Envie o conteúdo para a raiz do repositório rondaone e substitua os arquivos existentes.
+- Não remova os arquivos já existentes do Ronda Editorial 2.8.5 que não aparecem neste ZIP.
+- Não altere DB, AI, ASSETS, GIPHY_API_KEY ou nomes das Queues.
+
+VALIDAÇÃO LOCAL DO PATCH
+npm run verify:077
+
+VALIDAÇÃO APÓS DEPLOY
+1. /api/platform/status?t=077
+   Esperado:
+   - version = 0.7.7
+   - carouselStability.clientPolling = resilient
+   - uiRecovery.automatic = true
+   - uiRecovery.assetCacheBust = 2.8.5-077
+   - navigation.ronda = /ronda
+
+2. Abra /ronda e confirme:
+   - barra RONDA / DESIGN / PROJETOS navegável;
+   - Executar ronda não permanece bloqueado sem execução real;
+   - após 70 s o carrossel apenas avisa que continua na fila;
+   - após os slides serem gerados, RONDA DESIGN fica disponível;
+   - voltar à aba ou recuperar a internet dispara retomada automática sem F5.
+
+3. Abra /design/ e /projects/ diretamente.
+
+OBSERVAÇÃO
+Os ZIPs fornecidos são patches e não contêm todos os arquivos do Ronda Editorial 2.8.5. A verificação deste pacote cobre os arquivos alterados, sintaxe JS, reescrita do shell/cache e links de navegação. O teste final de produção depende dos arquivos já existentes no repositório e dos bindings Cloudflare configurados.
+
+CONFERÊNCIA COM O GITHUB ATUAL
+- Verificado contra Johny1313/rondaone main @ 5167355d53ce9bbffa9bbd82a9b9b9094c68633d.
+- CONFIGURAR-FILAS-073.txt NÃO faz parte da 0.7.7 final porque já foi removido do repositório.
+- README.md foi atualizado de 0.7.2 para 0.7.7.

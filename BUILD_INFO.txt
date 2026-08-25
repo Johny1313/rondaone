@@ -1,24 +1,28 @@
-RONDA ONE 0.7.4 — MULTI IMAGE ENGINE + STABILITY FIRST
+RONDA ONE 0.7.7 — STABILITY + NAVIGATION CONSOLIDATION
 Data: 25/08/2026
 
-Base cumulativa:
-- inclui as correções Queue First da 0.7.3
-- Ronda Editorial 2.8.5 mantida
-- YouTube removido
+Base funcional consolidada:
+- 0.7.4 Multi Image Engine + Queue First
+- 0.7.5 Carousel Stability + Design Handoff
+- 0.7.6 UI Recovery + Stale Queue Guard
 
-Imagem / IA:
-- SDXL Lightning como motor padrão rápido
-- FLUX.1 Schnell como fallback rápido
-- FLUX.2 Klein 4B como fallback de qualidade
-- modo auto com fallback transparente
-- modo quality prioriza FLUX.2 Klein
-- endpoint /api/ai/engines
-- /api/ai/status informa toda a cadeia de motores
-- resposta de geração informa engine usada, tentativas e fallback
-- não adiciona fornecedor externo nem API paga
+Ajustes específicos 0.7.7:
+- cache bust robusto mesmo quando app.js/styles.css chegam sem ?v=
+- shell RONDA/DESIGN/PROJETOS com injeção idempotente
+- recuperação imediata ao voltar online ou retornar à aba
+- limpeza segura do job local quando o polling é abandonado
+- landing page e health/status alinhados em 0.7.7
+- preservação de editorialStatus no handoff
+- script npm run verify:077 para validar o patch
 
-Estabilidade:
-- mantém Queue First para Ronda e carrossel
-- arquivos estáticos da Ronda não passam pelo Worker-first
-- nenhuma alteração no banco D1 principal
-- nenhuma nova chave/API necessária para os motores de imagem
+Motor de imagem mantido sem troca de modelos:
+- SDXL Lightning
+- FLUX.1 Schnell
+- FLUX.2 Klein 4B
+
+Infraestrutura preservada:
+- Cloudflare Workers AI
+- D1
+- ROUND_JOBS_QUEUE
+- INTELLIGENT_JOBS_QUEUE
+- cron */5
