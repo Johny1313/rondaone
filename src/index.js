@@ -10,7 +10,7 @@ export default {
     if(url.pathname==='/') return Response.redirect(new URL('/ronda',request.url).toString(),302);
     if(url.pathname==='/design') return Response.redirect(new URL('/design/',request.url).toString(),302);
     if(url.pathname==='/projects') return Response.redirect(new URL('/projects/',request.url).toString(),302);
-    if(url.pathname==='/api/platform/status') return json({ok:true,platform:'RONDA ONE',version:'0.7.1',modules:{ronda:true,editorialVersion:'2.8.5',design:true,ai:!!env.AI,projects:!!env.DB},billingMode:'free-only'});
+    if(url.pathname==='/api/platform/status') return json({ok:true,platform:'RONDA ONE',version:'0.7.2',modules:{ronda:true,editorialVersion:'2.8.5',design:true,ai:!!env.AI,projects:!!env.DB},billingMode:'free-only'});
     if(url.pathname.startsWith('/api/projects')) return handleProjectsApi(request,env);
     if(url.pathname.startsWith('/api/ai/') || url.pathname.startsWith('/api/giphy/')) return handleRondaAiApi(request,env);
     if(url.pathname==='/api/health') return handleRondaAiApi(new Request(new URL('/api/health',request.url),request),env);

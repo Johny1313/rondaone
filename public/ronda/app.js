@@ -26,16 +26,6 @@ const state = {
   serverRunning: false,
   attemptDiagnostics: null,
   lastAttemptId: null,
-  youtubeData: null,
-  youtubeStatus: null,
-  youtubeEtag: "",
-  youtubeStatusEtag: "",
-  youtubeQuery: "",
-  youtubePeriodHours: 24,
-  youtubeDecision: "Todos",
-  youtubeEditoria: "Todas",
-  youtubeLoading: false,
-  youtubeChannels: [],
   newsroomData: null,
   newsroomLoading: false,
   profile: null,
@@ -55,7 +45,6 @@ const statusSub = document.getElementById("statusSub");
 const roundView = document.getElementById("roundView");
 const sourcesView = document.getElementById("sourcesView");
 const monitoringView = document.getElementById("monitoringView");
-const youtubeView = document.getElementById("youtubeView");
 const newsroomView = document.getElementById("newsroomView");
 const profileView = document.getElementById("profileView");
 
@@ -281,23 +270,18 @@ function showView(view) {
   roundView.hidden = view !== "round";
   sourcesView.hidden = view !== "sources";
   monitoringView.hidden = view !== "monitoring";
-  youtubeView.hidden = view !== "youtube";
   newsroomView.hidden = view !== "newsroom";
   profileView.hidden = view !== "profile";
   document.getElementById("sourceHealth").hidden = view !== "round";
   document.getElementById("navRound").classList.toggle("active", view === "round");
   document.getElementById("navSources").classList.toggle("active", view === "sources");
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
-  document.getElementById("navYouTube").classList.toggle("active", view === "youtube");
   document.getElementById("navNewsroom").classList.toggle("active", view === "newsroom");
   document.getElementById("navProfile").classList.toggle("active", view === "profile");
   if (view === "sources") renderPortalCards();
   if (view === "monitoring") {
     loadMonitoringTerms();
     renderDedicatedMonitoring();
-  }
-  if (view === "youtube") {
-    loadYouTubeLatest({ force: !state.youtubeData });
   }
   if (view === "profile") loadProfile({ force: true });
 }
@@ -411,39 +395,6 @@ function renderDedicatedMonitoring() {
 }
 
 
-function youtubeStatusCopy(status) {
-  if (!status?.configured) return { type: "error", label: "YouTube não configurado", detail: "Adicione o secret YOUTUBE_API_KEY no Worker" };
-  if (status.status === "queued") return { type: "warn", label: "YouTube na fila", detail: status.queuedAt ? `Enviado ${relativeTime(status.queuedAt)}` : "Aguardando consumidor" };
-  if (status.status === "running") return { type: "warn", label: "YouTube coletando", detail: status.startedAt ? `Iniciado ${relativeTime(status.startedAt)}` : "Consultando a API" };
-  if (status.status === "failed") return { type: "error", label: "YouTube com erro", detail: status.error || "A última coleta não foi concluída" };
-  if (status.status === "expired") return { type: "error", label: "Coleta expirada", detail: status.error || "A coleta foi liberada para nova tentativa" };
-  if (status.lastSuccessAt) return { type: "ok", label: "YouTube atualizado", detail: `Última coleta ${relativeTime(status.lastSuccessAt)}` };
-  return { type: "warn", label: "YouTube aguardando coleta", detail: "A primeira coleta será executada automaticamente" };
-}
-
-function youtubePeriodMatch(video) {
-  const published = Date.parse(video?.publishedAt || "");
-  return Number.isFinite(published) && Date.now() - published <= state.youtubePeriodHours * 3_600_000 && published <= Date.now() + 5 * 60_000;
-}
-
-function youtubeQueryMatch(...values) {
-  const query = state.youtubeQuery.trim().toLocaleLowerCase("pt-BR");
-  if (!query) return true;
-  return values.filter(Boolean).join(" ").toLocaleLowerCase("pt-BR").includes(query);
-}
-
-function youtubeDecisionClass(level) {
-  return level === "high" ? "urgent" : level === "medium" ? "watch" : "";
-}
-
-function youtubePriorityLabel(item) {
-  return item?.decision || (item?.decisionLevel === "high" ? "Pautar agora" : "Acompanhar");
-}
-
-function youtubeEmpty(title, detail) {
-  return `<div class="youtube-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
-}
-
 function newsroomQueueLabel(queue){return ({now:"Pautar agora",rising:"Subindo",watch:"Acompanhar",quiet:"Sem novidade"})[queue]||"Acompanhar";}
 function newsroomVerificationLabel(level){return level==="official"?"Fonte oficial":level==="cross"?"2+ fontes":"Fonte única";}
 function newsroomStatusOptions(value){const labels={discovered:"Descoberto",selected:"Selecionado",investigating:"Em apuração",confirmed:"Confirmado",production:"Produção",published:"Publicado",discarded:"Descartado"};return Object.entries(labels).map(([key,label])=>`<option value="${key}"${key===value?" selected":""}>${label}</option>`).join("");}
@@ -453,145 +404,6 @@ async function loadNewsroom({quiet=false}={}){if(state.newsroomLoading)return st
 async function patchNewsroomStory(id,patch){try{await api(`/api/newsroom/stories/${encodeURIComponent(id)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});await loadNewsroom();}catch(error){if(error.status===401){showView("profile");document.getElementById("workspaceTop").scrollIntoView({behavior:"smooth"});}else alert(error.message);}}
 async function addNewsroomNote(id){const note=prompt("Nota editorial para esta pauta:");if(!note)return;try{await api(`/api/newsroom/stories/${encodeURIComponent(id)}/notes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({note})});await loadNewsroom();}catch(error){if(error.status===401)showView("profile");else alert(error.message);}}
 async function toggleNewsroomFollow(id){try{await api(`/api/newsroom/stories/${encodeURIComponent(id)}/follow`,{method:"POST"});await loadNewsroom();}catch(error){if(error.status===401)showView("profile");else alert(error.message);}}
-function renderYouTubeCuration(){const channels=state.youtubeChannels||[];document.getElementById("youtubeCurationCount").textContent=`${channels.length}/30 canais`;document.getElementById("youtubeCurationList").innerHTML=channels.length?channels.map(channel=>`<article class="youtube-curated-channel${channel.active?"":" inactive"}" data-channel-id="${escapeHtml(channel.channelId)}"><img src="${escapeHtml(safeUrl(channel.thumbnail))}" alt=""><div><strong>${escapeHtml(channel.title)}</strong><small>${escapeHtml(channel.handle||channel.channelId)} · ${channel.active?"ativo":"pausado"}</small></div><div class="youtube-curated-actions"><button data-channel-toggle type="button">${channel.active?"Pausar":"Ativar"}</button><button class="danger" data-channel-remove type="button">Remover</button></div></article>`).join(""):'<div class="youtube-empty"><strong>Curadoria vazia</strong><span>Sem canais cadastrados, o radar usa News & Politics e a lista jornalística padrão.</span></div>';}
-async function loadYouTubeCuration(){try{const data=await api("/api/youtube/channels");state.youtubeChannels=data?.channels||[];renderYouTubeCuration();}catch{state.youtubeChannels=[];renderYouTubeCuration();}}
-async function submitYouTubeChannel(event){event.preventDefault();const input=document.getElementById("youtubeChannelInput");const message=document.getElementById("youtubeCurationMessage");message.textContent="Validando canal…";try{await api("/api/youtube/channels",{method:"POST",headers:{"Content-Type":"application/json",...operationHeaders()},body:JSON.stringify({input:input.value})});input.value="";message.textContent="Canal adicionado à curadoria.";await loadYouTubeCuration();}catch(error){message.textContent=error.message;if(error.status===401)openModal("settingsModal");}}
-
-function renderYouTubeOperational() {
-  const status = state.youtubeStatus || {};
-  const copy = youtubeStatusCopy(status);
-  const module = document.getElementById("youtubeModuleStatus");
-  module.className = `youtube-module-status ${copy.type}`;
-  module.textContent = copy.label;
-  module.title = copy.detail;
-  const chips = [`<span class="youtube-status-chip ${copy.type}" title="${escapeHtml(copy.detail)}">${escapeHtml(copy.label)}</span>`];
-  if (status.lastSuccessAt) chips.push(`<span class="youtube-status-chip ok">Coleta ${escapeHtml(relativeTime(status.lastSuccessAt))}</span>`);
-  if (status.curationActive) chips.push(`<span class="youtube-status-chip ok">Curadoria ativa · ${Number(status.curatedChannelCount)||0} canais</span>`);
-  else chips.push('<span class="youtube-status-chip">Radar News & Politics</span>');
-  if (status.cached) chips.push('<span class="youtube-status-chip warn">Exibindo último cache válido</span>');
-  if (status.nextRunAt) chips.push(`<span class="youtube-status-chip">Próxima ${escapeHtml(relativeTime(status.nextRunAt))}</span>`);
-  const searchQuota = status.quota?.search;
-  if (searchQuota) {
-    const quotaClass = searchQuota.remaining <= 20 ? "warn" : "";
-    chips.push(`<span class="youtube-status-chip ${quotaClass}" title="Buscas de termos na cota granular do YouTube">Busca por termos ${Number(searchQuota.used) || 0}/${Number(searchQuota.limit) || 100}</span>`);
-  }
-  document.getElementById("youtubeOperational").innerHTML = chips.join("");
-}
-
-function filteredYouTubeVideos(collection) {
-  return (collection?.videos || []).filter((video) => {
-    const decision = state.youtubeDecision === "Todos" || video.decision === state.youtubeDecision;
-    return decision && youtubePeriodMatch(video) && youtubeQueryMatch(video.title, video.channel, ...(video.reasons || []));
-  });
-}
-
-function filteredYouTubeTopics(collection) {
-  return (collection?.topics || []).filter((topic) => {
-    const decision = state.youtubeDecision === "Todos" || topic.decision === state.youtubeDecision;
-    const editoria = state.youtubeEditoria === "Todas" || topic.editoria === state.youtubeEditoria;
-    const period = (topic.videos || []).some(youtubePeriodMatch);
-    return decision && editoria && period && youtubeQueryMatch(topic.label, topic.editoria, ...(topic.channels || []), ...(topic.videos || []).map((video) => video.title));
-  });
-}
-
-function youtubeTopicMarkup(topic) {
-  const related = (topic.videos || []).filter(youtubePeriodMatch).slice(0, 3);
-  const latest = topic.latestPublishedAt || related[0]?.publishedAt;
-  return `<article class="card youtube-card ${youtubeDecisionClass(topic.decisionLevel)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(youtubePriorityLabel(topic))}</span><span class="editoria-badge">${escapeHtml(topic.editoria || "Viral e Redes Sociais")}</span></div><span class="score">Índice ${Number(topic.attentionIndex) || 0}</span></div><h2>${escapeHtml(topic.label)}</h2><div class="youtube-card-metrics"><span>${Number(topic.channelCount) || 0} canais</span><span>${Number(topic.videoCount) || related.length} vídeos</span><span>${numberFormat.format(Number(topic.views) || 0)} views</span><span>${numberFormat.format(Number(topic.viewsPerHour) || 0)} views/h</span><span>${numberFormat.format(Number(topic.comments) || 0)} comentários</span></div>${latest ? `<div class="published"><span>Vídeo mais recente</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div>` : ""}<div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.movementLabel || topic.decisionReason || "Sinal calculado nesta coleta")}</span><span class="calculated">YouTube Data API</span></div><div class="recommendation"><strong>Leitura editorial:</strong> ${escapeHtml(topic.decisionReason || "Abra os vídeos relacionados e confirme o contexto antes de pautar.")}</div><div class="youtube-related">${related.map((video) => `<a class="youtube-related-video" href="${escapeHtml(safeUrl(video.url))}" target="_blank" rel="noreferrer"><img src="${escapeHtml(safeUrl(video.thumbnail))}" alt="" loading="lazy"><span><strong>${escapeHtml(video.title)}</strong><small>${escapeHtml(video.channel)} · ${numberFormat.format(Number(video.viewsPerHour) || 0)} views/h</small></span><em>Abrir ↗</em></a>`).join("")}</div></div></article>`;
-}
-
-function youtubeVideoMarkup(video) {
-  return `<article class="youtube-video-item"><img src="${escapeHtml(safeUrl(video.thumbnail))}" alt="Miniatura do vídeo ${escapeHtml(video.title)}" loading="lazy"><div class="youtube-video-copy"><h4>${escapeHtml(video.title)}</h4><p>${escapeHtml(video.channel)} · publicado ${escapeHtml(relativeTime(video.publishedAt))}</p><div class="youtube-video-meta"><span>${numberFormat.format(Number(video.views) || 0)} views</span><span>${numberFormat.format(Number(video.viewsPerHour) || 0)} views/h</span><span>${numberFormat.format(Number(video.comments) || 0)} comentários</span><span>${escapeHtml(video.decision || "Acompanhar")}</span></div><div class="youtube-video-reasons">${escapeHtml((video.reasons || []).join(" · "))}</div></div><div class="youtube-video-action"><strong>${Number(video.attentionIndex) || 0}</strong><a href="${escapeHtml(safeUrl(video.url))}" target="_blank" rel="noreferrer">Abrir no YouTube ↗</a></div></article>`;
-}
-
-function renderYouTube() {
-  const payload = state.youtubeData || {};
-  const collection = payload.collection;
-  state.youtubeStatus = payload.status || state.youtubeStatus || {};
-  renderYouTubeOperational();
-  const topics = filteredYouTubeTopics(collection);
-  const videos = filteredYouTubeVideos(collection);
-  document.getElementById("youtubeSummaryVideos").textContent = videos.length;
-  document.getElementById("youtubeSummaryTopics").textContent = topics.length;
-  document.getElementById("youtubeSummaryChannels").textContent = new Set(videos.map((video) => video.channelId || video.channel)).size;
-  document.getElementById("youtubeSummaryUrgent").textContent = topics.filter((topic) => topic.decisionLevel === "high").length;
-  document.getElementById("youtubeLastUpdate").textContent = collection?.collectedAt ? `Última coleta: ${formatDate(collection.collectedAt)}` : "Sem coleta";
-  document.getElementById("youtubeVideoCount").textContent = `${videos.length} vídeo${videos.length === 1 ? "" : "s"}`;
-
-  const topicHolder = document.getElementById("youtubeTopicsGrid");
-  if (!collection) topicHolder.innerHTML = youtubeEmpty("Nenhuma coleta do YouTube disponível", state.youtubeStatus?.configured ? "A coleta automática ocorre a cada 15 minutos ou pode ser iniciada pelo botão acima." : "Configure o secret YOUTUBE_API_KEY no Cloudflare.");
-  else if (!topics.length) topicHolder.innerHTML = youtubeEmpty("Nenhum assunto neste filtro", "Amplie o período ou remova um dos filtros.");
-  else topicHolder.innerHTML = topics.map(youtubeTopicMarkup).join("");
-
-  document.getElementById("youtubeVideoList").innerHTML = videos.length ? videos.slice(0, 20).map(youtubeVideoMarkup).join("") : youtubeEmpty("Nenhum vídeo neste filtro", "Ajuste o período, a busca ou a decisão editorial.");
-
-  const queryChannels = (collection?.channels || []).filter((channel) => youtubeQueryMatch(channel.channel, channel.topVideo?.title));
-  document.getElementById("youtubeChannelList").innerHTML = queryChannels.length ? queryChannels.slice(0, 10).map((channel) => `<article class="youtube-ranking-item"><span>${Number(channel.rank) || "–"}</span><div><strong>${escapeHtml(channel.channel)}</strong><p>${Number(channel.videoCount) || 0} vídeos · ${numberFormat.format(Number(channel.views) || 0)} views · ${numberFormat.format(Number(channel.viewsPerHour) || 0)}/h</p></div><em>${Number(channel.attentionIndex) || 0}</em></article>`).join("") : youtubeEmpty("Sem canais para exibir", "Os canais aparecerão após uma coleta válida.");
-
-  const alerts = (collection?.alerts || []).filter((alert) => youtubeQueryMatch(alert.title, alert.text, alert.detail));
-  document.getElementById("youtubeAlertList").innerHTML = alerts.length ? alerts.slice(0, 10).map((alert) => `<article class="youtube-alert-item ${escapeHtml(alert.level || "medium")}"><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}${alert.detail ? ` · ${escapeHtml(alert.detail)}` : ""}</p>${alert.url ? `<a href="${escapeHtml(safeUrl(alert.url))}" target="_blank" rel="noreferrer">Abrir vídeo ↗</a>` : ""}</article>`).join("") : youtubeEmpty("Nenhum alerta forte", "A coleta atual não apresentou aceleração relevante.");
-
-  const termResults = payload.termResults || [];
-  document.getElementById("youtubeTermMeta").textContent = termResults[0]?.collectedAt ? `Última busca ${relativeTime(termResults[0].collectedAt)}` : "Nenhum termo coletado";
-  document.getElementById("youtubeTermList").innerHTML = termResults.length ? termResults.map((result) => `<article class="youtube-term-item"><div><strong>${escapeHtml(result.term)}</strong><p>Coletado ${escapeHtml(relativeTime(result.collectedAt))}</p></div><div class="youtube-term-metrics"><span>${Number(result.summary?.videoCount) || 0} vídeos</span><span>${numberFormat.format(Number(result.summary?.views) || 0)} views</span><span>${numberFormat.format(Number(result.summary?.viewsPerHour) || 0)} views/h</span><span>${numberFormat.format(Number(result.summary?.comments) || 0)} comentários</span></div>${result.summary?.topVideo?.url ? `<a class="open" href="${escapeHtml(safeUrl(result.summary.topVideo.url))}" target="_blank" rel="noreferrer">Abrir top vídeo ↗</a>` : ""}</article>`).join("") : youtubeEmpty("Nenhum termo pesquisado no YouTube", "Os termos ativos entram em rotação automática a cada 30 minutos.");
-}
-
-async function loadYouTubeLatest({ force = false, quiet = false } = {}) {
-  try {
-    const response = await conditionalApi("/api/youtube/latest", force ? "" : state.youtubeEtag);
-    if (!response.notModified) {
-      state.youtubeEtag = response.etag;
-      state.youtubeData = response.payload || null;
-      state.youtubeStatus = response.payload?.status || state.youtubeStatus;
-    }
-    if (force || !state.youtubeChannels.length) await loadYouTubeCuration();
-    renderYouTube();
-    return state.youtubeData;
-  } catch (error) {
-    if (!quiet) {
-      state.youtubeStatus = { configured: state.health?.youtube?.configured, status: "failed", error: error.message };
-      renderYouTube();
-    }
-    return null;
-  }
-}
-
-async function waitForYouTubeJob(jobId) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await wait(attempt === 0 ? 1_500 : 3_000);
-    const response = await api("/api/youtube/status");
-    const status = response?.status || {};
-    state.youtubeStatus = status;
-    renderYouTubeOperational();
-    if (status.jobId && status.jobId !== jobId && status.running) continue;
-    if (status.status === "success" && !status.running) return loadYouTubeLatest({ force: true });
-    if (["failed", "expired"].includes(status.status) && !status.running) throw new Error(status.error || "A coleta do YouTube não foi concluída.");
-  }
-  throw new Error("A coleta continua no servidor. A aba será atualizada na próxima abertura.");
-}
-
-async function collectYouTubeNow() {
-  const button = document.getElementById("collectYouTube");
-  if (state.youtubeLoading) return;
-  state.youtubeLoading = true;
-  button.disabled = true;
-  button.textContent = "↻ Enviando coleta…";
-  try {
-    const response = await api("/api/youtube/collect", { method: "POST", headers: operationHeaders(), body: "{}" });
-    state.youtubeStatus = { ...(state.youtubeStatus || {}), status: response?.status || "queued", running: true, jobId: response?.jobId, configured: true, queuedAt: new Date().toISOString() };
-    renderYouTubeOperational();
-    await waitForYouTubeJob(response.jobId);
-  } catch (error) {
-    state.youtubeStatus = { ...(state.youtubeStatus || {}), status: "failed", running: false, error: error.message };
-    renderYouTubeOperational();
-    if (error.status === 401) openModal("settingsModal");
-  } finally {
-    state.youtubeLoading = false;
-    button.disabled = false;
-    button.textContent = "↻ Atualizar YouTube";
-  }
-}
-
 function resetRoundFilters() {
   state.query = "";
   state.period = 1440;
@@ -806,8 +618,6 @@ async function checkHealth() {
     const health = await api("/api/health");
     if (!health || typeof health !== "object" || !health.version) throw new Error("A versão publicada do Worker não é compatível com este painel.");
     state.health = health;
-    state.youtubeStatus = health.youtube || state.youtubeStatus;
-    renderYouTubeOperational();
     const translationReady = health.translation?.ready !== false;
     const automationMessage = !translationReady
       ? "Automação ativa; tradução internacional indisponível no Cloudflare."
@@ -1483,7 +1293,7 @@ let statusPollTimer = null;
 let statusPolling = false;
 
 function nextStatusPollDelay() {
-  if (state.running || state.serverRunning || state.youtubeStatus?.running) return 3_000;
+  if (state.running || state.serverRunning) return 3_000;
   return document.hidden ? 5 * 60_000 : 60_000;
 }
 
@@ -1522,24 +1332,6 @@ async function pollStatus({ force = false } = {}) {
       }
     }
 
-    if (state.view === "youtube" || state.youtubeStatus?.running) {
-      try {
-        const youtubeResponse = await conditionalApi("/api/youtube/status", force ? "" : state.youtubeStatusEtag);
-        if (!youtubeResponse.notModified) {
-          state.youtubeStatusEtag = youtubeResponse.etag;
-          const previousCollectionId = state.youtubeData?.collection?.id || null;
-          state.youtubeStatus = youtubeResponse.payload?.status || state.youtubeStatus;
-          const latestCollectionId = youtubeResponse.payload?.latestCollectionId || null;
-          if (latestCollectionId && latestCollectionId !== previousCollectionId) {
-            await loadYouTubeLatest({ force: true, quiet: true });
-          } else {
-            renderYouTubeOperational();
-          }
-        }
-      } catch {
-        // A indisponibilidade temporária do módulo YouTube não interfere na Ronda.
-      }
-    }
   } catch (error) {
     if (!state.running) setStatus("warn", "Atualização temporariamente indisponível", error.message);
   } finally {
@@ -1620,29 +1412,6 @@ document.getElementById("monitoringTermFilters").addEventListener("click", (even
   state.monitoringTermFilter = button.dataset.monitoringFilter;
   renderDedicatedMonitoring();
 });
-document.getElementById("collectYouTube").addEventListener("click", collectYouTubeNow);
-document.getElementById("youtubeCurationForm").addEventListener("submit", submitYouTubeChannel);
-document.getElementById("youtubeCurationList").addEventListener("click", async (event) => { const card=event.target.closest("[data-channel-id]"); if(!card)return; const id=card.dataset.channelId; const channel=(state.youtubeChannels||[]).find(item=>item.channelId===id); if(event.target.closest("[data-channel-toggle]")){try{await api(`/api/youtube/channels/${encodeURIComponent(id)}`,{method:"PATCH",headers:{"Content-Type":"application/json",...operationHeaders()},body:JSON.stringify({active:!channel?.active})});await loadYouTubeCuration();}catch(error){alert(error.message);}} if(event.target.closest("[data-channel-remove]")){if(!confirm(`Remover ${channel?.title||"este canal"} da curadoria?`))return;try{await api(`/api/youtube/channels/${encodeURIComponent(id)}`,{method:"DELETE",headers:operationHeaders()});await loadYouTubeCuration();}catch(error){alert(error.message);}} });
-document.getElementById("youtubeSearchInput").addEventListener("input", (event) => { state.youtubeQuery = event.target.value; renderYouTube(); });
-document.getElementById("youtubePeriodFilter").addEventListener("click", (event) => {
-  if (!event.target.matches("button")) return;
-  state.youtubePeriodHours = Number(event.target.dataset.value) || 24;
-  event.currentTarget.querySelectorAll("button").forEach((button) => button.classList.toggle("active", button === event.target));
-  renderYouTube();
-});
-document.getElementById("youtubeDecisionFilter").addEventListener("click", (event) => {
-  if (!event.target.matches("button")) return;
-  state.youtubeDecision = event.target.dataset.value || "Todos";
-  event.currentTarget.querySelectorAll("button").forEach((button) => button.classList.toggle("active", button === event.target));
-  renderYouTube();
-});
-document.getElementById("youtubeEditoriaFilter").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-youtube-editoria]");
-  if (!button) return;
-  state.youtubeEditoria = button.dataset.youtubeEditoria || "Todas";
-  event.currentTarget.querySelectorAll("[data-youtube-editoria]").forEach((item) => item.classList.toggle("active", item === button));
-  renderYouTube();
-});
 document.getElementById("loginForm").addEventListener("submit", (event) => submitProfileAuth(event, "login"));
 document.getElementById("registerForm").addEventListener("submit", (event) => submitProfileAuth(event, "register"));
 document.getElementById("logoutProfile").addEventListener("click", logoutProfile);
@@ -1673,7 +1442,6 @@ document.getElementById("newsroomBoard").addEventListener("click", (event) => { 
 document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); loadNewsroom(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
-document.getElementById("navYouTube").addEventListener("click", () => { showView("youtube"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navProfile").addEventListener("click", () => { showView("profile"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navRound").addEventListener("click", () => { if (state.portal) { state.portal = null; setSourceSegment("Todos"); setRegionSegment("Todas"); updatePortalFilter(); renderSourceHealth(); render(); } showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("goTop").addEventListener("click", () => document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }));

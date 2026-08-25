@@ -108,29 +108,6 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_source_state_next_check ON source_state(next_check_at)",
   "CREATE INDEX IF NOT EXISTS idx_source_state_status ON source_state(status, updated_at DESC)",
-  `CREATE TABLE IF NOT EXISTS youtube_collections (
-    id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,
-    region TEXT NOT NULL,
-    collected_at TEXT NOT NULL,
-    completed_at TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    error TEXT
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_youtube_collections_completed ON youtube_collections(completed_at DESC)",
-  `CREATE TABLE IF NOT EXISTS youtube_term_results (
-    id TEXT PRIMARY KEY,
-    term_id TEXT NOT NULL,
-    term TEXT NOT NULL,
-    collected_at TEXT NOT NULL,
-    payload_json TEXT NOT NULL
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_youtube_term_results_term ON youtube_term_results(term_id, collected_at DESC)",
-  `CREATE TABLE IF NOT EXISTS youtube_state (
-    state_key TEXT PRIMARY KEY,
-    value_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
   `CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL,
@@ -203,12 +180,6 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS newsroom_story_followers (
     story_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(story_id, user_id)
   )`,
-  `CREATE TABLE IF NOT EXISTS youtube_curated_channels (
-    channel_id TEXT PRIMARY KEY, title TEXT NOT NULL, handle TEXT, uploads_playlist_id TEXT NOT NULL, thumbnail_url TEXT,
-    subscriber_count INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, added_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    last_checked_at TEXT, last_video_at TEXT, failure_count INTEGER NOT NULL DEFAULT 0
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_youtube_curated_active ON youtube_curated_channels(active, title)",
   `DELETE FROM source_state WHERE source_id IN (
     'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
     'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
@@ -222,8 +193,6 @@ const STORAGE_GUARD = Object.freeze({
   // somente as 24 rondas mais recentes mantêm payload detalhado.
   maxRunRows: 576,
   maxRunPayloads: 12,
-  maxYouTubeCollections: 12,
-  maxYouTubeTermResults: 12,
   maxArticleReadCache: 40,
   maxIntelligentCarousels: 60,
   maxIntelligentJobs: 120,
@@ -243,18 +212,6 @@ async function emergencyCleanupRaw(db) {
   const now = new Date().toISOString();
   const translationCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const statements = [
-    `DELETE FROM youtube_collections
-     WHERE id NOT IN (
-       SELECT id FROM youtube_collections
-       ORDER BY completed_at DESC
-       LIMIT ${STORAGE_GUARD.maxYouTubeCollections}
-     )`,
-    `DELETE FROM youtube_term_results
-     WHERE id NOT IN (
-       SELECT id FROM youtube_term_results
-       ORDER BY collected_at DESC
-       LIMIT ${STORAGE_GUARD.maxYouTubeTermResults}
-     )`,
     `UPDATE runs SET payload_json = NULL
      WHERE payload_json IS NOT NULL
        AND status NOT IN ('queued', 'running')
@@ -293,7 +250,7 @@ async function emergencyCleanupRaw(db) {
 }
 
 
-export async function preflightCoreStorage(db, { purgeLegacyYouTube = false } = {}) {
+export async function preflightCoreStorage(db) {
   if (!db) return false;
   const statements = [
     `UPDATE runs SET payload_json = NULL
@@ -309,13 +266,6 @@ export async function preflightCoreStorage(db, { purgeLegacyYouTube = false } = 
     `DELETE FROM intelligent_jobs WHERE expires_at < '${new Date().toISOString()}'`,
     `DELETE FROM article_read_cache WHERE expires_at < '${new Date().toISOString()}'`,
   ];
-  if (purgeLegacyYouTube) {
-    statements.unshift(
-      `DELETE FROM youtube_collections`,
-      `DELETE FROM youtube_term_results`,
-      `DELETE FROM youtube_state`,
-    );
-  }
   let changed = false;
   for (const statement of statements) {
     try {
@@ -329,125 +279,6 @@ export async function emergencyDatabaseCleanup(db) {
   if (!db) return false;
   await emergencyCleanupRaw(db);
   return true;
-}
-
-function compactYouTubeVideo(video, { includeScores = true } = {}) {
-  if (!video || typeof video !== "object") return null;
-  const output = {
-    id: video.id || null,
-    rank: Number(video.rank) || 0,
-    title: String(video.title || "Sem título").slice(0, 300),
-    channel: String(video.channel || "Canal não informado").slice(0, 160),
-    channelId: String(video.channelId || "").slice(0, 120),
-    publishedAt: video.publishedAt || null,
-    ageHours: Number(video.ageHours) || 0,
-    views: Number(video.views) || 0,
-    likes: Number(video.likes) || 0,
-    comments: Number(video.comments) || 0,
-    viewsPerHour: Number(video.viewsPerHour) || 0,
-    engagementRate: Number(video.engagementRate) || 0,
-    commentRate: Number(video.commentRate) || 0,
-    thumbnail: String(video.thumbnail || "").slice(0, 500),
-    durationSeconds: Number(video.durationSeconds) || 0,
-    url: String(video.url || "").slice(0, 500),
-    attentionIndex: Number(video.attentionIndex) || 0,
-    reasons: Array.isArray(video.reasons) ? video.reasons.slice(0, 4).map((value) => String(value).slice(0, 120)) : [],
-    decision: video.decision || null,
-    decisionLevel: video.decisionLevel || null,
-    decisionReason: video.decisionReason || null,
-    movement: video.movement || null,
-    movementLabel: video.movementLabel || null,
-    deltaIndex: Number(video.deltaIndex) || 0,
-  };
-  if (includeScores) {
-    output.viewsScore = Number(video.viewsScore) || 0;
-    output.speedScore = Number(video.speedScore) || 0;
-    output.engagementScore = Number(video.engagementScore) || 0;
-    output.commentScore = Number(video.commentScore) || 0;
-    output.recencyScore = Number(video.recencyScore) || 0;
-  }
-  return output;
-}
-
-export function compactYouTubeCollectionForStorage(collection) {
-  if (!collection || typeof collection !== "object") return collection;
-  const videos = (collection.videos || []).map((video) => compactYouTubeVideo(video)).filter(Boolean).slice(0, 30);
-  const videoById = new Map(videos.map((video) => [video.id, video]));
-  const topics = (collection.topics || []).slice(0, 24).map((topic) => ({
-    id: topic.id || null,
-    rank: Number(topic.rank) || 0,
-    label: String(topic.label || "").slice(0, 220),
-    editoria: topic.editoria || "Viral e Redes Sociais",
-    attentionIndex: Number(topic.attentionIndex) || 0,
-    videoCount: Number(topic.videoCount) || 0,
-    channelCount: Number(topic.channelCount) || 0,
-    channels: Array.isArray(topic.channels) ? topic.channels.slice(0, 8).map((value) => String(value).slice(0, 160)) : [],
-    views: Number(topic.views) || 0,
-    viewsPerHour: Number(topic.viewsPerHour) || 0,
-    comments: Number(topic.comments) || 0,
-    firstPublishedAt: topic.firstPublishedAt || null,
-    latestPublishedAt: topic.latestPublishedAt || null,
-    decision: topic.decision || null,
-    decisionLevel: topic.decisionLevel || null,
-    decisionReason: topic.decisionReason || null,
-    movement: topic.movement || null,
-    movementLabel: topic.movementLabel || null,
-    deltaIndex: Number(topic.deltaIndex) || 0,
-    videos: (topic.videos || []).slice(0, 5).map((video) => {
-      const known = videoById.get(video.id);
-      return known ? compactYouTubeVideo(known, { includeScores: false }) : compactYouTubeVideo(video, { includeScores: false });
-    }).filter(Boolean),
-  }));
-  const channels = (collection.channels || []).slice(0, 12).map((channel) => ({
-    id: channel.id || null,
-    rank: Number(channel.rank) || 0,
-    channel: String(channel.channel || "").slice(0, 160),
-    videoCount: Number(channel.videoCount) || 0,
-    views: Number(channel.views) || 0,
-    viewsPerHour: Number(channel.viewsPerHour) || 0,
-    comments: Number(channel.comments) || 0,
-    attentionIndex: Number(channel.attentionIndex) || 0,
-    topVideo: channel.topVideo ? {
-      id: channel.topVideo.id || null,
-      title: String(channel.topVideo.title || "").slice(0, 300),
-      url: String(channel.topVideo.url || "").slice(0, 500),
-    } : null,
-  }));
-  return {
-    id: collection.id || null,
-    collectedAt: collection.collectedAt || null,
-    region: collection.region || "BR",
-    cached: Boolean(collection.cached),
-    curated: Boolean(collection.curated),
-    curatedChannelCount: Number(collection.curatedChannelCount) || 0,
-    videos,
-    topics,
-    channels,
-    alerts: Array.isArray(collection.alerts) ? collection.alerts.slice(0, 20) : [],
-    stats: collection.stats || {},
-  };
-}
-
-export function compactYouTubeTermResultForStorage(result) {
-  if (!result || typeof result !== "object") return result;
-  const videos = (result.videos || []).slice(0, 3).map((video) => compactYouTubeVideo(video, { includeScores: false })).filter(Boolean);
-  const topVideo = result.summary?.topVideo ? compactYouTubeVideo(result.summary.topVideo, { includeScores: false }) : videos[0] || null;
-  return {
-    id: result.id || null,
-    termId: result.termId || "",
-    term: String(result.term || "").slice(0, 160),
-    collectedAt: result.collectedAt || null,
-    region: result.region || "BR",
-    windowHours: Number(result.windowHours) || 24,
-    videos,
-    summary: {
-      videoCount: Number(result.summary?.videoCount) || videos.length,
-      views: Number(result.summary?.views) || 0,
-      viewsPerHour: Number(result.summary?.viewsPerHour) || 0,
-      comments: Number(result.summary?.comments) || 0,
-      topVideo,
-    },
-  };
 }
 
 async function currentSchemaVersion(db) {
@@ -1351,8 +1182,6 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
     db.prepare(`DELETE FROM intelligent_jobs WHERE job_id NOT IN (SELECT job_id FROM intelligent_jobs ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentJobs})`),
     db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
     db.prepare(`DELETE FROM article_read_cache WHERE cache_key NOT IN (SELECT cache_key FROM article_read_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxArticleReadCache})`),
-    db.prepare(`DELETE FROM youtube_collections WHERE id NOT IN (SELECT id FROM youtube_collections ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeCollections})`),
-    db.prepare(`DELETE FROM youtube_term_results WHERE id NOT IN (SELECT id FROM youtube_term_results ORDER BY collected_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeTermResults})`),
     db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -1361,123 +1190,6 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
   return true;
 }
 
-
-export async function getYouTubeStateValue(db, key, fallback = null) {
-  await ensureSchema(db);
-  const row = await db.prepare("SELECT value_json FROM youtube_state WHERE state_key = ? LIMIT 1").bind(String(key)).first();
-  return parseJsonObject(row?.value_json, fallback);
-}
-
-export async function setYouTubeStateValue(db, key, value) {
-  await ensureSchema(db);
-  const now = new Date().toISOString();
-  await db.prepare(`
-    INSERT INTO youtube_state (state_key, value_json, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
-  `).bind(String(key), JSON.stringify(value ?? null), now).run();
-  return value;
-}
-
-export async function saveYouTubeCollection(db, collection, { status = "success", error = null } = {}) {
-  await ensureSchema(db);
-  await emergencyCleanupRaw(db);
-  const compact = compactYouTubeCollectionForStorage(collection);
-  const completedAt = compact?.collectedAt || new Date().toISOString();
-  const id = compact?.id || crypto.randomUUID();
-  const write = () => db.prepare(`
-    INSERT INTO youtube_collections (id, status, region, collected_at, completed_at, payload_json, error)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      status = excluded.status,
-      region = excluded.region,
-      collected_at = excluded.collected_at,
-      completed_at = excluded.completed_at,
-      payload_json = excluded.payload_json,
-      error = excluded.error
-  `).bind(
-    id,
-    status,
-    compact?.region || "BR",
-    completedAt,
-    completedAt,
-    JSON.stringify({ ...compact, id }),
-    error ? String(error).slice(0, 500) : null,
-  ).run();
-  try {
-    await write();
-  } catch (writeError) {
-    if (!isD1StorageLimitError(writeError)) throw writeError;
-    await emergencyCleanupRaw(db);
-    await write();
-  }
-  return { ...compact, id };
-}
-
-export async function getLatestYouTubeCollection(db) {
-  await ensureSchema(db);
-  const row = await db.prepare(`
-    SELECT payload_json FROM youtube_collections
-    WHERE status = 'success'
-    ORDER BY completed_at DESC
-    LIMIT 1
-  `).first();
-  return parseJsonObject(row?.payload_json, null);
-}
-
-export async function getYouTubeCollectionHistory(db, limit = 24) {
-  await ensureSchema(db);
-  const safeLimit = Math.max(1, Math.min(96, Number(limit) || 24));
-  const result = await db.prepare(`
-    SELECT payload_json FROM youtube_collections
-    WHERE status = 'success'
-    ORDER BY completed_at DESC
-    LIMIT ?
-  `).bind(safeLimit).all();
-  return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean).reverse();
-}
-
-export async function saveYouTubeTermResult(db, result) {
-  await ensureSchema(db);
-  await emergencyCleanupRaw(db);
-  const compact = compactYouTubeTermResultForStorage(result);
-  const id = compact?.id || crypto.randomUUID();
-  const collectedAt = compact?.collectedAt || new Date().toISOString();
-  const write = () => db.prepare(`
-    INSERT INTO youtube_term_results (id, term_id, term, collected_at, payload_json)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, collected_at = excluded.collected_at
-  `).bind(id, compact?.termId || "", compact?.term || "", collectedAt, JSON.stringify({ ...compact, id })).run();
-  try {
-    await write();
-  } catch (writeError) {
-    if (!isD1StorageLimitError(writeError)) throw writeError;
-    await emergencyCleanupRaw(db);
-    await write();
-  }
-  return { ...compact, id };
-}
-
-export async function getLatestYouTubeTermResults(db, limit = 12) {
-  await ensureSchema(db);
-  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
-  const result = await db.prepare(`
-    SELECT payload_json FROM youtube_term_results
-    WHERE id IN (
-      SELECT id FROM youtube_term_results AS latest
-      WHERE collected_at = (
-        SELECT MAX(collected_at) FROM youtube_term_results WHERE term_id = latest.term_id
-      )
-    )
-    ORDER BY collected_at DESC
-    LIMIT ?
-  `).bind(safeLimit).all();
-  return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean);
-}
-
-export async function cleanupYouTubeData(db) {
-  await ensureSchema(db);
-  await emergencyCleanupRaw(db);
-}
 
 function newsroomStoryRow(row) {
   if (!row) return null;
@@ -1667,36 +1379,6 @@ export async function getNewsroomHandoff(db, { hours = 8 } = {}) {
     attention: pending.filter((story) => story.queue === "now" || story.workflowStatus === "investigating").slice(0, 12),
     events: (events?.results || []).slice(0, 30).map((event) => ({ id:event.id, storyId:event.story_id, title:event.title, editoria:event.editoria, type:event.event_type, summary:event.summary, createdAt:event.created_at })),
   };
-}
-
-function curatedChannelRow(row) {
-  if (!row) return null;
-  return { channelId:row.channel_id, title:row.title, handle:row.handle || null, uploadsPlaylistId:row.uploads_playlist_id, thumbnail:row.thumbnail_url || "", subscriberCount:Number(row.subscriber_count)||0, active:Number(row.active)===1, addedAt:row.added_at, updatedAt:row.updated_at, lastCheckedAt:row.last_checked_at || null, lastVideoAt:row.last_video_at || null, failureCount:Number(row.failure_count)||0 };
-}
-
-export async function listYouTubeCuratedChannels(db, { activeOnly = false } = {}) {
-  await ensureSchema(db);
-  const result = await db.prepare(`SELECT * FROM youtube_curated_channels ${activeOnly ? "WHERE active=1" : ""} ORDER BY active DESC, title COLLATE NOCASE`).all();
-  return (result?.results || []).map(curatedChannelRow);
-}
-
-export async function saveYouTubeCuratedChannel(db, channel) {
-  await ensureSchema(db);
-  const count = await db.prepare("SELECT COUNT(*) AS count FROM youtube_curated_channels").first();
-  if (Number(count?.count) >= 30) throw new Error("Limite de 30 canais na curadoria atingido.");
-  const now = new Date().toISOString();
-  await db.prepare(`INSERT INTO youtube_curated_channels (channel_id,title,handle,uploads_playlist_id,thumbnail_url,subscriber_count,active,added_at,updated_at) VALUES (?,?,?,?,?,?,1,?,?) ON CONFLICT(channel_id) DO UPDATE SET title=excluded.title,handle=excluded.handle,uploads_playlist_id=excluded.uploads_playlist_id,thumbnail_url=excluded.thumbnail_url,subscriber_count=excluded.subscriber_count,active=1,updated_at=excluded.updated_at`)
-    .bind(channel.channelId, channel.title, channel.handle || null, channel.uploadsPlaylistId, channel.thumbnail || "", Number(channel.subscriberCount)||0, now, now).run();
-  return curatedChannelRow(await db.prepare("SELECT * FROM youtube_curated_channels WHERE channel_id=?").bind(channel.channelId).first());
-}
-
-export async function setYouTubeCuratedChannelActive(db, channelId, active) {
-  await ensureSchema(db); await db.prepare("UPDATE youtube_curated_channels SET active=?,updated_at=? WHERE channel_id=?").bind(active?1:0,new Date().toISOString(),channelId).run();
-  return curatedChannelRow(await db.prepare("SELECT * FROM youtube_curated_channels WHERE channel_id=?").bind(channelId).first());
-}
-
-export async function deleteYouTubeCuratedChannel(db, channelId) {
-  await ensureSchema(db); await db.prepare("DELETE FROM youtube_curated_channels WHERE channel_id=?").bind(channelId).run(); return { deleted:true, channelId };
 }
 
 export async function databaseHealth(db) {

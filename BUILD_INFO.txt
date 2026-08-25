@@ -1,29 +1,27 @@
-RONDA ONE 0.7.1 — RONDA EDITORIAL 2.8.5 INTEGRADA
+RONDA ONE 0.7.2 — STABILITY FIRST
 Data: 24/08/2026
 
-Núcleo editorial substituído pela versão exata enviada:
-- Ronda Editorial v2.8.5 — carrossel com origem verificada
-- 82 testes da versão original aprovados antes da integração
-- carrossel flexível de 3 a 15 slides
-- origem verificada, mapa de fatos/evidências, perfil de escrita e memória editorial preservados
+Base editorial: Ronda Editorial 2.8.5 com origem verificada.
 
-Integração RONDA ONE:
-- botão RONDA DESIGN ao lado de Copiar roteiro
-- textos editados no modal seguem para o Design
-- 3 a 15 pranchetas 1080x1350 criadas automaticamente
-- cada prancheta mantém Fundo/Imagem, Overlay, Função, Título, Subtítulo e Origem em camadas
-- uma imagem editorial de fundo por carrossel via Workers AI Free
-- falha da imagem não bloqueia o editor
-- Project Core compartilhado no D1
+Alterações:
+- YouTube removido da interface
+- YouTube removido da API
+- YouTube removido do cron e das filas
+- removidos requisitos YOUTUBE_DB e YOUTUBE_API_KEY
+- removido src/ronda/v285/youtube.js
+- health agora reflete somente o núcleo operacional
+- cron de 5 minutos executa apenas a ronda principal
+- schema novo não cria mais tabelas YouTube
+- tabelas legadas existentes não são apagadas automaticamente
+- foco: estabilidade, menor superfície de falha e menor complexidade operacional
 
-Compatibilidade:
-- migração automática da tabela runs criada pela primeira RONDA ONE 0.7
-- mantém o mesmo Worker 'rondaone' e o mesmo DB principal
+Modo de cobrança: free-only.
 
-MVP sem custo:
-- não adiciona providers pagos
-- filas Cloudflare são opcionais; sem binding, a Ronda usa os fallbacks já previstos pela 2.8.5
-- YouTube fica isolado e opcional até YOUTUBE_DB/API serem configurados
+VALIDAÇÃO — 3 RODADAS
+1. Sintaxe: módulos principais e frontend aprovados.
+2. Regressão do núcleo: 70 testes aprovados, 0 falhas; 4 testes antigos do YouTube marcados como obsoletos.
+3. Estabilidade: importação dos módulos aprovada e 0 referências de YouTube no runtime editorial.
 
-
-Deploy RONDA ONE 0.7.1 - Ronda Editorial 2.8.5
+REDUÇÃO APROXIMADA
+- src/ronda: 399.849 -> 333.699 bytes (~16,5% menor)
+- public/ronda: 190.478 -> 157.208 bytes (~17,5% menor)
