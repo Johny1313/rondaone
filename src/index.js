@@ -13,7 +13,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.7.6',
+      version:'0.7.7',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -28,13 +28,22 @@ export default {
         clientPolling:'resilient',
         clientSoftTimeoutSeconds:70,
         clientHardTimeoutMinutes:8,
+        transientErrorTolerance:5,
         designHandoff:'decoupled-from-copy-gate'
       },
       uiRecovery:{
         staleJobMinutes:12,
         automatic:true,
         reloadRequired:false,
-        assetCacheBust:'2.8.5-076'
+        reconnectOnOnline:true,
+        reconnectOnVisibility:true,
+        abandonedClientJobGuard:true,
+        assetCacheBust:'2.8.5-077'
+      },
+      navigation:{
+        ronda:'/ronda',
+        design:'/design/',
+        projects:'/projects/'
       },
       imageEngine:{mode:'multi-engine',default:'sdxl',fallbacks:['flux1','flux2']}
     });

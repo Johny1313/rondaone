@@ -57,7 +57,7 @@ function normalizeProject(input={}){
     contractVersion:'ronda-one-import-v2',
     source:'ronda-editorial',
     sourceVersion:clean(input.sourceVersion || 'ronda-module',80),
-    handoffVersion:clean(input.handoffVersion || 'ronda-one-0.7.5',80),
+    handoffVersion:clean(input.handoffVersion || 'ronda-one-0.7.7',80),
     title:clean(topic.title || input.title || carousel.topicTitle || 'Projeto da Ronda',240),
     editoria:clean(topic.editoria || input.editoria || 'Notícias',80),
     runId:clean(input.runId || '',120),
@@ -72,7 +72,12 @@ function normalizeProject(input={}){
     disclaimer:clean(carousel.disclaimer || 'Revise e confirme as informações nas fontes originais antes de publicar.',1000),
     editorialGate,
     editorialReviewRequired,
-    editorialStatus:editorialReviewRequired?'review-required':'ready-for-design',
+    editorialStatus:clean(
+      carousel.editorialStatus
+      || input.editorialStatus
+      || (editorialReviewRequired?'review-required':'ready-for-design'),
+      80
+    ),
     visualPrompt:shortVisualPrompt(topic,carousel),
     imagePolicy:{mode:'one-background-per-carousel',status:'not-generated',provider:'Workers AI Free'},
   };

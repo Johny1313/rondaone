@@ -400,7 +400,7 @@ export async function handleRondaAiApi(request, env) {
   const url = new URL(request.url);
 
   if (url.pathname === '/api/health') {
-    return json({ ok: true, service: 'ronda-one-design', version: '0.7.4', build: BUILD_ID, runtime: 'cloudflare-workers' });
+    return json({ ok: true, service: 'ronda-one-design', version: '0.7.7', engineVersion: ENGINE_VERSION, build: BUILD_ID, runtime: 'cloudflare-workers' });
   }
 
   if ((url.pathname === '/api/ai/status' || url.pathname === '/api/ai/engines') && request.method === 'GET') {

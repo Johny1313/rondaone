@@ -1,7 +1,7 @@
 (()=>{
   'use strict';
 
-  const VERSION='0.7.6';
+  const VERSION='0.7.7';
   const JOB_KEY='rondaOne.intelligentJob';
   const MAX_LOCAL_JOB_AGE_MS=12*60*1000;
   const btn=document.getElementById('openRondaDesign');
@@ -30,10 +30,36 @@
     }
   }
 
+  function clearStoredJob(jobId=null){
+    try{
+      if(!jobId){
+        localStorage.removeItem(JOB_KEY);
+        return true;
+      }
+      const current=readStoredJob();
+      if(!current||current.jobId===jobId){
+        localStorage.removeItem(JOB_KEY);
+        return true;
+      }
+    }catch{}
+    return false;
+  }
+
+  function storeJob(jobId){
+    try{
+      localStorage.setItem(JOB_KEY,JSON.stringify({
+        jobId,
+        topicId:typeof state!=='undefined' ? (state?.pendingCarouselTopicId||state?.activeTopicId||null) : null,
+        slideCount:typeof state!=='undefined' ? (state?.activeSlideCount||null) : null,
+        startedAt:new Date().toISOString()
+      }));
+    }catch{}
+  }
+
   function clearStaleStoredJob(){
     const job=readStoredJob();
     if(job && job.ageMs>MAX_LOCAL_JOB_AGE_MS){
-      try{localStorage.removeItem(JOB_KEY)}catch{}
+      clearStoredJob(job.jobId);
       try{
         if(typeof state!=='undefined'){
           state.carouselLoading=false;
@@ -69,11 +95,10 @@
     const stale=clearStaleStoredJob();
     if(!force && !stale && !isReconnectUi())return false;
 
-    // Nunca deixa uma tarefa antiga bloquear a tela principal.
     try{
       if(typeof state!=='undefined'){
         state.serverRunning=false;
-        if(stale) state.carouselLoading=false;
+        if(stale)state.carouselLoading=false;
       }
     }catch{}
 
@@ -91,15 +116,13 @@
         try{render()}catch{}
       }
 
-      // checkHealth/loadLatest devem definir o status real. Caso um texto antigo
-      // tenha permanecido no DOM, substitui apenas o aviso de reconexão.
       if(isReconnectUi() && typeof setStatus==='function'){
         const last=(()=>{
           try{
             return state?.data?.collectedAt||state?.data?.storedAt||state?.health?.lastSuccessAt||null;
           }catch{return null;}
         })();
-        setStatus(last?'ok':'warn',last?'Serviço online':'Serviço online',last?'Última ronda carregada':'Aguardando próxima ronda');
+        setStatus(last?'ok':'warn','Serviço online',last?'Última ronda carregada':'Aguardando próxima ronda');
       }
 
       if(runBtn){
@@ -152,7 +175,7 @@
     }
   }
 
-  // Polling resiliente do carrossel. 70 s é aviso, não falha.
+  // Polling resiliente: 70 s é apenas aviso; 8 min libera a UI local.
   try{
     if(typeof waitForIntelligentJob==='function'){
       waitForIntelligentJob=async function(jobId,requestSerial,pollAfterMs=900){
@@ -160,19 +183,19 @@
         const hardDeadline=startedAt+(8*60*1000);
         let transientErrors=0;
 
-        try{
-          localStorage.setItem(JOB_KEY,JSON.stringify({
-            jobId,
-            topicId:state?.pendingCarouselTopicId||state?.activeTopicId||null,
-            slideCount:state?.activeSlideCount||null,
-            startedAt:new Date().toISOString()
-          }));
-        }catch{}
+        storeJob(jobId);
 
         while(Date.now()<hardDeadline){
-          if(requestSerial!==state.carouselRequestSerial)return null;
+          if(requestSerial!==state.carouselRequestSerial){
+            clearStoredJob(jobId);
+            return null;
+          }
+
           await sleep(Math.max(700,Number(pollAfterMs)||900));
-          if(requestSerial!==state.carouselRequestSerial)return null;
+          if(requestSerial!==state.carouselRequestSerial){
+            clearStoredJob(jobId);
+            return null;
+          }
 
           let response;
           try{
@@ -181,46 +204,51 @@
           }catch(error){
             transientErrors+=1;
             if(transientErrors>=5){
-              // libera a UI principal; a tarefa continua no servidor
+              // O job pode continuar no servidor, mas deixa de bloquear o navegador.
+              clearStoredJob(jobId);
               try{state.carouselLoading=false}catch{}
-              throw error;
+              throw new Error('A conexão com a tarefa foi interrompida. A interface foi liberada; tente novamente sem atualizar a página.');
             }
-            setCarouselLoading(true,
-              'A conexão oscilou, mas o processamento continua na fila. Reconectando…',
-              {progress:5,title:'Processamento continua no Cloudflare'});
+            if(typeof setCarouselLoading==='function'){
+              setCarouselLoading(true,
+                'A conexão oscilou, mas o processamento continua na fila. Reconectando…',
+                {progress:5,title:'Processamento continua no Cloudflare'});
+            }
             continue;
           }
 
           const job=response?.job||{};
 
           if(job.status==='succeeded'&&response?.data?.slides?.length){
-            try{localStorage.removeItem(JOB_KEY)}catch{}
+            clearStoredJob(jobId);
             return response.data;
           }
 
           if(job.status==='failed'||job.stale===true){
-            try{localStorage.removeItem(JOB_KEY)}catch{}
+            clearStoredJob(jobId);
             const detail=job.error||job.message||(job.stale?'A tarefa anterior ficou sem atualização.':'O processamento foi interrompido.');
             throw new Error(`${detail} O sistema foi liberado para iniciar uma nova leitura.`);
           }
 
           const elapsed=Date.now()-startedAt;
           if(elapsed>=70_000){
-            setCarouselLoading(true,
-              `${job.message||'Processando a matéria.'} O job continua em segundo plano; não é necessário atualizar a página.`,
-              {
-                progress:Number(job.progress)||1,
-                title:job.status==='queued'
-                  ? 'Leitura ainda na fila'
-                  : 'Leitura inteligente continua em segundo plano'
-              }
-            );
-          }else{
+            if(typeof setCarouselLoading==='function'){
+              setCarouselLoading(true,
+                `${job.message||'Processando a matéria.'} O job continua em segundo plano; não é necessário atualizar a página.`,
+                {
+                  progress:Number(job.progress)||1,
+                  title:job.status==='queued'
+                    ? 'Leitura ainda na fila'
+                    : 'Leitura inteligente continua em segundo plano'
+                }
+              );
+            }
+          }else if(typeof setCarouselJobProgress==='function'){
             setCarouselJobProgress(job);
           }
         }
 
-        try{localStorage.removeItem(JOB_KEY)}catch{}
+        clearStoredJob(jobId);
         try{state.carouselLoading=false}catch{}
         throw new Error('A tarefa não recebeu conclusão em 8 minutos. A tela foi liberada para uma nova tentativa; a Ronda principal continua operacional.');
       };
@@ -247,7 +275,7 @@
       topic,
       carousel,
       editorialReviewRequired:Boolean(copy?.disabled),
-      handoffVersion:'ronda-one-0.7.6'
+      handoffVersion:'ronda-one-0.7.7'
     };
 
     const old=btn.textContent;
@@ -278,14 +306,16 @@
 
   if(btn)btn.addEventListener('click',openRondaDesign);
 
-  // Recuperação automática da tela principal:
-  // - job local com mais de 12 min é descartado;
-  // - status preso em "reconectando" não impede /api/latest;
-  // - nenhuma recarga manual é necessária.
+  // Recupera mais rápido quando o navegador volta ao foco ou a rede retorna.
+  window.addEventListener('online',()=>recoverCoreUi({force:true}));
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden)recoverCoreUi({force:isReconnectUi()||clearStaleStoredJob()});
+  });
+
   setTimeout(()=>recoverCoreUi({force:clearStaleStoredJob()}),1800);
   setInterval(()=>{
     syncDesignButton();
-    if(isReconnectUi()||clearStaleStoredJob()) recoverCoreUi({force:true});
+    if(isReconnectUi()||clearStaleStoredJob())recoverCoreUi({force:true});
   },15000);
 
   console.info(`RONDA ONE integration ${VERSION} loaded`);
