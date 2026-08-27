@@ -58,7 +58,7 @@ function normalizeArticleVisuals(input={}){
     totalCandidates: total,
     canAutoUsePrimary: Boolean(visuals?.canAutoUsePrimary ?? primary?.autoUseAllowed),
     creditRequired: Boolean(visuals?.creditRequired),
-    policy: visuals?.policy && typeof visuals.policy==='object' ? visuals.policy : { mode:'multi-image-per-carousel', useWithoutCredit:false, aiFallbackRecommended:true },
+    policy: visuals?.policy && typeof visuals.policy==='object' ? visuals.policy : { mode:'multi-image-per-carousel', useWithoutCredit:false, aiFallbackRecommended:false, freeBankFallback:'wikimedia-commons' },
   };
 }
 
@@ -150,10 +150,10 @@ function normalizeProject(input={}){
   );
 
   return {
-    contractVersion:'ronda-one-import-v2',
+    contractVersion:'ronda-one-import-v3-carousel-first',
     source:'ronda-editorial',
     sourceVersion:clean(input.sourceVersion || 'ronda-module',80),
-    handoffVersion:clean(input.handoffVersion || 'ronda-one-0.7.7',80),
+    handoffVersion:clean(input.handoffVersion || 'ronda-one-0.7.8-carousel-first',80),
     title:clean(topic.title || input.title || carousel.topicTitle || 'Projeto da Ronda',240),
     editoria:clean(topic.editoria || input.editoria || 'Notícias',80),
     runId:clean(input.runId || '',120),
@@ -174,7 +174,7 @@ function normalizeProject(input={}){
       || (editorialReviewRequired?'review-required':'ready-for-design'),
       80
     ),
-    visualPrompt:shortVisualPrompt(topic,carousel),
+    visualPrompt:null,
     articleVisuals,
     assetCredits: collectVisualCredits(articleVisuals),
     designImportHints:{
@@ -182,11 +182,11 @@ function normalizeProject(input={}){
       separateImageLayer:true,
       separateTextLayers:true,
       separateCreditLayer:true,
-      preferredImageSource:'article-visuals',
+      preferredImageSource:'article-visuals-or-free-bank',
       imagePlacement:'per-slide',
       creditHandling:'show-when-available',
     },
-    imagePolicy:{mode:'multi-image-per-carousel',status:articleVisuals.primary||articleVisuals.alternatives?.length?'article-visuals-attached':'not-generated',provider:'Workers AI Free',sourceLabel:'Fonte da foto',creditHandling:'show-when-available'},
+    imagePolicy:{mode:'non-generative',status:articleVisuals.primary||articleVisuals.alternatives?.length?'article-visuals-attached':'free-bank-available',provider:'publisher-or-wikimedia-commons',sourceLabel:'Fonte da foto',creditHandling:'show-when-available',ai:false},
   };
 }
 

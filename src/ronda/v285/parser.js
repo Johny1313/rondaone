@@ -151,7 +151,7 @@ function sourceMatchesFeed(declaredSource, declaredSourceUrl, feed) {
 }
 
 export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000), limit = 40) {
-  const xml = String(xmlText ?? "").slice(0, 3_000_000);
+  const xml = String(xmlText ?? "").slice(0, 6_000_000);
   const cutoffTime = cutoff instanceof Date ? cutoff.getTime() : Date.parse(cutoff);
   const now = Date.now() + 5 * 60 * 1000;
   const blocks = [];

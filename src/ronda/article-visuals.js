@@ -282,7 +282,9 @@ export function extractArticleVisualsFromHtml(html, {
     policy: {
       mode: 'publisher-image-with-credit-only',
       useWithoutCredit: false,
-      aiFallbackRecommended: !primary?.autoUseAllowed,
+      aiFallbackRecommended: false,
+      freeBankFallbackRecommended: !primary?.autoUseAllowed,
+      freeBankProvider: 'wikimedia-commons',
     },
   };
 }

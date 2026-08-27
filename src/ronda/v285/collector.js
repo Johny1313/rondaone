@@ -15,8 +15,8 @@ const MEDIUM_FREQUENCY_SOURCES = new Set([
 
 function sourceRefreshMinutes(id) {
   if (HIGH_FREQUENCY_SOURCES.has(id)) return 5;
-  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 15;
-  return 30;
+  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 10;
+  return 15;
 }
 
 export async function runPool(items, concurrency, worker) {
@@ -81,21 +81,26 @@ function googleNewsTermSource(term) {
 }
 
 
-function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 240, emptyIsHealthy = false, refreshMinutes = null } = {}) {
+function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 320, emptyIsHealthy = false, refreshMinutes = null } = {}) {
+  const normalizedDomains = sourceDomains.map(normalizedSite).filter(Boolean);
+  const dedicatedFallback = normalizedDomains[0]
+    ? googleNewsSiteSource(normalizedDomains[0], region, "", 2)
+    : null;
+  const urls = [...new Set([primaryUrl, dedicatedFallback, fallbackUrl].filter(Boolean))];
   return Object.freeze({
     id,
     name,
     region,
     canonicalSource: true,
     directUrl: primaryUrl || null,
-    limit: limit || (region === "Mundo" ? 8 : 15),
+    limit: limit || (region === "Mundo" ? 15 : 24),
     scanLimit,
     emptyIsHealthy: Boolean(emptyIsHealthy),
     refreshMinutes: Math.max(5, Number(refreshMinutes) || sourceRefreshMinutes(id)),
     sourceAliases: Object.freeze(sourceAliases),
-    sourceDomains: Object.freeze(sourceDomains.map(normalizedSite).filter(Boolean)),
+    sourceDomains: Object.freeze(normalizedDomains),
     editorialHints: Object.freeze(editorialHints),
-    urls: Object.freeze([primaryUrl, fallbackUrl].filter(Boolean)),
+    urls: Object.freeze(urls),
   });
 }
 
@@ -187,7 +192,7 @@ export const FEED_COUNTS = Object.freeze({
   total: FEEDS.length,
 });
 
-const PORTAL_SUBREQUEST_LIMIT = 35;
+const PORTAL_SUBREQUEST_LIMIT = 120;
 const TERM_SUBREQUEST_LIMIT = 6;
 
 function compactError(error) {
@@ -281,7 +286,7 @@ async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 8_000, valid
       headers: {
         Accept: accept ?? "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.7",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "RondaEditorial/2.5 (+coletor editorial automatizado)",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
         ...(validator?.etag ? { "If-None-Match": validator.etag } : {}),
         ...(validator?.lastModified ? { "If-Modified-Since": validator.lastModified } : {}),
       },
@@ -349,6 +354,12 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
   const windowHours = 24;
   const validators = { ...(sourceState?.validators || {}) };
   let totalResponseMs = 0;
+  let lastUrl = sourceState?.lastUrl || null;
+  let mergedItems = [];
+  const routes = [];
+  const desiredMinimum = feed.region === "Mundo" ? 5 : 8;
+  const itemLimit = Number(feed.limit) || (feed.region === "Mundo" ? 15 : 24);
+
   for (let index = 0; index < feed.urls.length; index += 1) {
     const url = feed.urls[index];
     try {
@@ -356,69 +367,79 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       const response = await fetchWithTimeout(url, fetcher, { validator: validators[url] });
       totalResponseMs += Number(RESPONSE_TIMINGS.get(response)) || 0;
       const direct = Boolean(feed.directUrl) && String(url) === String(feed.directUrl);
+
       if (response.status === 304) {
         if (sourceState?.lastUrl === url) {
           const cached = cachedItemsFromState(sourceState, feed, cutoff);
-          return {
-            items: cached,
-            status: {
-              id: feed.id,
-              name: feed.name,
-              region: feed.region || "Brasil",
-              ok: true,
-              count: cached.length,
-              error: null,
-              warning: null,
-              fallback: !direct,
-              cached: true,
-              route: "not-modified",
-              attempts: index + 1,
-              windowHours,
-              httpStatus: 304,
-              errorCode: null,
-              responseMs: totalResponseMs,
-              lastUrl: url,
-            },
-            operational: { validators, lastUrl: url },
-          };
+          if (cached.length) {
+            mergedItems = uniqueItems([...mergedItems, ...cached], itemLimit);
+            routes.push("cache");
+            lastUrl = url;
+          }
+          if (mergedItems.length >= desiredMinimum) break;
         }
         continue;
       }
+
       successfulResponses += 1;
       validators[url] = validatorSnapshot(response);
       const xml = await decodeFeedResponse(response);
       const parseConfiguration = direct ? { ...feed, sourceAliases: [], sourceDomains: [] } : feed;
-      const items = parseFeed(xml, parseConfiguration, effectiveCutoff, Number(feed.limit) || 15);
+      const items = parseFeed(xml, parseConfiguration, effectiveCutoff, itemLimit);
+
       if (!items.length) {
-        errors.push({ code: "no-new", httpStatus: response.status, retryable: false, detail: `Sem conteúdo válido nas últimas ${windowHours} horas` });
+        errors.push({ code: "no-new", httpStatus: response.status, retryable: false, detail: "Sem conteúdo válido nesta rota nas últimas 24 horas" });
         continue;
       }
-      return {
-        items: items.map((item) => ({ ...item, collectionRoute: direct ? "direct" : "fallback" })),
-        status: {
-          id: feed.id,
-          name: feed.name,
-          region: feed.region || "Brasil",
-          ok: true,
-          count: items.length,
-          error: null,
-          warning: errors.length ? [...new Set(errors.map((item) => item.detail))].slice(0, 2).join(" | ") : null,
-          fallback: !direct,
-          cached: false,
-          route: direct ? "direct" : "fallback",
-          attempts: index + 1,
-          windowHours,
-          httpStatus: response.status,
-          errorCode: null,
-          responseMs: totalResponseMs,
-          lastUrl: url,
-        },
-        operational: { validators, lastUrl: url },
-      };
+
+      const route = direct ? "direct" : "fallback";
+      mergedItems = uniqueItems([
+        ...mergedItems,
+        ...items.map((item) => ({ ...item, collectionRoute: route }))
+      ], itemLimit);
+      routes.push(route);
+      lastUrl = url;
+
+      if (mergedItems.length >= desiredMinimum) break;
     } catch (error) {
       errors.push(errorDiagnostic(error));
     }
   }
+
+  if (mergedItems.length) {
+    const routeSet = new Set(routes);
+    const route = routeSet.has("direct") && routeSet.has("fallback")
+      ? "direct+fallback"
+      : routeSet.has("direct")
+        ? "direct"
+        : routeSet.has("fallback")
+          ? "fallback"
+          : "cache";
+
+    return {
+      items: mergedItems,
+      status: {
+        id: feed.id,
+        name: feed.name,
+        region: feed.region || "Brasil",
+        ok: true,
+        count: mergedItems.length,
+        error: null,
+        warning: errors.length ? [...new Set(errors.map((item) => item.detail))].slice(0, 2).join(" | ") : null,
+        fallback: routeSet.has("fallback"),
+        cached: routeSet.has("cache"),
+        route,
+        attempts: Math.min(feed.urls.length, successfulResponses + errors.length),
+        windowHours,
+        httpStatus: 200,
+        errorCode: null,
+        responseMs: totalResponseMs,
+        lastUrl,
+      },
+      operational: { validators, lastUrl },
+    };
+  }
+
   if (successfulResponses > 0 && feed.emptyIsHealthy) {
     const cached = cachedItemsFromState(sourceState, feed, cutoff);
     return {
@@ -439,12 +460,16 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         httpStatus: errors.at(-1)?.httpStatus ?? 200,
         errorCode: null,
         responseMs: totalResponseMs,
-        lastUrl: sourceState?.lastUrl || null,
+        lastUrl,
       },
-      operational: { validators, lastUrl: sourceState?.lastUrl || null },
+      operational: { validators, lastUrl },
     };
   }
-  const primaryError = errors.find((item) => ["blocked", "rate-limited", "timeout", "not-found"].includes(item.code)) || errors.at(-1) || { code: "unknown", detail: "Fonte indisponível", httpStatus: null };
+
+  const primaryError = errors.find((item) => ["blocked", "rate-limited", "timeout", "not-found", "budget-exhausted"].includes(item.code))
+    || errors.at(-1)
+    || { code: "unknown", detail: "Fonte indisponível", httpStatus: null };
+
   return {
     items: [],
     status: {
@@ -463,9 +488,9 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       httpStatus: primaryError.httpStatus ?? null,
       errorCode: primaryError.code || "unknown",
       responseMs: totalResponseMs || null,
-      lastUrl: sourceState?.lastUrl || null,
+      lastUrl,
     },
-    operational: { validators, lastUrl: sourceState?.lastUrl || null },
+    operational: { validators, lastUrl },
   };
 }
 
@@ -831,7 +856,7 @@ export async function collectRound({
     else portalResults[index] = deferredSourceResult(feed, state, cutoff);
   });
 
-  const dueResults = await runPool(due, 5, async ({ feed, state }) => (
+  const dueResults = await runPool(due, 8, async ({ feed, state }) => (
     collectFeed(feed, cutoff, portalFetcher, requestBudget, state)
   ));
   due.forEach((entry, index) => { portalResults[entry.index] = dueResults[index]; });
@@ -867,7 +892,7 @@ export async function collectRound({
     return buildSourceStateUpdate(entry.feed, raw, resilient, entry.state, collectedAt);
   });
 
-  const portalItems = uniqueItems(resilientPortalResults.flatMap((result) => result.items), 435);
+  const portalItems = uniqueItems(resilientPortalResults.flatMap((result) => result.items), 900);
   const portalStatuses = resilientPortalResults.map((result) => result.status);
   const portalDiagnostics = summarizePortalStatuses(portalStatuses);
 
@@ -890,7 +915,7 @@ export async function collectRound({
       dedicatedMonitoring,
       sourceStateUpdates,
       operational: {
-        portalConcurrency: 5,
+        portalConcurrency: 8,
         portalsDue: due.length,
         portalsDeferred: feeds.length - due.length,
         externalPortalRequests: requestBudget.used,
@@ -902,7 +927,7 @@ export async function collectRound({
   const initialClusters = clusterItems(portalItems);
   const social = await collectBluesky(initialClusters, cutoff, fetcher);
   const allItems = uniqueItems([...portalItems, ...social.items]);
-  const topics = buildTopics(allItems, collectedAt, 40);
+  const topics = buildTopics(allItems, collectedAt, 80);
   const sourceCount = new Set(allItems.map((item) => item.sourceName).filter(Boolean)).size;
   const socialItems = allItems.filter((item) => item.kind === "social").length;
 
@@ -928,7 +953,7 @@ export async function collectRound({
     dedicatedMonitoring,
     sourceStateUpdates,
     operational: {
-      portalConcurrency: 5,
+      portalConcurrency: 8,
       monitoringConcurrency: 3,
       socialConcurrency: 3,
       portalsDue: due.length,

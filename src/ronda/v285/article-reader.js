@@ -2,24 +2,24 @@ import { decodeEntities, plainText, stableHash } from "./parser.js";
 
 export const ARTICLE_ANALYSIS_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 export const ARTICLE_READER_LIMIT = 1;
-const MAX_HTML_BYTES = 2_500_000;
-const MAX_ARTICLE_CHARS = 12_000;
+const MAX_HTML_BYTES = 4_000_000;
+const MAX_ARTICLE_CHARS = 20_000;
 const MAX_PROMPT_CHARS = 30_000;
 const MIN_ARTICLE_WORDS = 60;
-const ARTICLE_FETCH_TIMEOUT_MS = 4_200;
-const AMP_FETCH_TIMEOUT_MS = 2_000;
-const ARTICLE_TOTAL_TIMEOUT_MS = 8_500;
+const ARTICLE_FETCH_TIMEOUT_MS = 6_500;
+const AMP_FETCH_TIMEOUT_MS = 3_500;
+const ARTICLE_TOTAL_TIMEOUT_MS = 14_000;
 const ARTICLE_PROGRESS_HEARTBEAT_MS = 1_600;
 const READING_PROGRESS_START = 8;
 const READING_PROGRESS_END = 60;
-const AI_ANALYSIS_TIMEOUT_MS = 10_500;
+const AI_ANALYSIS_TIMEOUT_MS = 5_500;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "source-evidence-v11-verified-origin-resilient";
+const CAROUSEL_PROMPT_VERSION = "source-evidence-v12-direct-article-carousel-first";
 const MIN_VERIFIED_PUBLISHER_FEED_WORDS = 90;
 const MIN_VERIFIED_PUBLISHER_DESCRIPTION_WORDS = 120;
-const MAX_PUBLISHER_ATTEMPTS = 6;
-const PUBLISHER_READ_CONCURRENCY = 3;
+const MAX_PUBLISHER_ATTEMPTS = 8;
+const PUBLISHER_READ_CONCURRENCY = 4;
 
 const AGGREGATOR_HOSTS = new Set([
   "news.google.com",
@@ -397,6 +397,49 @@ function linkedPageUrl(html, baseUrl, relName) {
   return null;
 }
 
+
+function publisherLinkFromAggregatorHtml(html, baseUrl, item = {}) {
+  const expectedHost = canonicalHostname(
+    item?.publisherHomepageUrl
+    || (item?.publisherDomain ? "https://" + item.publisherDomain : "")
+  );
+  if (!expectedHost) return null;
+
+  const normalized = String(html || "")
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/gi, "&");
+
+  const candidates = [];
+  for (const match of normalized.matchAll(/https?:\/\/[^"'<>\\\s]+/gi)) {
+    candidates.push(match[0]);
+    if (candidates.length >= 160) break;
+  }
+
+  const hrefPattern = /<a\b[^>]+href=["']([^"']+)["']/gi;
+  let hrefMatch;
+  while ((hrefMatch = hrefPattern.exec(normalized)) && candidates.length < 220) {
+    try {
+      candidates.push(new URL(decodeEntities(hrefMatch[1]), baseUrl).toString());
+    } catch {}
+  }
+
+  const accepted = [];
+  for (const raw of candidates) {
+    let parsed;
+    try { parsed = new URL(decodeEntities(raw)); } catch { continue; }
+    const host = canonicalHostname(parsed.toString());
+    if (!hostMatches(host, expectedHost)) continue;
+    if (!/^https?:$/.test(parsed.protocol)) continue;
+    if (/\.(?:jpg|jpeg|png|webp|gif|svg|css|js)(?:$|\?)/i.test(parsed.pathname)) continue;
+    const pathScore = parsed.pathname.split("/").filter(Boolean).length * 10 + parsed.pathname.length;
+    accepted.push({ url: parsed.toString(), score: pathScore });
+  }
+
+  accepted.sort((a, b) => b.score - a.score);
+  return accepted[0]?.url || null;
+}
+
 async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_MS, parentSignal = null) {
   const controller = new AbortController();
   const abortFromParent = () => {
@@ -414,7 +457,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.8.5; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -442,7 +485,18 @@ export async function readArticle(item, fetcher = fetch, { timeoutMs = ARTICLE_T
   const remaining = (limit) => Math.max(250, Math.min(limit, deadline - Date.now()));
   try {
     url = validateArticleUrl(url);
-    const first = await fetchArticleHtml(url, fetcher, remaining(ARTICLE_FETCH_TIMEOUT_MS), controller.signal);
+    let first = await fetchArticleHtml(url, fetcher, remaining(ARTICLE_FETCH_TIMEOUT_MS), controller.signal);
+
+    if (isAggregatorHostname(canonicalHostname(first.finalUrl)) && deadline - Date.now() > 1200) {
+      const publisherUrl = publisherLinkFromAggregatorHtml(first.html, first.finalUrl, item);
+      if (publisherUrl) {
+        try {
+          first = await fetchArticleHtml(publisherUrl, fetcher, remaining(ARTICLE_FETCH_TIMEOUT_MS), controller.signal);
+          url = publisherUrl;
+        } catch {}
+      }
+    }
+
     let extracted = extractArticleFromHtml(first.html, item);
     let extractionUrl = first.finalUrl;
     if (extracted.wordCount < MIN_ARTICLE_WORDS && deadline - Date.now() > 900) {
@@ -570,14 +624,13 @@ function singlePortalItem(topic, sourceStats = null) {
 function publisherArticleVerified(record) {
   if (!record) return false;
   const mode = String(record.readMode || "");
+  // Regra editorial v0.7.8:
+  // só libera o carrossel quando o texto principal veio da página da matéria
+  // ou do cache de uma leitura direta anterior da mesma página.
   const directArticle = /^full-article(?:-cache)?$/.test(mode)
     && record.contentLevel === "article"
     && wordCount(record.content) >= MIN_ARTICLE_WORDS;
-  const publisherFeed = mode === "publisher-feed-verified"
-    && record.contentLevel === "article"
-    && record.publisherFeedVerified === true
-    && wordCount(record.content) >= MIN_VERIFIED_PUBLISHER_FEED_WORDS;
-  if (!directArticle && !publisherFeed) return false;
+  if (!directArticle) return false;
   const resolvedUrl = record.extractionUrl || record.url || record.originalUrl;
   const hostname = canonicalHostname(resolvedUrl);
   return Boolean(hostname && !isAggregatorHostname(hostname));
@@ -1737,10 +1790,8 @@ export async function buildIntelligentCarousel(topic, {
   const selectedSourceName = selectedRecord.sourceName || selectedItem?.sourceName || selectedItem?.collectorName || "Fonte não informada";
   const collected = [selectedRecord];
   const readLabel = selectedRecord.readMode === "full-article-cache"
-    ? "texto principal previamente extraído do site e recuperado do cache"
-    : selectedRecord.readMode === "publisher-feed-verified"
-      ? "conteúdo integral fornecido pelo feed oficial do próprio portal após bloqueio da página direta"
-      : "texto principal extraído diretamente do site";
+    ? "texto principal previamente extraído diretamente do site e recuperado do cache"
+    : "texto principal extraído diretamente da página da matéria";
   await reportProgress(onProgress, READING_PROGRESS_END, "reading", `Matéria apurada: ${compact(selectedSourceName, 70)} — ${readLabel}.`);
   const readingDurationMs = Date.now() - readingStartedAt;
 

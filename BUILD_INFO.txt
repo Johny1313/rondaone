@@ -1,28 +1,21 @@
-RONDA ONE 0.7.7 — STABILITY + NAVIGATION CONSOLIDATION
-Data: 25/08/2026
+RONDA ONE CLOUD
+Versão: 0.7.9
+Produto: Carousel First + Coleta Boost
+Base reconstruída e conferida contra o main GitHub commit 7646ce328530da167af09aafa53767df7d6da959 antes da atualização.
 
-Base funcional consolidada:
-- 0.7.4 Multi Image Engine + Queue First
-- 0.7.5 Carousel Stability + Design Handoff
-- 0.7.6 UI Recovery + Stale Queue Guard
+Principais mudanças:
+- 39 fontes cadastradas preservadas;
+- PORTAL_SUBREQUEST_LIMIT 35 -> 120;
+- fallback dedicado por domínio;
+- complemento de feeds esparsos;
+- concorrência da coleta 5 -> 8;
+- snapshot 435 -> 900 itens;
+- assuntos 40 -> 80;
+- busca ampliada nos portais cadastrados;
+- leitura direta da matéria reforçada;
+- carrossel baseado em evidências, com conclusão determinística;
+- FORMA DESIGN sem geração de imagem por IA;
+- imagens da matéria + Banco Free + Upload + GIPHY;
+- fila inteligente max_concurrency 4.
 
-Ajustes específicos 0.7.7:
-- cache bust robusto mesmo quando app.js/styles.css chegam sem ?v=
-- shell RONDA/DESIGN/PROJETOS com injeção idempotente
-- recuperação imediata ao voltar online ou retornar à aba
-- limpeza segura do job local quando o polling é abandonado
-- landing page e health/status alinhados em 0.7.7
-- preservação de editorialStatus no handoff
-- script npm run verify:077 para validar o patch
-
-Motor de imagem mantido sem troca de modelos:
-- SDXL Lightning
-- FLUX.1 Schnell
-- FLUX.2 Klein 4B
-
-Infraestrutura preservada:
-- Cloudflare Workers AI
-- D1
-- ROUND_JOBS_QUEUE
-- INTELLIGENT_JOBS_QUEUE
-- cron */5
+Data de build: 2026-08-27

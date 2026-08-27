@@ -1,0 +1,18 @@
+RONDA ONE CLOUD v0.7.9 — PACOTE COMPLETO
+
+Este ZIP é o projeto completo, não um patch.
+
+Para atualizar o GitHub:
+1. Faça backup do repositório atual.
+2. Apague/substitua os arquivos antigos do repositório.
+3. Envie TODO o conteúdo desta pasta para a raiz do repositório.
+4. Não envie a pasta externa RONDA-ONE-CLOUD-v0.7.9-COMPLETO-GITHUB como subpasta; package.json, wrangler.jsonc, src e public devem ficar na raiz.
+5. Secrets configurados no Cloudflare Dashboard não ficam dentro deste ZIP e não devem ser apagados.
+6. Rode npm install, npm run check e npm run verify:079 antes do deploy.
+
+Estrutura principal esperada:
+/package.json
+/wrangler.jsonc
+/src/...
+/public/...
+/scripts/verify-079.mjs

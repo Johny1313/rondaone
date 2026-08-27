@@ -135,7 +135,7 @@
           <button class="tool-tab" data-panel="shapes"><span>◆</span>Formas</button>
           <button class="tool-tab" data-panel="emojis"><span>☺</span>Emojis</button>
           <button class="tool-tab" data-panel="fonts"><span>Aa</span>Fontes</button>
-          <button class="tool-tab" data-panel="ai"><span>✦</span>IA</button>
+          <button class="tool-tab" data-panel="freebank"><span>▧</span>Banco Free</button>
           <button class="tool-tab" data-panel="background"><span>◫</span>Fundo</button>
         </nav>
 
@@ -242,7 +242,29 @@
           </div>
 
 
-          <div class="panel-page" data-page="ai">
+
+          <div class="panel-page" data-page="freebank">
+            <div class="panel-heading-row">
+              <div>
+                <h2>Banco Free</h2>
+                <p>Imagens não generativas do Wikimedia Commons, com licença e crédito preservados.</p>
+              </div>
+            </div>
+            <input class="search-input" id="freeBankQuery" placeholder="Buscar imagem livre" />
+            <button class="secondary-btn full" id="freeBankSearchBtn" type="button">Buscar imagens</button>
+            <div class="helper-card">
+              <strong>Prioridade editorial</strong>
+              <span>Carrosséis vindos da Ronda usam primeiro as imagens encontradas na própria matéria. Use o Banco Free quando precisar de apoio visual adicional.</span>
+            </div>
+            <div class="helper-card">
+              <strong>Licença e crédito</strong>
+              <span>O resultado mantém autor, licença e página de origem. Confira essas informações antes de publicar.</span>
+            </div>
+            <div id="freeBankStatus" class="empty-inline">Digite um assunto para buscar imagens.</div>
+            <div id="freeBankResults" class="uploads-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:9px"></div>
+          </div>
+
+          <div class="panel-page" data-page="ai" style="display:none!important">
             <div class="panel-heading-row">
               <div><h2>IA de Imagem</h2><p>IA integrada à plataforma. Sem instalação local e disponível em qualquer dispositivo.</p></div>
               <button class="mini-btn" id="aiConnectionStatusBtn">Status</button>
@@ -1182,18 +1204,60 @@
     return {id:uid(),type:'roundRect',name,x,y,w,h,rotation:0,opacity,locked:false,visible:true,fill,fillMode:'solid',fillGradient:defaultShapeGradient(fill),strokeWidth:0,strokeColor:'#000000',radii:defaultRadii(radius),radiusLinked:true};
   }
   function buildRondaBoards(project){
-    const W=1080,H=1350,sources=(project.verificationLinks||[]).map(s=>s.sourceName).filter(Boolean),sourceLabel=sources.length?`Fonte: ${[...new Set(sources)].slice(0,3).join(' · ')}`:'Origem verificada na Ronda Editorial';
+    const W=1080,H=1350;
+    const sources=(project.verificationLinks||[]).map(s=>s.sourceName).filter(Boolean);
+    const sourceLabel=sources.length
+      ? `Fonte: ${[...new Set(sources)].slice(0,3).join(' · ')}`
+      : 'Origem verificada na Ronda Editorial';
+
     return (project.slides||[]).slice(0,15).map((slide,i)=>{
-      const title=slide.title||slide.role||`Slide ${i+1}`,subtitle=slide.subtitle||'';
+      const title=slide.title||slide.role||`Slide ${i+1}`;
+      const subtitle=slide.subtitle||'';
+      const asset=slide?.visual?.asset||null;
+      const visualUrl=String(asset?.url||'').trim();
+      const imageCredit=String(asset?.credit||asset?.sourceName||'').trim();
+
       const elements=[
         rondaRect('Fundo editorial',0,0,W,H,'#242424',100,0),
-        rondaRect('Overlay',0,0,W,H,'#000000',42,0),
+        ...(visualUrl ? [{
+          id:uid(),
+          type:'image',
+          name:'Imagem da matéria',
+          x:0,y:0,w:W,h:H,
+          rotation:0,
+          opacity:100,
+          locked:false,
+          visible:true,
+          src:visualUrl,
+          objectFit:'cover',
+          sourceWidth:W,
+          sourceHeight:H,
+          sourceOrigin:'publisher',
+          sourceUrl:asset?.articleUrl||visualUrl,
+          sourceCredit:imageCredit,
+          usageReviewRequired:true
+        }] : []),
+        rondaRect('Overlay',0,0,W,H,'#000000',visualUrl?48:42,0),
         rondaTextLayer('Função editorial',String(slide.role||'CARROSSEL').toUpperCase(),86,105,900,70,24,800,'#d7ff3f'),
         rondaTextLayer('Título',title,86,640,910,280,72,800,'#ffffff'),
-        rondaTextLayer('Subtítulo',subtitle,88,930,900,230,35,500,'#ffffff'),
-        rondaTextLayer('Origem',sourceLabel,88,1235,900,52,20,600,'#d8d8d8')
+        rondaTextLayer('Subtítulo',subtitle,88,930,900,230,35,500,'#ffffff')
       ];
-      return {id:'ronda_board_'+(i+1)+'_'+Date.now(),name:`${String(i+1).padStart(2,'0')} · ${slide.role||'Slide'}`,width:W,height:H,bg:'#242424',bgMode:'solid',gradient:clone(state.gradient),elements};
+
+      if(imageCredit){
+        elements.push(rondaTextLayer('Crédito da imagem',`Imagem: ${imageCredit}`,88,1180,900,42,18,600,'#d8d8d8'));
+      }
+      elements.push(rondaTextLayer('Origem',sourceLabel,88,1235,900,52,20,600,'#d8d8d8'));
+
+      return {
+        id:'ronda_board_'+(i+1)+'_'+Date.now(),
+        name:`${String(i+1).padStart(2,'0')} · ${slide.role||'Slide'}`,
+        width:W,
+        height:H,
+        bg:'#242424',
+        bgMode:'solid',
+        gradient:clone(state.gradient),
+        elements
+      };
     });
   }
   function applyGeneratedBackground(src){
@@ -1221,7 +1285,7 @@
     state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.platformMeta={source:'ronda-editorial',projectId:id||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||''};
     loadBoardToState(boards[0]);$('#docTitle').value=state.docTitle;state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>fitZoom());markDirty();setPlatformImportStatus('Importado da Ronda','ok');
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
-    generateRondaBackground(project);return true;
+    if(!project?.articleVisuals?.primary && !project?.articleVisuals?.alternatives?.length){const q=document.getElementById('freeBankQuery');if(q&&!q.value)q.value=project.title||'';}return true;
   }
   async function importPlatformProjectFromUrl(){
     const params=new URLSearchParams(location.search),projectId=params.get('project'),handoff=params.get('handoff');if(!projectId&&!handoff)return;
@@ -1247,7 +1311,117 @@
   $('#inlineCustomWidth').value=state.width;$('#inlineCustomHeight').value=state.height;
   state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>requestAnimationFrame(()=>fitZoom()));
   if('ResizeObserver' in window){new ResizeObserver(()=>placeArtboard()).observe(stageViewport);}
-  workspaceLoadWidths();aiLoadAll();aiRenderResults();aiRenderHistory();aiUpdateStatus('warn','Verificando IA gratuita...','Conectando ao RONDA AI Engine em modo MVP sem custos.','Cloudflare Free');setTimeout(()=>aiTestConnection(true),350);
+  function freeBankEscape(value){
+    return String(value||'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+
+  async function freeBankUse(item){
+    try{
+      const src=item.proxyUrl||item.url;
+      const response=await fetch(src,{cache:'force-cache'});
+      if(!response.ok)throw new Error('Imagem indisponível');
+      const blob=await response.blob();
+      const dataUrl=await new Promise((resolve,reject)=>{
+        const reader=new FileReader();
+        reader.onload=()=>resolve(reader.result);
+        reader.onerror=reject;
+        reader.readAsDataURL(blob);
+      });
+      const size=await imageNaturalSize(dataUrl);
+      const ratio=(size?.w||1200)/(size?.h||800);
+      const maxW=state.width*.74,maxH=state.height*.74;
+      let w=maxW,h=w/ratio;
+      if(h>maxH){h=maxH;w=h*ratio;}
+
+      state.elements.push({
+        id:uid(),
+        type:'image',
+        name:item.title||'Banco Free',
+        x:(state.width-w)/2,
+        y:(state.height-h)/2,
+        w,h,
+        rotation:0,
+        opacity:100,
+        locked:false,
+        visible:true,
+        src:dataUrl,
+        sourceWidth:size?.w||1200,
+        sourceHeight:size?.h||800,
+        objectFit:'cover',
+        sourceOrigin:'wikimedia-commons',
+        sourceUrl:item.pageUrl||item.originalUrl||item.url||'',
+        sourceCredit:item.attribution||item.author||'',
+        sourceLicense:item.license||'',
+        sourceLicenseUrl:item.licenseUrl||''
+      });
+
+      state.selectedId=state.elements.at(-1).id;
+      state.selectedIds=[state.selectedId];
+      pushHistory();
+      renderAll();
+      markDirty();
+      showToast('Imagem livre inserida na prancheta');
+    }catch{
+      showToast('Não foi possível inserir a imagem do Banco Free');
+    }
+  }
+
+  function freeBankRender(results){
+    const host=document.getElementById('freeBankResults');
+    const status=document.getElementById('freeBankStatus');
+    if(!host||!status)return;
+    host.innerHTML='';
+
+    if(!results?.length){
+      status.textContent='Nenhuma imagem livre encontrada para este termo.';
+      return;
+    }
+
+    status.textContent=`${results.length} imagens livres encontradas.`;
+
+    results.forEach((item,index)=>{
+      const card=document.createElement('div');
+      card.style.cssText='border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden';
+      card.innerHTML=`
+        <img src="${freeBankEscape(item.url)}" alt="${freeBankEscape(item.title)}" style="width:100%;aspect-ratio:1.25;object-fit:cover;display:block">
+        <div style="padding:7px;display:grid;gap:5px">
+          <strong style="font-size:9px;line-height:1.25">${freeBankEscape(item.title||'Imagem')}</strong>
+          <span style="font-size:8px;color:var(--muted);line-height:1.3">${freeBankEscape(item.attribution||item.license||'Wikimedia Commons')}</span>
+          <button class="mini-btn" type="button">Usar na prancheta</button>
+        </div>`;
+      card.querySelector('button').onclick=()=>freeBankUse(item);
+      host.appendChild(card);
+    });
+  }
+
+  async function freeBankSearch(){
+    const input=document.getElementById('freeBankQuery');
+    const status=document.getElementById('freeBankStatus');
+    const query=String(input?.value||'').trim();
+    if(query.length<2){
+      showToast('Digite pelo menos 2 caracteres');
+      return;
+    }
+
+    if(status)status.textContent='Buscando imagens livres…';
+
+    try{
+      const response=await fetch('/api/free-images?q='+encodeURIComponent(query)+'&limit=14',{cache:'no-store'});
+      const out=await response.json();
+      if(!response.ok||!out.ok)throw new Error(out.error||'Busca indisponível');
+      freeBankRender(out.results||[]);
+    }catch(error){
+      if(status)status.textContent=error?.message||'Banco Free indisponível.';
+      showToast('Não foi possível buscar imagens livres');
+    }
+  }
+
+  const freeBankSearchBtn=document.getElementById('freeBankSearchBtn');
+  const freeBankQuery=document.getElementById('freeBankQuery');
+  if(freeBankSearchBtn)freeBankSearchBtn.onclick=freeBankSearch;
+  if(freeBankQuery)freeBankQuery.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();freeBankSearch();}});
+
+  workspaceLoadWidths();
   markSaved();updateUndoButtons();updateIntegrationStatus();initFonts();setTimeout(importPlatformProjectFromUrl,120);
 })();
 
