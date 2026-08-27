@@ -1,21 +1,43 @@
 RONDA ONE CLOUD
-Versão: 0.7.9
-Produto: Carousel First + Coleta Boost
-Base reconstruída e conferida contra o main GitHub commit 7646ce328530da167af09aafa53767df7d6da959 antes da atualização.
-
-Principais mudanças:
-- 39 fontes cadastradas preservadas;
-- PORTAL_SUBREQUEST_LIMIT 35 -> 120;
-- fallback dedicado por domínio;
-- complemento de feeds esparsos;
-- concorrência da coleta 5 -> 8;
-- snapshot 435 -> 900 itens;
-- assuntos 40 -> 80;
-- busca ampliada nos portais cadastrados;
-- leitura direta da matéria reforçada;
-- carrossel baseado em evidências, com conclusão determinística;
-- FORMA DESIGN sem geração de imagem por IA;
-- imagens da matéria + Banco Free + Upload + GIPHY;
-- fila inteligente max_concurrency 4.
-
+Versão: 0.8.0
+Produto: Mesa Editorial Inteligente + Editorial Events + Carousel First + Coleta Boost
 Data de build: 2026-08-27
+
+Base preservada:
+- 39 fontes cadastradas;
+- Coleta Boost v0.7.9;
+- busca ampliada;
+- leitura direta reforçada;
+- Carousel First;
+- FORMA DESIGN sem geração de imagem por IA.
+
+Nova camada v0.8.0:
+- Evento Editorial persistente no D1;
+- deduplicação/agrupamento contextual leve;
+- leitura incremental de uma matéria por job;
+- identificação de informação nova;
+- timeline significativa;
+- classificação detalhada;
+- papéis das fontes;
+- confirmação objetiva;
+- divergências;
+- relevância 0–100;
+- tração e aceleração;
+- status editorial;
+- pontos em aberto;
+- sugestões de pauta;
+- rastreabilidade;
+- Mesa orientada por eventos;
+- histórico de eventos;
+- produção editorial e carrossel por evidências.
+
+Infraestrutura:
+- mantém D1 atual;
+- mantém ROUND_JOBS_QUEUE;
+- reutiliza INTELLIGENT_JOBS_QUEUE para event-enrich;
+- nenhum novo binding obrigatório;
+- coleta não espera enriquecimento editorial.
+
+Verificação do pacote:
+- npm run check
+- npm run verify:080

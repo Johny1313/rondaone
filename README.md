@@ -1,108 +1,250 @@
-# RONDA ONE Cloud v0.7.9 — Carousel First + Coleta Boost
+# RONDA ONE Cloud v0.8.0 — Mesa Editorial Inteligente
 
-Versão completa do RONDA ONE para Cloudflare Workers.
+Versão completa do **RONDA ONE** para Cloudflare Workers, evoluindo a plataforma de agregador de notícias para uma **Mesa Editorial orientada por eventos**, sem sacrificar a prioridade de estabilidade, velocidade e coleta contínua.
 
-## Prioridades desta versão
+## Conceito central
 
-1. ampliar a captação real dos portais cadastrados;
-2. abrir e ler a matéria original antes de gerar o carrossel;
-3. nunca criar fatos que não estejam sustentados pela matéria;
-4. garantir que o processamento do carrossel termine em um estado claro;
-5. usar imagens da própria matéria ou bancos de imagem livres;
-6. manter o FORMA/RONDA DESIGN sem geração de imagem por IA.
+A aplicação passa a trabalhar com este fluxo editorial:
 
-## Coleta
+```text
+COLETA
+  ↓
+NORMALIZAÇÃO
+  ↓
+DEDUPLICAÇÃO / AGRUPAMENTO
+  ↓
+EVENTO EDITORIAL
+  ↓
+LEITURA DA MATÉRIA
+  ↓
+EVIDÊNCIAS E ENRIQUECIMENTO
+  ↓
+INFORMAÇÃO NOVA / DIVERGÊNCIAS
+  ↓
+RELEVÂNCIA / TRAÇÃO / CONFIRMAÇÃO
+  ↓
+MESA EDITORIAL
+  ↓
+PRODUÇÃO / CARROSSEL
+```
 
-O catálogo possui 39 fontes: 26 Brasil e 13 Mundo.
+A coleta continua desacoplada do processamento mais pesado. Falha de leitura ou de enriquecimento **não bloqueia uma nova ronda**.
 
-A v0.7.9 acrescenta:
+## 1. Coleta e descoberta
 
-- orçamento de consultas externas de até 120 por ronda;
-- fallback dedicado por domínio para cada portal;
-- complemento de feeds com poucos resultados;
+A base da v0.7.9 foi preservada:
+
+- 39 fontes cadastradas: 26 Brasil e 13 Mundo;
+- budget de até 120 consultas externas por ronda;
+- fallback dedicado por domínio;
 - concorrência de coleta 8;
-- fontes médias consultadas a cada 10 minutos;
-- demais fontes consultadas a cada 15 minutos;
+- complemento de feeds esparsos;
 - até 900 itens no snapshot;
 - até 80 assuntos;
-- parser de feed com até 6 MB de XML.
+- busca ampliada em `/api/search-news`;
+- Cron Cloudflare a cada 5 minutos.
 
-O teto de 120 é um limite de segurança, não uma meta de consumo. O coletor encerra rotas adicionais quando já obteve cobertura suficiente e reaproveita cache/validators.
+## 2. Evento Editorial
 
-## Busca ampliada
+A v0.8.0 cria a entidade persistente **EVENTO EDITORIAL** no D1.
 
-O campo de busca mantém o filtro do snapshot atual e, com 3 ou mais caracteres, consulta também `/api/search-news` nos domínios cadastrados no RONDA.
+Cada evento mantém, conforme dados disponíveis:
 
-A busca ampliada mantém a janela editorial de 24 horas e pode retornar até 80 itens.
+- `eventId` persistente;
+- título;
+- editoria e subeditoria;
+- tema;
+- entidades relacionadas;
+- fontes e matérias;
+- primeira e última publicação;
+- status editorial;
+- relevância 0–100;
+- tração e crescimento;
+- nível de confirmação e motivos;
+- divergências detectadas;
+- timeline significativa;
+- informações novas;
+- pontos em aberto;
+- sugestões de pauta;
+- resumo editorial estruturado;
+- rastreabilidade para as URLs originais.
 
-## Leitura das matérias
+O sistema tenta manter o mesmo `eventId` entre rondas quando novas matérias pertencem ao mesmo acontecimento.
 
-Antes do carrossel, o RONDA tenta chegar à matéria original e extrair o texto principal.
+## 3. Deduplicação e agrupamento
 
-A v0.7.9 usa:
+O agrupamento deixa de depender apenas de títulos idênticos. A camada leve de clustering considera:
 
-- até 4 MB de HTML;
-- até 20 mil caracteres úteis;
-- 6,5 s para a página principal;
-- 3,5 s para AMP;
-- até 14 s de orçamento total de leitura;
-- resolvedor de URL do portal quando a descoberta chega por agregador.
+- tokens normalizados;
+- entidades e nomes próprios;
+- contexto da descrição;
+- aliases editoriais;
+- proximidade temporal;
+- sobreposição temática.
 
-O carrossel só é aprovado quando existe leitura direta da matéria ou cache produzido por uma leitura direta anterior. RSS e agregadores podem descobrir uma pauta, mas não substituem a leitura da matéria para validação factual.
+Isso evita embeddings caros no caminho crítico da coleta e mantém o agrupamento rápido.
 
-## Carrossel
+## 4. Leitura completa e rastreabilidade
 
-A regra editorial é obrigatória:
+A leitura continua com a política **Carousel First / Source Evidence**:
 
-- nenhuma notícia é inventada;
-- nenhuma lacuna factual é preenchida por suposição;
-- fatos, datas, nomes e números precisam ser sustentados pela matéria;
-- se uma fonte não puder ser lida, o sistema tenta outras fontes do mesmo assunto;
-- se nenhuma fonte puder ser validada, o job termina bloqueado com um motivo claro;
-- o fallback determinístico usa somente evidências extraídas da matéria.
+- tenta chegar à URL original do portal;
+- aceita leitura direta ou cache produzido por leitura direta anterior;
+- extrai texto principal e imagens encontradas na matéria;
+- mantém origem, URL e evidências;
+- RSS/agregador pode descobrir a pauta, mas não substitui a matéria para validação factual do carrossel;
+- leitura parcial/falha é registrada e não bloqueia o evento nem a ronda.
 
-O Workers AI pode permanecer disponível internamente para redação editorial e traduções existentes, mas o carrossel possui fallback determinístico e não depende da IA para terminar o processamento.
+O enriquecimento trabalha com **uma matéria por mensagem de fila** para reduzir mistura entre conteúdos.
 
-## FORMA / RONDA DESIGN
+## 5. Processamento incremental
 
-A geração de imagem por IA está desativada no produto.
+A v0.8.0 reaproveita a Queue inteligente já existente. Não é necessário criar uma nova Queue no Cloudflare.
+
+Mensagens `event-enrich` são separadas das mensagens de carrossel pelo `type` do job.
+
+O processamento:
+
+- limita a quantidade de novas leituras por ronda;
+- evita reler URL já concluída quando possível;
+- reprocessa jobs antigos somente com limites;
+- salva o resultado antes de encerrar;
+- continua a ronda mesmo quando um artigo falha.
+
+## 6. Mesa Editorial
+
+A aba **Mesa** passa a priorizar eventos, com filtros para:
+
+- Breaking;
+- Em alta;
+- Em desenvolvimento;
+- Monitorados;
+- Brasil;
+- Mundo;
+- Últimas.
+
+Também mostra:
+
+- **Desde a última ronda**;
+- **Assuntos em aceleração**;
+- **Alertas editoriais**;
+- relevância;
+- tração;
+- confirmação;
+- divergências;
+- informação nova.
+
+A operação clássica da Mesa foi preservada e pode ser reexibida pelo botão de compatibilidade.
+
+## 7. Detalhe do evento
+
+Ao abrir um evento, a interface apresenta:
+
+- resumo;
+- o que há de novo;
+- nível de confirmação e motivos;
+- timeline;
+- fontes e links originais;
+- matérias e status de leitura;
+- divergências;
+- pontos em aberto;
+- sugestões de pauta;
+- ações de produção.
+
+## 8. Produção editorial
+
+O endpoint de produção do evento suporta:
+
+- resumo;
+- título;
+- subtítulo;
+- breaking;
+- texto social;
+- carrossel;
+- roteiro;
+- timeline;
+- perguntas e respostas.
+
+A produção determinística usa apenas fatos/evidências presentes no evento. O carrossel mantém `unsupportedFactsAllowed: false`.
+
+## 9. FORMA / RONDA DESIGN
+
+A geração de imagem por IA continua **desativada** no Design.
 
 Prioridade visual:
 
-1. imagem da matéria;
-2. Banco Free (Wikimedia Commons);
-3. upload manual;
+1. imagens encontradas na matéria;
+2. Banco Free / Wikimedia Commons;
+3. upload;
 4. GIPHY;
 5. composição gráfica.
 
-As rotas públicas `/api/ai/*` usadas pelo Design retornam `410 DESIGN_AI_REMOVED`.
+As rotas públicas de IA do Design continuam retornando `410 DESIGN_AI_REMOVED`.
 
-Imagens obtidas de matérias mantêm origem/crédito para revisão editorial. A presença de uma imagem em uma notícia não garante automaticamente direito de republicação; a redação deve conferir a autorização/licença antes de publicar.
+O binding Workers AI permanece configurado apenas para funcionalidades editoriais legadas compatíveis, como tradução e apoio opcional ao carrossel. A coleta e a nova camada de eventos **não dependem dele para funcionar**.
 
-## Cloudflare
+## 10. Histórico Editorial
 
-A aplicação usa:
+O Histórico recebeu uma segunda visão para **Eventos editoriais**, mantendo o histórico de rondas existente.
+
+Filtros disponíveis:
+
+- Hoje;
+- 24 horas;
+- 7 dias;
+- 30 dias;
+- intervalo personalizado;
+- status;
+- busca textual.
+
+A API também aceita filtros por editoria, região, fonte e termo monitorado.
+
+## 11. Banco D1
+
+As tabelas da nova camada são criadas/migradas de forma aditiva:
+
+- `editorial_events`;
+- `editorial_event_articles`;
+- `editorial_event_updates`.
+
+O banco e as tabelas atuais da Ronda são preservados.
+
+## 12. Cloudflare
+
+A configuração continua usando os recursos existentes:
 
 - Workers;
 - D1;
-- Queues;
+- `ROUND_JOBS_QUEUE`;
+- `INTELLIGENT_JOBS_QUEUE`;
 - Assets;
-- cron a cada 5 minutos;
-- observability.
+- Cron de 5 minutos;
+- Observability.
 
-A fila de carrossel está configurada com `max_concurrency: 4` e `max_batch_timeout: 1`, aproveitando o Workers Paid.
+Não há novo binding obrigatório para fazer o deploy da v0.8.0.
 
-## Deploy
+## 13. Testes
+
+Antes do deploy execute:
 
 ```bash
 npm install
 npm run check
-npm run verify:079
+npm run verify:080
+```
+
+`verify:080` executa verificações estruturais e três rodadas automatizadas:
+
+1. **Funcional** — clustering, eventos, evidências e produção;
+2. **Editorial** — agrupamento e evolução de um mesmo acontecimento, URLs preservadas e divergência;
+3. **Estabilidade** — idempotência, repetição, conteúdo parcial e ausência de loops de processamento.
+
+Depois:
+
+```bash
 npm run deploy
 ```
 
-No GitHub, este pacote pode substituir o conteúdo do repositório atual. Não é necessário aplicar os ZIPs de patch 0.7.8 ou 0.7.9 separadamente.
+## 14. Limite da verificação local
 
-## Verificação
-
-`npm run verify:079` confere versão, 39 fontes, coleta ampliada, busca, leitura de matérias, remoção funcional da IA no Design, Queue e parser.
+Os testes incluídos validam código e comportamento determinístico fora da infraestrutura Cloudflare. A conferência final de D1, Queues, latência e comportamento dos 39 portais deve ser feita após o deploy no ambiente Cloudflare real.

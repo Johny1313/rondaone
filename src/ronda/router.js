@@ -1,6 +1,7 @@
 import rondaWorker from './v285/index.js';
 import { runFreeRoundQueue } from './v285/free-runtime.js';
 import { rewriteRondaHtml } from './shell.js';
+import { runEditorialEventQueue } from './editorial-events.js';
 
 function modifiedHeaders(response, contentType){
   const headers=new Headers(response.headers);
@@ -41,14 +42,18 @@ export async function handleRonda(request,env,ctx){
 export async function runRondaQueue(batch,env){
   const messages=Array.isArray(batch?.messages)?batch.messages:[];
   const free=[];
+  const editorial=[];
   const original=[];
   for(const message of messages){
     const body=message?.body&&typeof message.body==='object'?message.body:{};
     const type=String(body.type||'');
     const isRoundMessage=type==='round'||type.startsWith('round-')||(!type&&batch?.queue==='ronda-one-round-jobs');
-    (isRoundMessage?free:original).push(message);
+    if(isRoundMessage) free.push(message);
+    else if(type==='event-enrich'||batch?.queue==='ronda-one-editorial-jobs') editorial.push(message);
+    else original.push(message);
   }
   if(free.length) await runFreeRoundQueue({...batch,messages:free},env);
+  if(editorial.length) await runEditorialEventQueue({...batch,messages:editorial},env);
   if(original.length&&typeof rondaWorker.queue==='function') await rondaWorker.queue({...batch,messages:original},env);
 }
 

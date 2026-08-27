@@ -57,13 +57,25 @@ export function normalizeText(value = "") {
     .trim();
 }
 
+function canonicalEventText(value = "") {
+  return normalizeText(value)
+    .replace(/\bsupremo tribunal federal\b/g, "stf")
+    .replace(/\bsupremo\b/g, "stf")
+    .replace(/\bministerio publico federal\b/g, "mpf")
+    .replace(/\bministerio publico\b/g, "mp")
+    .replace(/\b(julgamento|julga|julgar|julgou|analise|analisa|analisar)\b/g, "julga")
+    .replace(/\b(comeca|inicia|retoma|recomeca)\b/g, "inicia")
+    .replace(/\b(registro|registros)\b/g, "registro")
+    .replace(/\b(conexao|conexoes)\b/g, "conexao");
+}
+
 export function titleTokens(title) {
   const key = String(title || "");
   const cached = titleTokenCache.get(key);
   if (cached) return cached;
   const output = [];
   const seen = new Set();
-  for (const token of normalizeText(title).split(/\s+/)) {
+  for (const token of canonicalEventText(title).split(/\s+/)) {
     if (token.length < 3 || STOPWORDS.has(token) || seen.has(token)) continue;
     seen.add(token);
     output.push(token);
@@ -72,6 +84,44 @@ export function titleTokens(title) {
   if (titleTokenCache.size >= TITLE_TOKEN_CACHE_LIMIT) titleTokenCache.delete(titleTokenCache.keys().next().value);
   titleTokenCache.set(key, output);
   return output;
+}
+
+function properNounTokens(value = "") {
+  const raw = plainText(value);
+  const matches = raw.match(/\b[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç0-9.-]{2,}\b/g) || [];
+  const output = [];
+  for (const match of matches) {
+    const token = canonicalEventText(match);
+    if (!token || STOPWORDS.has(token) || output.includes(token)) continue;
+    output.push(token);
+    if (output.length >= 8) break;
+  }
+  return output;
+}
+
+function contextTokens(item = {}) {
+  const description = plainText(item?.description || item?.summary || "");
+  if (!description) return [];
+  return titleTokens(description).slice(0, 10);
+}
+
+function setOverlapScore(left = [], rightSet = new Set()) {
+  if (!left.length || !rightSet.size) return 0;
+  let overlap = 0;
+  for (const token of left) if (rightSet.has(token)) overlap += 1;
+  return overlap / Math.max(1, Math.min(left.length, rightSet.size));
+}
+
+function clusterSemanticScore(signals, cluster) {
+  const titleScore = tokenSimilarityToCluster(signals.tokens, cluster);
+  const contextScore = tokenSimilarity(signals.context, cluster.contextTokens || []);
+  const entityScore = setOverlapScore(signals.entities, cluster.entitySet || new Set());
+  const latest = Number(cluster.latestPublishedAt) || 0;
+  const current = Date.parse(signals.item?.publishedAt || 0);
+  const gapHours = latest && Number.isFinite(current) ? Math.abs(current - latest) / 3_600_000 : 24;
+  const timeScore = Math.max(0, 1 - Math.min(1, gapHours / 24));
+  if (titleScore < 0.14 && entityScore === 0 && contextScore < 0.22) return 0;
+  return Math.min(1, titleScore * 0.68 + contextScore * 0.18 + entityScore * 0.09 + timeScore * 0.05);
 }
 
 export function tokenSimilarity(left, right) {
@@ -277,7 +327,7 @@ export function buildCarouselBrief(topic = {}) {
   };
 }
 
-export function clusterItems(items, threshold = 0.36) {
+export function clusterItems(items, threshold = 0.31) {
   const clusters = [];
   const tokenIndex = new Map();
   const ordered = boundedRecentItems(items, MAX_CLUSTER_INPUT_ITEMS);
@@ -296,9 +346,13 @@ export function clusterItems(items, threshold = 0.36) {
   for (const item of ordered) {
     const tokens = titleTokens(item.title);
     if (!tokens.length) continue;
+    const context = contextTokens(item);
+    const entities = properNounTokens(item.title);
+    const indexTokens = [...new Set([...tokens, ...entities, ...context.slice(0, 4)])];
+    const signals = { item, tokens, context, entities };
 
     const candidateIndexes = new Set();
-    for (const token of tokens) {
+    for (const token of indexTokens) {
       const indexes = tokenIndex.get(token);
       if (!indexes) continue;
       for (const index of indexes) candidateIndexes.add(index);
@@ -307,7 +361,7 @@ export function clusterItems(items, threshold = 0.36) {
     let bestIndex = -1;
     let bestScore = 0;
     for (const index of [...candidateIndexes].sort((a, b) => a - b)) {
-      const score = tokenSimilarityToCluster(tokens, clusters[index]);
+      const score = clusterSemanticScore(signals, clusters[index]);
       if (score > bestScore) {
         bestIndex = index;
         bestScore = score;
@@ -317,18 +371,34 @@ export function clusterItems(items, threshold = 0.36) {
     if (bestIndex >= 0 && bestScore >= threshold) {
       const best = clusters[bestIndex];
       best.items.push(item);
-      const before = new Set(best.tokens);
-      best.tokens = [...new Set([...best.tokens, ...tokens])].slice(0, 18);
+      const previousTokens = new Set(best.tokens);
+      best.tokens = [...new Set([...best.tokens, ...tokens])].slice(0, 20);
       best.tokenSet = new Set(best.tokens);
-      addToIndex(bestIndex, best.tokens.filter((token) => !before.has(token)));
+      best.contextTokens = [...new Set([...(best.contextTokens || []), ...context])].slice(0, 18);
+      best.contextSet = new Set(best.contextTokens);
+      best.entities = [...new Set([...(best.entities || []), ...entities])].slice(0, 12);
+      best.entitySet = new Set(best.entities);
+      const time = Date.parse(item?.publishedAt || 0);
+      if (Number.isFinite(time)) best.latestPublishedAt = Math.max(Number(best.latestPublishedAt) || 0, time);
+      addToIndex(bestIndex, [...best.tokens.filter((token) => !previousTokens.has(token)), ...entities, ...context.slice(0, 4)]);
     } else {
       const clusterIndex = clusters.length;
-      const cluster = { tokens, tokenSet: new Set(tokens), items: [item] };
+      const time = Date.parse(item?.publishedAt || 0);
+      const cluster = {
+        tokens,
+        tokenSet: new Set(tokens),
+        contextTokens: context,
+        contextSet: new Set(context),
+        entities,
+        entitySet: new Set(entities),
+        latestPublishedAt: Number.isFinite(time) ? time : 0,
+        items: [item],
+      };
       clusters.push(cluster);
-      addToIndex(clusterIndex, tokens);
+      addToIndex(clusterIndex, indexTokens);
     }
   }
-  return clusters.map(({ tokenSet: _tokenSet, ...cluster }) => cluster);
+  return clusters.map(({ tokenSet: _tokenSet, contextSet: _contextSet, entitySet: _entitySet, latestPublishedAt: _latestPublishedAt, ...cluster }) => cluster);
 }
 
 function positiveNumber(value) {

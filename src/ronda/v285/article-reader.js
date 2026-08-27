@@ -1,4 +1,5 @@
 import { decodeEntities, plainText, stableHash } from "./parser.js";
+import { extractArticleVisualsFromHtml } from "../article-visuals.js";
 
 export const ARTICLE_ANALYSIS_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 export const ARTICLE_READER_LIMIT = 1;
@@ -499,6 +500,14 @@ export async function readArticle(item, fetcher = fetch, { timeoutMs = ARTICLE_T
 
     let extracted = extractArticleFromHtml(first.html, item);
     let extractionUrl = first.finalUrl;
+    let articleVisuals = null;
+    try {
+      articleVisuals = extractArticleVisualsFromHtml(first.html, {
+        articleUrl: extractionUrl || url,
+        resolvedUrl: extractionUrl || url,
+        sourceName: item?.sourceName || item?.collectorName || "",
+      });
+    } catch {}
     if (extracted.wordCount < MIN_ARTICLE_WORDS && deadline - Date.now() > 900) {
       const ampUrl = linkedPageUrl(first.html, first.finalUrl, "amphtml");
       if (ampUrl && ampUrl !== first.finalUrl) {
@@ -508,6 +517,14 @@ export async function readArticle(item, fetcher = fetch, { timeoutMs = ARTICLE_T
           if (ampExtracted.wordCount > extracted.wordCount) {
             extracted = { ...ampExtracted, method: `amp-${ampExtracted.method}` };
             extractionUrl = amp.finalUrl;
+            try {
+              const ampVisuals = extractArticleVisualsFromHtml(amp.html, {
+                articleUrl: extractionUrl || url,
+                resolvedUrl: extractionUrl || url,
+                sourceName: item?.sourceName || item?.collectorName || "",
+              });
+              if ((ampVisuals?.totalCandidates || 0) > (articleVisuals?.totalCandidates || 0)) articleVisuals = ampVisuals;
+            } catch {}
           }
         } catch {}
       }
@@ -519,8 +536,10 @@ export async function readArticle(item, fetcher = fetch, { timeoutMs = ARTICLE_T
       extractionUrl,
       sourceName: item?.sourceName || item?.collectorName || "Fonte não informada",
       title: extracted.title || item?.title || "Notícia sem título",
+      description: extracted.description || item?.description || null,
       publishedAt: extracted.publishedAt || item?.publishedAt || null,
       byline: extracted.byline || null,
+      images: articleVisuals,
       wordCount: extracted.wordCount,
       contentLevel: "article",
       readMode: "full-article",

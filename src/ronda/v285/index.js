@@ -91,6 +91,7 @@ import {
   writingStylePrompt,
 } from "./profile.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
+import { enqueueEditorialEnrichmentJobs, syncEditorialEvents } from "../editorial-events.js";
 
 const VERSION = "2.8.5";
 const INTELLIGENT_JOB_STALE_LABEL = "2 minutos";
@@ -333,7 +334,7 @@ function withEditorias(payload) {
   const socialItems = items.filter((item) => item.kind === "social").length;
   return {
     ...translatedPayload,
-    schemaVersion: 5,
+    schemaVersion: 6,
     catalog: { version: CATALOG_VERSION, portals: FEEDS.length },
     sources,
     items,
@@ -780,8 +781,37 @@ async function performRound(env, triggerType, options = {}) {
         payload = portugueseOnlyFallback(payload);
       }
       payload = withEditorias(payload);
-      payload.schemaVersion = 5;
+      payload.schemaVersion = 6;
       payload.catalog = { version: CATALOG_VERSION, portals: FEEDS.length };
+
+      // v0.8.0 — EVENTO EDITORIAL.
+      // A coleta já terminou neste ponto. O enriquecimento pesado é enviado para
+      // uma fila separada e nunca impede a próxima ronda.
+      try {
+        const editorialSync = await syncEditorialEvents(db, payload.topics || [], {
+          monitoringTerms,
+          runId,
+          at: payload.collectedAt || new Date(),
+        });
+        const queueResult = await enqueueEditorialEnrichmentJobs(env, db, editorialSync.enrichmentCandidates || []);
+        payload.editorialEvents = {
+          ...(editorialSync.summary || {}),
+          enrichmentQueued: queueResult.queued || 0,
+          enrichmentQueueReady: Boolean(queueResult.available),
+          mode: "event-centric-incremental",
+        };
+      } catch (error) {
+        payload.editorialEvents = {
+          ok: false,
+          mode: "event-centric-incremental",
+          enrichmentQueued: 0,
+          error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+        };
+        structuredLog("editorial_event_sync_failed", {
+          runId,
+          detail: payload.editorialEvents.error,
+        });
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
       if (collectedPayload?.ok && Array.isArray(collectedPayload.items) && collectedPayload.items.length) {
@@ -814,7 +844,7 @@ async function performRound(env, triggerType, options = {}) {
           ok: false,
           collectionStatus: "failed",
           degraded: true,
-          schemaVersion: 5,
+          schemaVersion: 6,
           collectedAt: base.collectedAt || new Date().toISOString(),
           windowHours: 24,
           durationMs: Number(base.durationMs) || Date.now() - Date.parse(startedAt),
@@ -1125,13 +1155,14 @@ async function handleApi(request, env, url, ctx) {
         catalogWorld: FEEDS.filter((feed) => feed.region === "Mundo").length,
       },
       portalCollection: {
-        strategy: "scheduled-official-feed-shared-fallback-persistent-cache",
+        strategy: "official-feed-dedicated-domain-fallback-persistent-cache",
         sharedFallbackQueries: true,
+        dedicatedDomainFallback: true,
         sourceDomainMatching: true,
         lastKnownGoodCache: true,
         cacheWindowHours: 72,
-        maxConcurrency: 5,
-        staggeredIntervalsMinutes: [5, 15, 30],
+        maxConcurrency: 8,
+        staggeredIntervalsMinutes: [5, 10, 15],
         statusModes: ["direct", "fallback", "not-modified", "cache", "no-new", "blocked", "rate-limited", "timeout", "failed"],
       },
       editorialClassification: {
@@ -1164,19 +1195,29 @@ async function handleApi(request, env, url, ctx) {
         deadLetterQueueConfigured: true,
         executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
         articleLimit: 1,
-        readingStrategy: "try-up-to-3-publisher-sources-with-history",
+        readingStrategy: "try-up-to-8-publisher-sources-with-history",
         cycleMode: "one-read-publisher-article-one-script",
         cycleFinalization: "terminal-and-released",
         nextCycleAfterTerminal: true,
         factPipeline: "source-evidence-extraction-then-redaction",
         factsGeneratedByAi: false,
         publisherArticleRequired: true,
-        publisherAttemptsMax: 3,
+        publisherAttemptsMax: 8,
         editorialQualityGate: true,
         articleReadCacheHours: 12,
         perSourceTimeoutSeconds: 7,
         readingConcurrency: 1,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+      },
+      editorialEvents: {
+        enabled: true,
+        centralEntity: "EVENTO EDITORIAL",
+        storage: "D1 incremental",
+        enrichmentQueueReady: Boolean(env.EDITORIAL_JOBS_QUEUE?.send || env.EDITORIAL_JOBS_QUEUE?.sendBatch || env.INTELLIGENT_JOBS_QUEUE?.send || env.INTELLIGENT_JOBS_QUEUE?.sendBatch),
+        enrichmentQueueMode: env.EDITORIAL_JOBS_QUEUE ? "dedicated" : "shared-intelligent",
+        oneArticlePerJob: true,
+        collectionBlocking: false,
+        features: ["timeline", "new-information", "confirmation", "divergences", "relevance", "traction", "open-questions", "production"],
       },
     });
   }

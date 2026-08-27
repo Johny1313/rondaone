@@ -106,5 +106,5 @@
     timer=setTimeout(()=>expandedSearch(query),550);
   });
 
-  console.info("RONDA ONE search boost 0.7.9 loaded");
+  console.info("RONDA ONE search boost 0.8.0 loaded");
 })();

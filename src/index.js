@@ -4,6 +4,7 @@ import { handleProjectsApi } from './projects/service.js';
 import { handleArticleVisualsApi } from './ronda/article-visuals.js';
 import { handleFreeImagesApi } from './ronda/free-images.js';
 import { handleRegisteredNewsSearchApi } from './ronda/search-news.js';
+import { handleEditorialEventsApi } from './ronda/editorial-events.js';
 
 function json(data,status=200){
   return Response.json(data,{
@@ -26,7 +27,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.7.9',
+      version:'0.8.0',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -46,6 +47,9 @@ export default {
       carouselMode:'direct-article-source-evidence',
       discoveryMode:'official-feed-plus-dedicated-domain-fallback',
       registeredSourceSearch:true,
+      editorialEvents:true,
+      editorialPipeline:'collect-normalize-deduplicate-cluster-event-read-enrich',
+      editorialIntelligence:'incremental-evidence-first',
       carouselSafety:{
         directArticleRequired:true,
         cachedDirectArticleAllowed:true,
@@ -68,12 +72,22 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-079-collection-boost'
+        assetCacheBust:'2.8.5-080-editorial-events'
       },
       navigation:{
         ronda:'/ronda',
         design:'/design/',
         projects:'/projects/'
+      },
+      editorialMesa:{
+        eventCentric:true,
+        changesSinceLastRound:true,
+        confirmationLevels:true,
+        divergenceDetection:true,
+        relevanceAndTraction:true,
+        eventTimeline:true,
+        eventProduction:true,
+        nonBlockingEnrichment:true
       },
       imageEngine:{
         mode:'non-generative',
@@ -82,6 +96,7 @@ export default {
       }
     });
 
+    if(url.pathname.startsWith('/api/editorial-')) return handleEditorialEventsApi(request,env);
     if(url.pathname.startsWith('/api/search-news')) return handleRegisteredNewsSearchApi(request,env);
     if(url.pathname.startsWith('/api/free-images')) return handleFreeImagesApi(request,env);
     if(url.pathname.startsWith('/api/article-visuals')) return handleArticleVisualsApi(request,env);

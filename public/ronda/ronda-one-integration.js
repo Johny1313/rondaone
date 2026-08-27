@@ -1,8 +1,8 @@
 (()=>{
   'use strict';
 
-  const VERSION='0.7.9';
-  const BUILD='carousel-first-collection-boost';
+  const VERSION='0.8.0';
+  const BUILD='mesa-editorial-event-centric';
   const JOB_KEY='rondaOne.intelligentJob';
   const MAX_LOCAL_JOB_AGE_MS=12*60*1000;
   const RECOVERY_COOLDOWN_MS=10*1000;
@@ -409,7 +409,7 @@
       topic,
       carousel,
       editorialReviewRequired:Boolean(currentCopyButton()?.disabled),
-      handoffVersion:'ronda-one-0.7.9-collection-boost'
+      handoffVersion:'ronda-one-0.8.0-editorial-events'
     };
 
     const old=btn.textContent;

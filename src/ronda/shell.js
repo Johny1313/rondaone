@@ -1,12 +1,14 @@
-export const PLATFORM_VERSION='0.7.9';
+export const PLATFORM_VERSION='0.8.0';
 export const RONDA_EDITORIAL_VERSION='2.8.5';
-export const ASSET_REV=`${RONDA_EDITORIAL_VERSION}-079-collection-boost`;
-export const HOTFIX_REV='0.7.9-collection-boost';
+export const ASSET_REV=`${RONDA_EDITORIAL_VERSION}-080-editorial-events`;
+export const HOTFIX_REV='0.8.0-editorial-events';
 
-export const MODULE_BAR=`<div id="rondaOneBar"><strong>RONDA ONE <span>${PLATFORM_VERSION}</span></strong><a class="active" href="/ronda">RONDA</a><a href="/design/">DESIGN</a><a href="/projects/">PROJETOS</a><em>Ronda Editorial ${RONDA_EDITORIAL_VERSION} · Design sem IA · Carousel First · Coleta Boost</em></div>`;
+export const MODULE_BAR=`<div id="rondaOneBar"><strong>RONDA ONE <span>${PLATFORM_VERSION}</span></strong><a class="active" href="/ronda">RONDA</a><a href="/design/">DESIGN</a><a href="/projects/">PROJETOS</a><em>Ronda Editorial ${RONDA_EDITORIAL_VERSION} · Mesa Editorial Inteligente · Carousel First · Design sem IA</em></div>`;
 export const SHELL_CSS=`<link rel="stylesheet" href="/ronda/ronda-one-shell.css?v=${HOTFIX_REV}">`;
 export const INTEGRATION_SCRIPT=`<script src="/ronda/ronda-one-integration.js?v=${HOTFIX_REV}" defer></script>`;
 export const SEARCH_BOOST_SCRIPT=`<script src="/ronda/search-boost.js?v=${HOTFIX_REV}" defer></script>`;
+export const EDITORIAL_MESA_CSS=`<link rel="stylesheet" href="/ronda/editorial-mesa.css?v=${HOTFIX_REV}">`;
+export const EDITORIAL_MESA_SCRIPT=`<script src="/ronda/editorial-mesa.js?v=${HOTFIX_REV}" defer></script>`;
 
 function versionMainAssets(html){
   let out=html;
@@ -47,11 +49,17 @@ export function rewriteRondaHtml(text){
   if(!out.includes('ronda-one-shell.css')){
     out=out.replace(/<\/head>/i, `${SHELL_CSS}\n</head>`);
   }
+  if(!out.includes('editorial-mesa.css')){
+    out=out.replace(/<\/head>/i, `${EDITORIAL_MESA_CSS}\n</head>`);
+  }
   if(!out.includes('ronda-one-integration.js')){
     out=out.replace(/<\/body>/i, `${INTEGRATION_SCRIPT}\n</body>`);
   }
   if(!out.includes('search-boost.js')){
     out=out.replace(/<\/body>/i, `${SEARCH_BOOST_SCRIPT}\n</body>`);
+  }
+  if(!out.includes('editorial-mesa.js')){
+    out=out.replace(/<\/body>/i, `${EDITORIAL_MESA_SCRIPT}\n</body>`);
   }
 
   return out;
