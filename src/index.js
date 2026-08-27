@@ -68,7 +68,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-078-carousel-first'
+        assetCacheBust:'2.8.5-079-collection-boost'
       },
       navigation:{
         ronda:'/ronda',
