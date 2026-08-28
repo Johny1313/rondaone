@@ -14,9 +14,9 @@ const MEDIUM_FREQUENCY_SOURCES = new Set([
 ]);
 
 function sourceRefreshMinutes(id) {
-  if (HIGH_FREQUENCY_SOURCES.has(id)) return 5;
-  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 10;
-  return 15;
+  if (HIGH_FREQUENCY_SOURCES.has(id)) return 3;
+  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 5;
+  return 5;
 }
 
 export async function runPool(items, concurrency, worker) {
@@ -84,7 +84,7 @@ function googleNewsTermSource(term) {
 function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 320, emptyIsHealthy = false, refreshMinutes = null } = {}) {
   const normalizedDomains = sourceDomains.map(normalizedSite).filter(Boolean);
   const dedicatedFallback = normalizedDomains[0]
-    ? googleNewsSiteSource(normalizedDomains[0], region, "", 2)
+    ? googleNewsSiteSource(normalizedDomains[0], region, "", 1)
     : null;
   const urls = [...new Set([primaryUrl, dedicatedFallback, fallbackUrl].filter(Boolean))];
   return Object.freeze({
@@ -96,7 +96,7 @@ function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, s
     limit: limit || (region === "Mundo" ? 15 : 24),
     scanLimit,
     emptyIsHealthy: Boolean(emptyIsHealthy),
-    refreshMinutes: Math.max(5, Number(refreshMinutes) || sourceRefreshMinutes(id)),
+    refreshMinutes: Math.max(3, Number(refreshMinutes) || sourceRefreshMinutes(id)),
     sourceAliases: Object.freeze(sourceAliases),
     sourceDomains: Object.freeze(normalizedDomains),
     editorialHints: Object.freeze(editorialHints),
@@ -347,6 +347,13 @@ function validatorSnapshot(response) {
   };
 }
 
+function orderedFeedUrls(feed, sourceState) {
+  const urls = Array.isArray(feed?.urls) ? [...feed.urls] : [];
+  const lastGood = String(sourceState?.lastUrl || "");
+  if (!lastGood || !urls.includes(lastGood)) return urls;
+  return [lastGood, ...urls.filter((url) => url !== lastGood)];
+}
+
 export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null, sourceState = null) {
   const errors = [];
   let successfulResponses = 0;
@@ -360,28 +367,27 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
   const desiredMinimum = feed.region === "Mundo" ? 5 : 8;
   const itemLimit = Number(feed.limit) || (feed.region === "Mundo" ? 15 : 24);
 
-  for (let index = 0; index < feed.urls.length; index += 1) {
-    const url = feed.urls[index];
+  const orderedUrls = orderedFeedUrls(feed, sourceState);
+
+  for (let index = 0; index < orderedUrls.length; index += 1) {
+    const url = orderedUrls[index];
     try {
       reserveExternalRequest(requestBudget, url);
       const response = await fetchWithTimeout(url, fetcher, { validator: validators[url] });
       totalResponseMs += Number(RESPONSE_TIMINGS.get(response)) || 0;
       const direct = Boolean(feed.directUrl) && String(url) === String(feed.directUrl);
+      successfulResponses += 1;
 
       if (response.status === 304) {
-        if (sourceState?.lastUrl === url) {
-          const cached = cachedItemsFromState(sourceState, feed, cutoff);
-          if (cached.length) {
-            mergedItems = uniqueItems([...mergedItems, ...cached], itemLimit);
-            routes.push("cache");
-            lastUrl = url;
-          }
-          if (mergedItems.length >= desiredMinimum) break;
+        const cached = cachedItemsFromState(sourceState, feed, cutoff);
+        if (cached.length) {
+          mergedItems = uniqueItems([...mergedItems, ...cached], itemLimit);
+          routes.push("cache");
         }
+        lastUrl = url;
+        if (mergedItems.length >= desiredMinimum) break;
         continue;
       }
-
-      successfulResponses += 1;
       validators[url] = validatorSnapshot(response);
       const xml = await decodeFeedResponse(response);
       const parseConfiguration = direct ? { ...feed, sourceAliases: [], sourceDomains: [] } : feed;
@@ -429,7 +435,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         fallback: routeSet.has("fallback"),
         cached: routeSet.has("cache"),
         route,
-        attempts: Math.min(feed.urls.length, successfulResponses + errors.length),
+        attempts: Math.min(orderedUrls.length, successfulResponses + errors.length),
         windowHours,
         httpStatus: 200,
         errorCode: null,
@@ -440,7 +446,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
     };
   }
 
-  if (successfulResponses > 0 && feed.emptyIsHealthy) {
+  if (successfulResponses > 0) {
     const cached = cachedItemsFromState(sourceState, feed, cutoff);
     return {
       items: cached,
@@ -455,7 +461,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         fallback: false,
         cached: cached.length > 0,
         route: cached.length ? "cache" : "no-new",
-        attempts: feed.urls.length,
+        attempts: orderedUrls.length,
         windowHours,
         httpStatus: errors.at(-1)?.httpStatus ?? 200,
         errorCode: null,
@@ -483,7 +489,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       fallback: false,
       cached: false,
       route: "failed",
-      attempts: feed.urls.length,
+      attempts: orderedUrls.length,
       windowHours,
       httpStatus: primaryError.httpStatus ?? null,
       errorCode: primaryError.code || "unknown",
@@ -685,10 +691,21 @@ function sourceStateFor(sourceStates, sourceId) {
   return null;
 }
 
-function sourceIsDue(sourceState, collectedAt) {
+function sourceIsDue(sourceState, collectedAt, feed) {
   if (!sourceState?.nextCheckAt) return true;
+  const now = collectedAt.getTime();
   const next = Date.parse(sourceState.nextCheckAt);
-  return !Number.isFinite(next) || next <= collectedAt.getTime();
+  if (!Number.isFinite(next) || next <= now) return true;
+
+  const lastAttempt = Date.parse(sourceState?.lastAttemptAt || "");
+  const healthyMaxSilenceMinutes = Math.max(3, Number(feed?.refreshMinutes) || 5);
+  const failedMaxSilenceMinutes = 10;
+  const maxSilenceMinutes = Number(sourceState?.failureCount) > 0
+    ? failedMaxSilenceMinutes
+    : healthyMaxSilenceMinutes;
+
+  return !Number.isFinite(lastAttempt)
+    || now - lastAttempt >= maxSilenceMinutes * 60 * 1000;
 }
 
 function deferredSourceResult(feed, sourceState, cutoff) {
@@ -726,10 +743,11 @@ function deferredSourceResult(feed, sourceState, cutoff) {
 }
 
 function retryBackoffMinutes(errorCode, failureCount) {
-  if (errorCode === "not-found") return 360;
-  if (errorCode === "blocked") return 60;
-  if (errorCode === "rate-limited") return Math.max(30, [5, 15, 30, 60, 180][Math.min(4, Math.max(0, failureCount - 1))]);
-  return [5, 15, 30, 60, 180][Math.min(4, Math.max(0, failureCount - 1))];
+  const step = Math.min(4, Math.max(0, Number(failureCount) - 1));
+  if (errorCode === "rate-limited") return [5, 5, 10, 10, 15][step];
+  if (errorCode === "not-found") return [5, 10, 10, 15, 15][step];
+  if (errorCode === "blocked") return [5, 5, 10, 10, 15][step];
+  return [3, 5, 5, 10, 15][step];
 }
 
 function snapshotItems(feed, currentItems, previousState, collectedAt) {
@@ -852,7 +870,7 @@ export async function collectRound({
 
   feeds.forEach((feed, index) => {
     const state = sourceStateFor(sourceStates, feed.id);
-    if (sourceIsDue(state, collectedAt)) due.push({ feed, index, state });
+    if (sourceIsDue(state, collectedAt, feed)) due.push({ feed, index, state });
     else portalResults[index] = deferredSourceResult(feed, state, cutoff);
   });
 
@@ -916,6 +934,9 @@ export async function collectRound({
       sourceStateUpdates,
       operational: {
         portalConcurrency: 8,
+        sourceRecovery: "0.8.1-last-good-route-first",
+        healthyMaxRefreshMinutes: 5,
+        failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
         portalsDeferred: feeds.length - due.length,
         externalPortalRequests: requestBudget.used,
@@ -954,6 +975,9 @@ export async function collectRound({
     sourceStateUpdates,
     operational: {
       portalConcurrency: 8,
+      sourceRecovery: "0.8.1-last-good-route-first",
+      healthyMaxRefreshMinutes: 5,
+      failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,
       socialConcurrency: 3,
       portalsDue: due.length,

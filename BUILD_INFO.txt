@@ -1,43 +1,17 @@
 RONDA ONE CLOUD
-Versão: 0.8.0
-Produto: Mesa Editorial Inteligente + Editorial Events + Carousel First + Coleta Boost
+Versão: 0.8.1
+Produto: Mesa Editorial Inteligente + Source Recovery + Carousel First + Coleta Boost
 Data de build: 2026-08-27
 
-Base preservada:
-- 39 fontes cadastradas;
-- Coleta Boost v0.7.9;
-- busca ampliada;
-- leitura direta reforçada;
-- Carousel First;
-- FORMA DESIGN sem geração de imagem por IA.
-
-Nova camada v0.8.0:
-- Evento Editorial persistente no D1;
-- deduplicação/agrupamento contextual leve;
-- leitura incremental de uma matéria por job;
-- identificação de informação nova;
-- timeline significativa;
-- classificação detalhada;
-- papéis das fontes;
-- confirmação objetiva;
-- divergências;
-- relevância 0–100;
-- tração e aceleração;
-- status editorial;
-- pontos em aberto;
-- sugestões de pauta;
-- rastreabilidade;
-- Mesa orientada por eventos;
-- histórico de eventos;
-- produção editorial e carrossel por evidências.
-
-Infraestrutura:
-- mantém D1 atual;
-- mantém ROUND_JOBS_QUEUE;
-- reutiliza INTELLIGENT_JOBS_QUEUE para event-enrich;
-- nenhum novo binding obrigatório;
-- coleta não espera enriquecimento editorial.
-
-Verificação do pacote:
-- npm run check
-- npm run verify:080
+SOURCE RECOVERY
+- Cron 5 min -> 3 min
+- fontes prioritárias: 3 min
+- demais fontes saudáveis: máximo 5 min
+- backoffs de 60 min / 360 min removidos
+- estados antigos com nextCheckAt longo recuperados automaticamente
+- última rota funcional primeiro
+- HTTP 304 = saudável
+- HTTP 200 sem notícia nova = no-new
+- cache recente preservado
+- fallback dedicado em janela de 24h
+- 39 fontes, budget 120 e concorrência 8 preservados

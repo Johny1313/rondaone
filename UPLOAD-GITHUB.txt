@@ -1,32 +1,10 @@
-RONDA ONE CLOUD v0.8.0 — PACOTE COMPLETO PARA GITHUB
+RONDA ONE v0.8.1 — UPLOAD GITHUB
 
-Este ZIP é o projeto completo, não um patch.
-
-Para atualizar:
-1. Faça um backup ou crie um branch de segurança do repositório atual.
-2. Substitua o conteúdo do repositório pelo conteúdo deste ZIP.
-3. package.json, wrangler.jsonc, src, public e scripts devem ficar na RAIZ do repositório.
-4. Não envie a pasta externa RONDA-ONE-CLOUD-v0.8.0-MESA-EDITORIAL-COMPLETO-GITHUB como uma subpasta.
-5. Não apague os secrets/bindings configurados no Cloudflare Dashboard.
-6. Não é necessário criar uma nova Queue: a camada Editorial Events reutiliza a INTELLIGENT_JOBS_QUEUE existente.
-7. As novas tabelas D1 são criadas/migradas de forma aditiva no runtime.
-
-Antes do deploy:
-
-npm install
-npm run check
-npm run verify:080
+Substitua o repositório pelo conteúdo deste ZIP.
 
 Depois:
-
+npm install
+npm run check
+npm run verify:081
+npm run test:regression
 npm run deploy
-
-Estrutura principal esperada:
-/package.json
-/wrangler.jsonc
-/src/...
-/public/...
-/scripts/verify-080.mjs
-/scripts/test-080-functional.mjs
-/scripts/test-080-editorial.mjs
-/scripts/test-080-stability.mjs

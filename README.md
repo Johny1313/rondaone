@@ -1,6 +1,18 @@
-# RONDA ONE Cloud v0.8.0 — Mesa Editorial Inteligente
+# RONDA ONE Cloud v0.8.1 — Mesa Editorial Inteligente + Source Recovery
 
 Versão completa do **RONDA ONE** para Cloudflare Workers, evoluindo a plataforma de agregador de notícias para uma **Mesa Editorial orientada por eventos**, sem sacrificar a prioridade de estabilidade, velocidade e coleta contínua.
+
+## Hotfix v0.8.1 — Source Recovery
+
+- Cron a cada **3 minutos**.
+- Fontes prioritárias: **3 minutos**.
+- Demais fontes saudáveis: **máximo 5 minutos**.
+- Última rota funcional consultada primeiro.
+- `304 Not Modified` é fonte saudável.
+- Feed acessível sem publicação nova é `no-new`, não `failed`.
+- Backoffs de 30/60/360 minutos deixam de congelar a fonte inteira.
+- Estado antigo com `nextCheckAt` distante é recuperado automaticamente.
+- Fallback dedicado continua ativo por domínio.
 
 ## Conceito central
 
@@ -42,7 +54,7 @@ A base da v0.7.9 foi preservada:
 - até 900 itens no snapshot;
 - até 80 assuntos;
 - busca ampliada em `/api/search-news`;
-- Cron Cloudflare a cada 5 minutos.
+- Cron Cloudflare a cada 3 minutos.
 
 ## 2. Evento Editorial
 

@@ -27,7 +27,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.0',
+      version:'0.8.1',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -50,6 +50,16 @@ export default {
       editorialEvents:true,
       editorialPipeline:'collect-normalize-deduplicate-cluster-event-read-enrich',
       editorialIntelligence:'incremental-evidence-first',
+      sourceRecovery:{
+        cronMinutes:3,
+        healthyMaxRefreshMinutes:5,
+        highFrequencyRefreshMinutes:3,
+        failedMaxSilenceMinutes:10,
+        lastGoodRouteFirst:true,
+        noNewIsHealthy:true,
+        notModifiedIsHealthy:true,
+        longSourceBackoffRemoved:true
+      },
       carouselSafety:{
         directArticleRequired:true,
         cachedDirectArticleAllowed:true,
@@ -72,7 +82,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-080-editorial-events'
+        assetCacheBust:'2.8.5-081-source-recovery'
       },
       navigation:{
         ronda:'/ronda',
