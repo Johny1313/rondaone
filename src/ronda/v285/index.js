@@ -1116,50 +1116,11 @@ async function handleApi(request, env, url, ctx) {
   }
 
   if (url.pathname === "/api/auth/register" && request.method === "POST") {
-    const body = await request.json().catch(() => ({}));
-    let email;
-    let password;
-    try {
-      email = validateEmail(body.email);
-      password = validatePassword(body.password);
-    } catch (error) {
-      throw new HttpError(400, error.message);
-    }
-    let defaultSlideCount;
-    try { defaultSlideCount = validateSlideCount(body.defaultSlideCount, DEFAULT_SLIDE_COUNT); }
-    catch (error) { throw new HttpError(400, error.message); }
-    const emailKey = normalizeEmail(email);
-    const db = requireDatabase(env);
-    if (emailKey === ADMIN_EMAIL) throw new HttpError(403, "O administrador deve entrar pela ativação segura do primeiro acesso.");
-    if (await getEditorialUserByEmailKey(db, emailKey)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
-    if (emailKey !== ADMIN_EMAIL) {
-      await cleanupIdleUserSessions(db, SESSION_IDLE_MINUTES);
-      const active = await countActiveEditorialUsers(db, SESSION_IDLE_MINUTES);
-      if (active >= MAX_ACTIVE_USERS) throw new HttpError(429, `O limite de ${MAX_ACTIVE_USERS} usuários ativos foi atingido.`);
-    }
-    const credentials = await hashPassword(password);
-    let user;
-    try {
-      user = await createEditorialUser(db, {
-        email,
-        emailKey,
-        displayName: normalizeDisplayName(body.displayName, email),
-        passwordHash: credentials.hash,
-        passwordSalt: credentials.salt,
-        passwordIterations: credentials.iterations,
-        defaultSlideCount,
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      if (/unique|constraint/i.test(detail)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
-      throw error;
-    }
-    user = await ensureUserAccess(db, user.id, user.email, 'editor');
-    const token = randomToken();
-    await createControlledSession(db, user, await sha256Hex(token));
-    return json({ ok: true, ...(await profilePayload(db, user)) }, 201, {
-      "Set-Cookie": sessionCookie(token, { secure: secureCookieForRequest(request) }),
-    });
+    throw new HttpError(
+      410,
+      "Cadastro por senha foi removido.",
+      "Usuários comuns entram diretamente com o e-mail pela rota de login."
+    );
   }
 
   if (url.pathname === "/api/auth/login" && request.method === "POST") {
@@ -1213,11 +1174,18 @@ async function handleApi(request, env, url, ctx) {
     }
 
     if (!record) {
-      const internalCredentials = await hashPassword(`${randomToken()}Aa1!`);
+      // Usuário comum é email-only. A tabela histórica ainda exige colunas de senha,
+      // então gravamos marcadores não autenticáveis sem executar PBKDF2.
+      const internalSalt = randomToken(18);
+      const internalHash = await sha256Hex(`email-only:${emailKey}:${internalSalt}:${randomToken(32)}`);
       record = await createEditorialUser(db, {
-        email, emailKey, displayName: normalizeDisplayName("", email),
-        passwordHash: internalCredentials.hash, passwordSalt: internalCredentials.salt,
-        passwordIterations: internalCredentials.iterations, defaultSlideCount: DEFAULT_SLIDE_COUNT,
+        email,
+        emailKey,
+        displayName: normalizeDisplayName("", email),
+        passwordHash: internalHash,
+        passwordSalt: internalSalt,
+        passwordIterations: 0,
+        defaultSlideCount: DEFAULT_SLIDE_COUNT,
       });
       record = await ensureUserAccess(db, record.id, record.email, 'editor');
     } else {
@@ -1264,21 +1232,11 @@ async function handleApi(request, env, url, ctx) {
   }
 
   if (url.pathname === "/api/profile/password" && request.method === "PATCH") {
-    const { user } = await requireEditorialUser(request, env);
-    const body = await request.json().catch(() => ({}));
-    const db = requireDatabase(env);
-    const record = await getEditorialUserByEmailKey(db, normalizeEmail(user.email));
-    const currentOk = record ? await verifyPassword(String(body.currentPassword || ""), record) : false;
-    if (!currentOk) throw new HttpError(401, "A senha atual não confere.");
-    let newPassword;
-    try { newPassword = validatePassword(body.newPassword); } catch (error) { throw new HttpError(400, error.message); }
-    const credentials = await hashPassword(newPassword);
-    await updateEditorialUserPassword(db, user.id, { passwordHash:credentials.hash, passwordSalt:credentials.salt, passwordIterations:credentials.iterations });
-    await revokeUserSessions(db, user.id);
-    const token = randomToken();
-    const refreshed = await ensureUserAccess(db, user.id, user.email, user.role || 'editor');
-    await createControlledSession(db, refreshed, await sha256Hex(token));
-    return json({ ok:true, message:"Senha atualizada.", ...(await profilePayload(db, refreshed)) },200,{ "Set-Cookie":sessionCookie(token,{secure:secureCookieForRequest(request)}) });
+    throw new HttpError(
+      410,
+      "Senha de perfil não é utilizada.",
+      "Usuários comuns acessam por e-mail. A senha administrativa é gerenciada pelo Secret ADMIN_BOOTSTRAP_PASSWORD no Cloudflare."
+    );
   }
 
   if (url.pathname === "/api/profile/references" && request.method === "POST") {

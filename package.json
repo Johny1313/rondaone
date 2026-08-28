@@ -1,6 +1,6 @@
 {
-  "name": "ronda-one-v0853",
-  "version": "0.8.5.3",
+  "name": "ronda-one-v0854",
+  "version": "0.8.5.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "check": "node --check src/index.js && node --check src/ronda/router.js && node --check src/ronda/shell.js && node --check src/projects/service.js && node --check src/ai/service.js && node --check src/ronda/v285/index.js && node --check src/ronda/v285/database.js && node --check src/ronda/v285/article-reader.js && node --check src/ronda/v285/collector.js && node --check public/ronda/app.js && node --check public/ronda/ronda-one-integration.js && node --check src/ronda/search-news.js && node --check public/ronda/search-boost.js && node --check src/ronda/editorial-events.js && node --check public/ronda/editorial-mesa.js && node --check public/access-client.js && node --check public/admin/admin.js && node --check public/login.js",
     "test:080": "node scripts/test-080-functional.mjs && node scripts/test-080-editorial.mjs && node scripts/test-080-stability.mjs",
     "test:081": "node scripts/test-081-source-recovery.mjs",
-    "test:regression": "node scripts/test-080-functional.mjs && node scripts/test-080-editorial.mjs && node scripts/test-080-stability.mjs && node scripts/test-081-source-recovery.mjs && node scripts/test-082-access-stability.mjs && node scripts/test-083-carousel-stability.mjs && node scripts/test-0852-ui-source-sync.mjs && node scripts/test-0853-frontend-recovery.mjs",
+    "test:regression": "node scripts/test-080-functional.mjs && node scripts/test-080-editorial.mjs && node scripts/test-080-stability.mjs && node scripts/test-081-source-recovery.mjs && node scripts/test-082-access-stability.mjs && node scripts/test-083-carousel-stability.mjs && node scripts/test-0852-ui-source-sync.mjs && node scripts/test-0853-frontend-recovery.mjs && node scripts/test-0854-email-only-auth.mjs",
     "verify:081": "node scripts/verify-081.mjs",
     "verify:082": "node scripts/verify-082.mjs",
     "test:082": "node scripts/test-082-access-stability.mjs",
@@ -22,7 +22,9 @@
     "test:0852": "node scripts/test-0852-ui-source-sync.mjs",
     "verify:0852": "node scripts/verify-0852.mjs",
     "test:0853": "node scripts/test-0853-frontend-recovery.mjs",
-    "verify:0853": "node scripts/verify-0853.mjs"
+    "verify:0853": "node scripts/verify-0853.mjs",
+    "test:0854": "node scripts/test-0854-email-only-auth.mjs",
+    "verify:0854": "node scripts/verify-0854.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.20.0"

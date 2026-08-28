@@ -29,7 +29,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.5.3',
+      version:'0.8.5.4',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -69,7 +69,7 @@ export default {
         frontendSyntaxGuard:true,
         searchAutofillGuard:true
       },
-      openEmailAccess:{ enabled:true, firstAccessAutoCreate:true, commonUserPassword:false, adminPasswordOnlyWhenTicked:true, blockedUsersCannotRecreate:true, permanencePerUser:true },
+      openEmailAccess:{ enabled:true, firstAccessAutoCreate:true, commonUserPassword:false, commonUserPbkdf2:false, adminPasswordOnlyWhenTicked:true, blockedUsersCannotRecreate:true, permanencePerUser:true },
       accessControl:{ enabled:true, loginFirst:true, twoStepLogin:true, passwordVisibilityToggle:true, maximumActiveUsers:10, idleLogoutMinutes:60, adminExcludedFromSeat:true, presenceWriteMinutes:5, adminDashboard:true, adminDashboardTabs:true, editorialGroups:true, profileReferences:['text','image','file','video'] },
       carouselStabilityV083:{ intelligentQueueConcurrency:2, queueRetries:5, queuedStaleMinutes:5, runningStaleMinutes:3, terminalStateImmutable:true, cacheRecovery:true, duplicateLockRetry:true, adaptivePolling:true },
       sourceRecovery:{
@@ -104,7 +104,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-0853-frontend-recovery'
+        assetCacheBust:'2.8.5-0854-email-only-auth'
       },
       navigation:{
         ronda:'/ronda',

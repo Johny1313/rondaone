@@ -1,0 +1,22 @@
+RONDA ONE v0.8.5.4 — EMAIL-ONLY AUTH
+
+Corrige:
+Pbkdf2 failed: iteration counts above 10000 are not supported
+
+Usuário comum:
+- somente e-mail
+- primeiro acesso automático
+- sem senha
+- sem PBKDF2
+- acesso negado apenas se bloqueado pelo ADM ou se não houver vaga
+
+ADM:
+- checkbox Entrar como ADM
+- senha do Secret ADMIN_BOOTSTRAP_PASSWORD
+
+Deploy:
+npm install
+npm run check
+npm run verify:0854
+npm run test:regression
+npm run deploy

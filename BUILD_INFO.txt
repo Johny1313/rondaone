@@ -1,12 +1,12 @@
 RONDA ONE CLOUD
-Versão: 0.8.5.3
-Produto: Frontend Recovery + UI Source Sync + Full 39 Sources
+Versão: 0.8.5.4
+Produto: Email-only Auth + Frontend Recovery + Full 39 Sources
 
-CORREÇÃO CRÍTICA
-- removidos escapes \n literais que quebravam public/ronda/app.js
-- botões e navegação voltam a executar
-- última ronda volta a renderizar
-- busca começa sempre vazia
-- proteção contra autofill de e-mail no search
-- public/ronda/app.js agora é obrigatório no npm run check
-- erro futuro de boot passa a aparecer na própria interface
+CORREÇÃO
+- usuário comum não executa PBKDF2
+- primeiro acesso cria conta diretamente pelo e-mail
+- colunas históricas de senha recebem marcador interno SHA-256 não autenticável
+- cadastro por senha desativado
+- troca de senha do Perfil desativada
+- Perfil dedicado a textos, imagens, arquivos, vídeos e linguagem IA
+- ADM continua usando ADMIN_BOOTSTRAP_PASSWORD no Cloudflare
