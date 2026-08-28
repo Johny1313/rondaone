@@ -1,18 +1,8 @@
 RONDA ONE CLOUD
-Versão: 0.8.3
-Produto: Carousel Stability + Access & Stability + Source Recovery + Mesa Editorial
-Data de build: 2026-08-28
-
-CAROUSEL STABILITY
-- Intelligent Queue: concorrência 4 -> 2
-- Queue retries: 3 -> 5
-- queued stale: 5 min
-- running stale: 3 min sem progresso
-- estados terminais imutáveis
-- recuperação por cache
-- lock duplicado gera retry
-- lock renovado durante progresso
-- polling 1,5s -> 2,2s -> 3,5s
-- oscilação de rede não cancela após 5 falhas
-- Access & Stability 0.8.2 preservado
-- Source Recovery 0.8.1 preservado
+Versão: 0.8.5
+- usuário comum: só e-mail
+- primeiro acesso automático
+- senha apenas no modo ADM
+- olho para mostrar/ocultar senha ADM
+- bloqueio/liberação pelo ADM
+- permanência hoje e acumulada por usuário no Dashboard

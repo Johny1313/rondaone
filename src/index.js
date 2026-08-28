@@ -20,7 +20,7 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
 
-    if(url.pathname==='/') return Response.redirect(new URL('/ronda',request.url).toString(),302);
+    if(url.pathname==='/') return env.ASSETS.fetch(request);
     if(url.pathname==='/design') return Response.redirect(new URL('/design/',request.url).toString(),302);
     if(url.pathname==='/projects') return Response.redirect(new URL('/projects/',request.url).toString(),302);
     if(url.pathname==='/admin') return Response.redirect(new URL('/admin/',request.url).toString(),302);
@@ -28,7 +28,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.3',
+      version:'0.8.5',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -51,7 +51,8 @@ export default {
       editorialEvents:true,
       editorialPipeline:'collect-normalize-deduplicate-cluster-event-read-enrich',
       editorialIntelligence:'incremental-evidence-first',
-      accessControl:{ enabled:true, maximumActiveUsers:10, idleLogoutMinutes:60, adminExcludedFromSeat:true, presenceWriteMinutes:5, adminDashboard:true, editorialGroups:true },
+      openEmailAccess:{ enabled:true, firstAccessAutoCreate:true, commonUserPassword:false, adminPasswordOnlyWhenTicked:true, blockedUsersCannotRecreate:true, permanencePerUser:true },
+      accessControl:{ enabled:true, loginFirst:true, twoStepLogin:true, passwordVisibilityToggle:true, maximumActiveUsers:10, idleLogoutMinutes:60, adminExcludedFromSeat:true, presenceWriteMinutes:5, adminDashboard:true, adminDashboardTabs:true, editorialGroups:true, profileReferences:['text','image','file','video'] },
       carouselStabilityV083:{ intelligentQueueConcurrency:2, queueRetries:5, queuedStaleMinutes:5, runningStaleMinutes:3, terminalStateImmutable:true, cacheRecovery:true, duplicateLockRetry:true, adaptivePolling:true },
       sourceRecovery:{
         cronMinutes:3,
@@ -85,7 +86,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-083-carousel-stability'
+        assetCacheBust:'2.8.5-085-open-email-access'
       },
       navigation:{
         ronda:'/ronda',

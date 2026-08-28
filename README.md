@@ -1,4 +1,30 @@
-# RONDA ONE Cloud v0.8.3 — Mesa Editorial Inteligente + Carousel Stability
+# RONDA ONE Cloud v0.8.4 — Login First + Perfil de Referências + Admin Dashboard
+
+A v0.8.4 preserva Source Recovery, Access & Stability, Mesa Editorial e Carousel Stability, e reorganiza autenticação, perfil e administração.
+
+## Acesso
+
+O primeiro passo é sempre informar o e-mail. O sistema identifica se é login ou primeiro acesso e só então mostra a senha. Usuários não autenticados são redirecionados para a entrada antes de Ronda, Design, Projetos ou Admin.
+
+A senha do administrador não fica no repositório: o primeiro acesso/recuperação usa o secret `ADMIN_BOOTSTRAP_PASSWORD` do Cloudflare.
+
+## Perfil editorial
+
+O Perfil deixa de ser a tela de login e passa a ser a biblioteca de referências da linguagem da IA:
+
+- textos;
+- imagens por link + descrição;
+- arquivos, com leitura local de formatos textuais e cadastro de metadados/link para os demais;
+- vídeos por link + descrição/transcrição;
+- guia de linguagem recalculável;
+- troca de senha.
+
+Para preservar estabilidade e custo, imagens/vídeos/binários pesados não são gravados no D1. Como o objetivo desta camada é aprimorar a linguagem, a IA utiliza conteúdo textual, descrições, transcrições e observações.
+
+## Administração
+
+O Admin passa a ter três abas separadas: Dashboard, Usuários e Grupos. O Dashboard concentra métricas de produção, saúde e navegação por Ronda, Design, Projetos e Admin.
+
 
 Versão completa do **RONDA ONE** para Cloudflare Workers, evoluindo a plataforma de agregador de notícias para uma **Mesa Editorial orientada por eventos**, sem sacrificar a prioridade de estabilidade, velocidade e coleta contínua.
 

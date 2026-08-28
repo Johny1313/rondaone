@@ -722,7 +722,7 @@ function slideCountOptions(selected = 7) {
 
 function initializeSlideCountSelectors() {
   const defaultCount = Number(state.profile?.user?.defaultSlideCount) || 7;
-  for (const id of ["registerSlideCount", "profileDefaultSlideCount", "carouselSlideCount"]) {
+  for (const id of ["profileDefaultSlideCount", "carouselSlideCount"]) {
     const select = document.getElementById(id);
     if (select) select.innerHTML = slideCountOptions(id === "carouselSlideCount" ? state.activeSlideCount || defaultCount : defaultCount);
   }
@@ -742,26 +742,23 @@ function profileStyleMarkup(profile) {
   </div>`;
 }
 
+function referenceLabel(type){return ({text:'Texto',image:'Imagem',file:'Arquivo',video:'Vídeo'})[type]||'Referência';}
+function profileReferenceMarkup(reference){const source=reference.sourceUrl?`<a class="reference-source-link" href="${escapeHtml(reference.sourceUrl)}" target="_blank" rel="noopener">Abrir origem ↗</a>`:'';const meta=[reference.fileName,reference.mimeType,reference.fileSize?`${Math.round(reference.fileSize/1024)} KB`:null].filter(Boolean).join(' · ');return `<article class="writing-sample-item"><div><span class="reference-type-badge">${referenceLabel(reference.type)}</span><strong>${escapeHtml(reference.title)}</strong><p>${meta?escapeHtml(meta)+' · ':''}${Number(reference.charCount)||0} caracteres · ${escapeHtml(relativeTime(reference.createdAt))}</p>${source}</div><button class="danger-button" data-profile-reference-delete="${escapeHtml(reference.id)}" type="button">Remover</button></article>`;}
+
 function renderProfile() {
   const payload = state.profile || { authenticated: false };
   const loggedIn = Boolean(payload.authenticated && payload.user);
-  document.getElementById("profileLoggedOut").hidden = loggedIn;
-  document.getElementById("profileLoggedIn").hidden = !loggedIn;
-  const status = document.getElementById("profileSessionStatus");
-  status.textContent = loggedIn ? "Perfil conectado" : "Perfil não conectado";
-  status.classList.toggle("active", loggedIn);
+  if(!loggedIn){ location.replace(`/?next=${encodeURIComponent(location.pathname+location.search)}`); return; }
+  const status=document.getElementById('profileSessionStatus');status.textContent='Perfil conectado';status.classList.add('active');
   initializeSlideCountSelectors();
-  if (!loggedIn) return;
-  const user = payload.user;
-  document.getElementById("profileUserName").textContent = user.displayName || "Perfil editorial";
-  document.getElementById("profileUserEmail").textContent = `${user.email || ""}${user.role ? ` · ${user.role === "admin" ? "Administrador" : user.role === "editor" ? "Editor" : "Usuário"}` : ""}`;
-  const adminLink=document.getElementById("adminDashboardLink"); if(adminLink) adminLink.hidden=user.role!=="admin";
-  document.getElementById("profileDefaultSlideCount").value = String(Number(user.defaultSlideCount) || 7);
-  const samples = Array.isArray(payload.samples) ? payload.samples : [];
-  const limits = payload.limits || {};
-  document.getElementById("profileSampleUsage").textContent = `${samples.length}/${Number(limits.maximumSamples) || 8} textos · ${Number(limits.usedCharacters || 0).toLocaleString("pt-BR")}/${Number(limits.maximumTotalCharacters || 30000).toLocaleString("pt-BR")} caracteres`;
-  document.getElementById("writingSampleList").innerHTML = samples.length ? samples.map((sample) => `<article class="writing-sample-item"><div><strong>${escapeHtml(sample.title)}</strong><p>${escapeHtml(sample.sourceType)} · ${Number(sample.charCount) || 0} caracteres · ${escapeHtml(relativeTime(sample.createdAt))}</p></div><button class="danger-button" data-writing-sample-delete="${escapeHtml(sample.id)}" type="button">Remover</button></article>`).join("") : '<div class="empty"><strong>Nenhum exemplo adicionado</strong><span>Envie textos que representem o estilo que deseja reproduzir.</span></div>';
-  document.getElementById("writingProfileSummary").innerHTML = profileStyleMarkup(payload.writingProfile);
+  const user=payload.user; document.getElementById('profileUserName').textContent=user.displayName||'Perfil editorial';
+  document.getElementById('profileUserEmail').textContent=`${user.email||''}${user.role?` · ${user.role==='admin'?'Administrador':user.role==='editor'?'Editor':'Usuário'}`:''}`;
+  const adminLink=document.getElementById('adminDashboardLink');if(adminLink)adminLink.hidden=user.role!=='admin';
+  document.getElementById('profileDefaultSlideCount').value=String(Number(user.defaultSlideCount)||7);
+  const references=Array.isArray(payload.references)?payload.references:[];const limits=payload.limits||{};
+  document.getElementById('profileReferenceUsage').textContent=`${references.length}/${Number(limits.maximumReferences)||32} referências · ${Number(limits.usedReferenceCharacters||0).toLocaleString('pt-BR')}/${Number(limits.maximumReferenceTotalCharacters||80000).toLocaleString('pt-BR')} caracteres`;
+  document.getElementById('profileReferenceList').innerHTML=references.length?references.map(profileReferenceMarkup).join(''):'<div class="empty"><strong>Nenhuma referência adicionada</strong><span>Adicione textos, imagens, arquivos ou vídeos que representem a linguagem desejada.</span></div>';
+  document.getElementById('writingProfileSummary').innerHTML=profileStyleMarkup(payload.writingProfile);
 }
 
 async function loadProfile({ force = false } = {}) {
@@ -774,37 +771,10 @@ async function loadProfile({ force = false } = {}) {
     return state.profile;
   } catch (error) {
     document.getElementById("profileSessionStatus").textContent = "Perfil indisponível";
-    document.getElementById("loginMessage").textContent = error.message;
+    if(error.status===401) location.replace(`/?next=${encodeURIComponent(location.pathname+location.search)}`);
     return null;
   } finally {
     state.profileLoading = false;
-  }
-}
-
-async function submitProfileAuth(event, mode) {
-  event.preventDefault();
-  const register = mode === "register";
-  const message = document.getElementById(register ? "registerMessage" : "loginMessage");
-  message.textContent = register ? "Criando perfil…" : "Entrando…";
-  const body = register ? {
-    displayName: document.getElementById("registerName").value,
-    email: document.getElementById("registerEmail").value,
-    password: document.getElementById("registerPassword").value,
-    defaultSlideCount: Number(document.getElementById("registerSlideCount").value) || 7,
-  } : {
-    email: document.getElementById("loginEmail").value,
-    password: document.getElementById("loginPassword").value,
-  };
-  try {
-    state.profile = await api(`/api/auth/${mode}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    event.currentTarget.reset();
-    message.textContent = "";
-    renderProfile();
-    operationalStarted=false;
-    await startOperationalApplication();
-    showView("round");
-  } catch (error) {
-    message.textContent = error.message;
   }
 }
 
@@ -812,8 +782,7 @@ async function logoutProfile() {
   await api("/api/auth/logout", { method: "POST" }).catch(() => null);
   state.profile = { authenticated: false };
   state.smartCarousels.clear();
-  renderProfile();
-  showView("profile");
+  location.replace('/');
 }
 
 async function updateDefaultSlideCount(event) {
@@ -867,11 +836,11 @@ async function rebuildWritingStyle() {
   const button = document.getElementById("rebuildWritingStyle");
   const message = document.getElementById("writingProfileMessage");
   button.disabled = true;
-  message.textContent = "Analisando tom, ritmo e estrutura dos exemplos…";
+  message.textContent = "Analisando linguagem, ritmo, estrutura e repertório das referências…";
   try {
     state.profile = await api("/api/profile/style/rebuild", { method: "POST" });
     state.smartCarousels.clear();
-    message.textContent = "Perfil de escrita atualizado e pronto para os próximos carrosséis.";
+    message.textContent = "Linguagem da IA atualizada e pronta para os próximos carrosséis.";
     renderProfile();
   } catch (error) {
     message.textContent = error.message;
@@ -902,7 +871,7 @@ async function loadWritingSampleFile(event) {
   }
 }
 
-function updateCarouselProfileStatus() {
+let activeProfileReferenceType='text';\nfunction setProfileReferenceTab(type){\n  activeProfileReferenceType=type;document.querySelectorAll('[data-profile-ref-tab]').forEach(b=>b.classList.toggle('active',b.dataset.profileRefTab===type));\n  const refPanel=document.getElementById('profileReferencePanel'),lang=document.getElementById('profileLanguagePanel'),account=document.getElementById('profileAccountPanel');\n  const special=type==='language'||type==='account';refPanel.hidden=special;lang.hidden=type==='account';account.hidden=type!=='account';\n  if(special)return;document.getElementById('profileReferenceType').value=type;\n  const cfg={text:['Adicionar texto','Conteúdo do texto','Cole um texto que represente a linguagem que deseja aproximar.'],image:['Adicionar referência de imagem','Descrição da imagem','Use link + descrição do visual, tom, texto na arte ou linguagem que deve inspirar a IA.'],file:['Adicionar referência de arquivo','Conteúdo ou descrição','TXT/MD/CSV/JSON são lidos no navegador. Outros arquivos podem ser cadastrados por link + descrição.'],video:['Adicionar referência de vídeo','Transcrição ou descrição','Cadastre o link e uma transcrição/descrição dos trechos e linguagem que devem servir de referência.']};\n  const c=cfg[type];document.getElementById('referenceFormTitle').textContent=c[0];document.getElementById('profileReferenceContentLabel').textContent=c[1];document.getElementById('referenceFormHelp').textContent=c[2];\n  const file=document.getElementById('profileReferenceFile');file.accept=type==='image'?'image/*':type==='video'?'video/*':type==='file'?'.txt,.md,.csv,.json,.pdf,.doc,.docx,.rtf,application/pdf':'text/plain,text/markdown,text/csv,application/json,.txt,.md,.csv,.json';\n}\nasync function submitProfileReference(event){event.preventDefault();const msg=document.getElementById('profileReferenceMessage');msg.textContent='Salvando referência…';const file=document.getElementById('profileReferenceFile').files?.[0]||null;try{state.profile=await api('/api/profile/references',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:document.getElementById('profileReferenceType').value,title:document.getElementById('profileReferenceTitle').value,sourceUrl:document.getElementById('profileReferenceUrl').value,content:document.getElementById('profileReferenceContent').value,notes:document.getElementById('profileReferenceNotes').value,fileName:file?.name||'',mimeType:file?.type||'',fileSize:file?.size||0})});event.currentTarget.reset();document.getElementById('profileReferenceCounter').textContent='0/8.000 caracteres';msg.textContent='Referência salva. Atualize a linguagem para incorporá-la aos próximos carrosséis.';renderProfile();setProfileReferenceTab(activeProfileReferenceType);}catch(error){msg.textContent=error.message;}}\nasync function deleteProfileReference(id){const msg=document.getElementById('profileReferenceMessage');try{state.profile=await api(`/api/profile/references/${encodeURIComponent(id)}`,{method:'DELETE'});msg.textContent='Referência removida. Atualize a linguagem para recalcular o perfil.';renderProfile();}catch(error){msg.textContent=error.message;}}\nasync function loadProfileReferenceFile(event){const file=event.target.files?.[0];if(!file)return;const msg=document.getElementById('profileReferenceMessage');if(!document.getElementById('profileReferenceTitle').value)document.getElementById('profileReferenceTitle').value=file.name.replace(/\.[^.]+$/,'').slice(0,120);const textLike=/^text\//.test(file.type)||/\.(txt|md|csv|json|html|rtf)$/i.test(file.name);if(textLike){if(file.size>250000){msg.textContent='Arquivo textual muito grande. Use até 250 KB ou cole somente o trecho de referência.';return;}try{const text=await file.text();const max=Number(state.profile?.limits?.maximumReferenceCharacters)||8000;document.getElementById('profileReferenceContent').value=text.slice(0,max);document.getElementById('profileReferenceCounter').textContent=`${Math.min(text.length,max).toLocaleString('pt-BR')}/${max.toLocaleString('pt-BR')} caracteres`;msg.textContent=text.length>max?'O conteúdo foi limitado ao trecho inicial para manter o perfil leve.':'Arquivo lido. Revise antes de salvar.';}catch{msg.textContent='Não foi possível ler o arquivo como texto.';}}else{msg.textContent='O arquivo foi identificado. Para manter o sistema leve, o binário não vai para o D1; adicione link e descrição/transcrição para treinar a linguagem.';}}\nasync function changeProfilePassword(event){event.preventDefault();const msg=document.getElementById('changePasswordMessage');const current=document.getElementById('currentPassword').value,next=document.getElementById('newPassword').value,confirm=document.getElementById('newPasswordConfirm').value;if(next!==confirm){msg.textContent='As novas senhas não coincidem.';return;}msg.textContent='Atualizando senha…';try{state.profile=await api('/api/profile/password',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:current,newPassword:next})});event.currentTarget.reset();msg.textContent='Senha atualizada com sucesso.';renderProfile();}catch(error){msg.textContent=error.message;}}\n\nfunction updateCarouselProfileStatus() {
   const profile = state.profile?.writingProfile;
   const loggedIn = Boolean(state.profile?.authenticated);
   document.getElementById("carouselProfileStatus").textContent = profile ? profile.tone || "Perfil personalizado" : "Padrão jornalístico";
@@ -1425,17 +1394,8 @@ document.getElementById("monitoringTermFilters").addEventListener("click", (even
   state.monitoringTermFilter = button.dataset.monitoringFilter;
   renderDedicatedMonitoring();
 });
-document.getElementById("loginForm").addEventListener("submit", (event) => submitProfileAuth(event, "login"));
-document.getElementById("registerForm").addEventListener("submit", (event) => submitProfileAuth(event, "register"));
 document.getElementById("logoutProfile").addEventListener("click", logoutProfile);
 document.getElementById("profileDefaultSlideCount").addEventListener("change", updateDefaultSlideCount);
-document.getElementById("writingSampleForm").addEventListener("submit", submitWritingSample);
-document.getElementById("writingSampleFile").addEventListener("change", loadWritingSampleFile);
-document.getElementById("writingSampleContent").addEventListener("input", (event) => { document.getElementById("writingSampleCounter").textContent = `${event.target.value.length.toLocaleString("pt-BR")}/${(Number(state.profile?.limits?.maximumCharactersPerSample) || 5_000).toLocaleString("pt-BR")} caracteres`; });
-document.getElementById("writingSampleList").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-writing-sample-delete]");
-  if (button) removeWritingSample(button.dataset.writingSampleDelete);
-});
 document.getElementById("rebuildWritingStyle").addEventListener("click", rebuildWritingStyle);
 document.getElementById("settingsButton").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("openSettings").addEventListener("click", () => openModal("settingsModal"));
@@ -1455,6 +1415,13 @@ document.getElementById("newsroomBoard").addEventListener("click", (event) => { 
 document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); loadNewsroom(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.querySelectorAll('[data-profile-ref-tab]').forEach(button=>button.addEventListener('click',()=>setProfileReferenceTab(button.dataset.profileRefTab)));
+document.getElementById('profileReferenceForm').addEventListener('submit',submitProfileReference);
+document.getElementById('profileReferenceFile').addEventListener('change',loadProfileReferenceFile);
+document.getElementById('profileReferenceContent').addEventListener('input',event=>{const max=Number(state.profile?.limits?.maximumReferenceCharacters)||8000;document.getElementById('profileReferenceCounter').textContent=`${event.target.value.length.toLocaleString('pt-BR')}/${max.toLocaleString('pt-BR')} caracteres`;});
+document.getElementById('profileReferenceList').addEventListener('click',event=>{const b=event.target.closest('[data-profile-reference-delete]');if(b)deleteProfileReference(b.dataset.profileReferenceDelete);});
+document.getElementById('changePasswordForm').addEventListener('submit',changeProfilePassword);
+document.getElementById('profileView').addEventListener('click',event=>{const b=event.target.closest('[data-profile-password]');if(!b)return;const input=document.getElementById(b.dataset.profilePassword);if(!input)return;const show=input.type==='password';input.type=show?'text':'password';b.setAttribute('aria-label',show?'Ocultar senha':'Mostrar senha');});
 document.getElementById("navProfile").addEventListener("click", () => { showView("profile"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navRound").addEventListener("click", () => { if (state.portal) { state.portal = null; setSourceSegment("Todos"); setRegionSegment("Todas"); updatePortalFilter(); renderSourceHealth(); render(); } showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("goTop").addEventListener("click", () => document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }));
@@ -1479,7 +1446,7 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") do
 document.addEventListener("visibilitychange", () => scheduleStatusPolling(250));
 window.addEventListener("online", () => scheduleStatusPolling(250));
 window.addEventListener("ronda:session-expired",(event)=>{
-  state.profile={authenticated:false}; state.smartCarousels.clear(); renderProfile(); showView("profile");
+  state.profile={authenticated:false}; state.smartCarousels.clear(); location.replace(`/?next=${encodeURIComponent(location.pathname+location.search)}`);
   const message=document.getElementById("loginMessage"); if(message) message.textContent=event.detail?.message||"Sua sessão terminou. Entre novamente.";
 });
 

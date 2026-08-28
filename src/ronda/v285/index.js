@@ -50,6 +50,11 @@ import {
   deleteWritingSample,
   getWritingProfile,
   invalidateWritingProfile,
+  listProfileReferences,
+  getProfileReferenceStats,
+  createProfileReference,
+  deleteProfileReference,
+  updateEditorialUserPassword,
   saveWritingProfile,
   listCarouselLearningExamples,
   getCarouselLearningStats,
@@ -67,6 +72,7 @@ import {
   countActiveEditorialUsers,
   revokeUserSessions,
   setUserAccessRole,
+  setUserAccessDisabled,
   createEditorialGroup,
   updateEditorialGroup,
   deleteEditorialGroup,
@@ -87,6 +93,9 @@ import {
   MAX_STYLE_SAMPLE_CHARS,
   MAX_STYLE_SAMPLES,
   MAX_STYLE_TOTAL_CHARS,
+  MAX_PROFILE_REFERENCES,
+  MAX_PROFILE_REFERENCE_CHARS,
+  MAX_PROFILE_REFERENCE_TOTAL_CHARS,
   MIN_SLIDE_COUNT,
   SESSION_COOKIE_NAME,
   SESSION_IDLE_MINUTES,
@@ -97,6 +106,7 @@ import {
   normalizeDisplayName,
   normalizeEmail,
   normalizeStyleSample,
+  normalizeProfileReference,
   normalizeCarouselLearningExample,
   summarizeCarouselLearning,
   parseCookies,
@@ -322,16 +332,19 @@ function publicWritingProfile(value) {
 }
 
 async function profilePayload(db, user) {
-  const [samples, stats, writingProfile, carouselLearning] = await Promise.all([
+  const [samples, stats, writingProfile, carouselLearning, references, referenceStats] = await Promise.all([
     listWritingSamples(db, user.id),
     getWritingSampleStats(db, user.id),
     getWritingProfile(db, user.id),
     getCarouselLearningStats(db, user.id),
+    listProfileReferences(db, user.id),
+    getProfileReferenceStats(db, user.id),
   ]);
   return {
     authenticated: true,
     user,
     samples,
+    references,
     writingProfile: publicWritingProfile(writingProfile),
     carouselLearning,
     access: { role:user.role || 'editor', idleMinutes:SESSION_IDLE_MINUTES, maximumActiveUsers:MAX_ACTIVE_USERS, admin:isAdminUser(user) },
@@ -340,6 +353,10 @@ async function profilePayload(db, user) {
       maximumCharactersPerSample: MAX_STYLE_SAMPLE_CHARS,
       maximumTotalCharacters: MAX_STYLE_TOTAL_CHARS,
       usedCharacters: stats.totalChars,
+      maximumReferences: MAX_PROFILE_REFERENCES,
+      maximumReferenceCharacters: MAX_PROFILE_REFERENCE_CHARS,
+      maximumReferenceTotalCharacters: MAX_PROFILE_REFERENCE_TOTAL_CHARS,
+      usedReferenceCharacters: referenceStats.totalChars,
       slideCount: { minimum: MIN_SLIDE_COUNT, maximum: MAX_SLIDE_COUNT, default: DEFAULT_SLIDE_COUNT },
     },
   };
@@ -1045,6 +1062,15 @@ async function handleApi(request, env, url, ctx) {
     const revoked = await revokeUserSessions(requireDatabase(env), userId);
     return json({ ok:true, revoked });
   }
+  const adminAccessMatch = /^\/api\/admin\/users\/([^/]+)\/access$/.exec(url.pathname);
+  if (adminAccessMatch && request.method === "PATCH") {
+    await requireAdminUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    const user = await setUserAccessDisabled(requireDatabase(env), decodeURIComponent(adminAccessMatch[1]), Boolean(body.disabled));
+    if (!user) throw new HttpError(404, "Usuário não encontrado.");
+    return json({ ok:true, user });
+  }
+
   const adminRoleMatch = /^\/api\/admin\/users\/([^/]+)\/role$/.exec(url.pathname);
   if (adminRoleMatch && request.method === "PATCH") {
     await requireAdminUser(request, env);
@@ -1080,6 +1106,15 @@ async function handleApi(request, env, url, ctx) {
     await requireAdminUser(request, env); await removeEditorialGroupMember(requireDatabase(env),decodeURIComponent(groupMemberMatch[1]),decodeURIComponent(groupMemberMatch[2])); return json({ok:true});
   }
 
+  if (url.pathname === "/api/auth/identify" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    let email;
+    try { email = validateEmail(body.email); } catch (error) { throw new HttpError(400, error.message); }
+    const emailKey = normalizeEmail(email);
+    const record = await getEditorialUserByEmailKey(requireDatabase(env), emailKey);
+    return json({ ok:true, email, registered:Boolean(record), admin:emailKey===ADMIN_EMAIL, blocked:Boolean(record?.disabled), mode:emailKey===ADMIN_EMAIL?'admin':'email-only' });
+  }
+
   if (url.pathname === "/api/auth/register" && request.method === "POST") {
     const body = await request.json().catch(() => ({}));
     let email;
@@ -1095,6 +1130,7 @@ async function handleApi(request, env, url, ctx) {
     catch (error) { throw new HttpError(400, error.message); }
     const emailKey = normalizeEmail(email);
     const db = requireDatabase(env);
+    if (emailKey === ADMIN_EMAIL) throw new HttpError(403, "O administrador deve entrar pela ativação segura do primeiro acesso.");
     if (await getEditorialUserByEmailKey(db, emailKey)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
     if (emailKey !== ADMIN_EMAIL) {
       await cleanupIdleUserSessions(db, SESSION_IDLE_MINUTES);
@@ -1128,17 +1164,70 @@ async function handleApi(request, env, url, ctx) {
 
   if (url.pathname === "/api/auth/login" && request.method === "POST") {
     const body = await request.json().catch(() => ({}));
-    const emailKey = normalizeEmail(body.email);
+    let email;
+    try { email = validateEmail(body.email); } catch (error) { throw new HttpError(400, error.message); }
+    const emailKey = normalizeEmail(email);
+    const adminMode = Boolean(body.adminMode);
+    const password = String(body.password || "");
     const db = requireDatabase(env);
-    const record = emailKey ? await getEditorialUserByEmailKey(db, emailKey) : null;
-    const valid = record ? await verifyPassword(String(body.password || ""), record) : false;
-    if (!record || !valid) throw new HttpError(401, "E-mail ou senha inválidos.");
-    if (record.disabled) throw new HttpError(403, "Este acesso foi desativado pelo administrador.");
-    const user = await ensureUserAccess(db, record.id, record.email, record.role || 'editor');
+    let record = await getEditorialUserByEmailKey(db, emailKey);
+
+    if (adminMode) {
+      if (emailKey !== ADMIN_EMAIL) throw new HttpError(403, "Este e-mail não possui acesso administrativo.");
+      let valid = record ? await verifyPassword(password, record) : false;
+      let adminRecovered = false;
+      if (!valid) {
+        if (!env.ADMIN_BOOTSTRAP_PASSWORD) throw new HttpError(503, "Administrador ainda não ativado.", "Configure o secret ADMIN_BOOTSTRAP_PASSWORD no Worker.");
+        if (!secureEqual(password, env.ADMIN_BOOTSTRAP_PASSWORD)) throw new HttpError(401, "Senha administrativa inválida.");
+        const credentials = await hashPassword(password);
+        if (!record) {
+          record = await createEditorialUser(db, {
+            email: ADMIN_EMAIL, emailKey: ADMIN_EMAIL, displayName: "Administrador",
+            passwordHash: credentials.hash, passwordSalt: credentials.salt, passwordIterations: credentials.iterations,
+            defaultSlideCount: DEFAULT_SLIDE_COUNT,
+          });
+        } else {
+          await updateEditorialUserPassword(db, record.id, {
+            passwordHash:credentials.hash, passwordSalt:credentials.salt, passwordIterations:credentials.iterations
+          });
+        }
+        record = await getEditorialUserByEmailKey(db, ADMIN_EMAIL);
+        adminRecovered = true;
+      }
+      const user = await ensureUserAccess(db, record.id, record.email, 'admin');
+      const token = randomToken();
+      await createControlledSession(db, user, await sha256Hex(token));
+      return json({ ok:true, adminRecovered, ...(await profilePayload(db,user)) },200,{
+        "Set-Cookie":sessionCookie(token,{secure:secureCookieForRequest(request)})
+      });
+    }
+
+    if (emailKey === ADMIN_EMAIL) throw new HttpError(400, "Marque “Entrar como ADM” para usar a conta administrativa.");
+    if (record?.disabled) throw new HttpError(403, "Este acesso foi bloqueado ou removido pelo administrador.");
+
+    await cleanupIdleUserSessions(db, SESSION_IDLE_MINUTES);
+    const alreadyHasSeat = record ? await userHasActiveSeat(db, record.id, SESSION_IDLE_MINUTES) : false;
+    if (!alreadyHasSeat) {
+      const active = await countActiveEditorialUsers(db, SESSION_IDLE_MINUTES);
+      if (active >= MAX_ACTIVE_USERS) throw new HttpError(429, `O limite de ${MAX_ACTIVE_USERS} usuários ativos foi atingido.`);
+    }
+
+    if (!record) {
+      const internalCredentials = await hashPassword(`${randomToken()}Aa1!`);
+      record = await createEditorialUser(db, {
+        email, emailKey, displayName: normalizeDisplayName("", email),
+        passwordHash: internalCredentials.hash, passwordSalt: internalCredentials.salt,
+        passwordIterations: internalCredentials.iterations, defaultSlideCount: DEFAULT_SLIDE_COUNT,
+      });
+      record = await ensureUserAccess(db, record.id, record.email, 'editor');
+    } else {
+      record = await ensureUserAccess(db, record.id, record.email, record.role || 'editor');
+    }
+
     const token = randomToken();
-    await createControlledSession(db, user, await sha256Hex(token));
-    return json({ ok: true, ...(await profilePayload(db, user)) }, 200, {
-      "Set-Cookie": sessionCookie(token, { secure: secureCookieForRequest(request) }),
+    await createControlledSession(db, record, await sha256Hex(token));
+    return json({ ok:true, emailOnly:true, ...(await profilePayload(db,record)) },200,{
+      "Set-Cookie":sessionCookie(token,{secure:secureCookieForRequest(request)})
     });
   }
 
@@ -1172,6 +1261,49 @@ async function handleApi(request, env, url, ctx) {
     await updateUserDefaultSlideCount(requireDatabase(env), user.id, slideCount);
     const refreshed = await getEditorialUserById(requireDatabase(env), user.id);
     return json({ ok: true, user: refreshed });
+  }
+
+  if (url.pathname === "/api/profile/password" && request.method === "PATCH") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    const db = requireDatabase(env);
+    const record = await getEditorialUserByEmailKey(db, normalizeEmail(user.email));
+    const currentOk = record ? await verifyPassword(String(body.currentPassword || ""), record) : false;
+    if (!currentOk) throw new HttpError(401, "A senha atual não confere.");
+    let newPassword;
+    try { newPassword = validatePassword(body.newPassword); } catch (error) { throw new HttpError(400, error.message); }
+    const credentials = await hashPassword(newPassword);
+    await updateEditorialUserPassword(db, user.id, { passwordHash:credentials.hash, passwordSalt:credentials.salt, passwordIterations:credentials.iterations });
+    await revokeUserSessions(db, user.id);
+    const token = randomToken();
+    const refreshed = await ensureUserAccess(db, user.id, user.email, user.role || 'editor');
+    await createControlledSession(db, refreshed, await sha256Hex(token));
+    return json({ ok:true, message:"Senha atualizada.", ...(await profilePayload(db, refreshed)) },200,{ "Set-Cookie":sessionCookie(token,{secure:secureCookieForRequest(request)}) });
+  }
+
+  if (url.pathname === "/api/profile/references" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    let reference;
+    try { reference = normalizeProfileReference(body); } catch (error) { throw new HttpError(400, error.message); }
+    try {
+      const created = await createProfileReference(requireDatabase(env), user.id, reference);
+      await invalidateWritingProfile(requireDatabase(env), user.id);
+      return json({ ok:true, reference:created, ...(await profilePayload(requireDatabase(env), user)) },201);
+    } catch (error) {
+      const detail=String(error?.message||error);
+      if (/unique|constraint/i.test(detail)) throw new HttpError(409,"Esta referência já foi cadastrada.");
+      throw new HttpError(409,detail);
+    }
+  }
+
+  const profileReferenceRoute = /^\/api\/profile\/references\/([a-z0-9-]{8,80})$/i.exec(url.pathname);
+  if (profileReferenceRoute && request.method === "DELETE") {
+    const { user } = await requireEditorialUser(request, env);
+    const removed = await deleteProfileReference(requireDatabase(env), user.id, profileReferenceRoute[1]);
+    if (!removed) throw new HttpError(404,"Referência não encontrada.");
+    await invalidateWritingProfile(requireDatabase(env), user.id);
+    return json({ ok:true, ...(await profilePayload(requireDatabase(env), user)) });
   }
 
   if (url.pathname === "/api/profile/samples" && request.method === "POST") {
@@ -1222,13 +1354,17 @@ async function handleApi(request, env, url, ctx) {
   if (url.pathname === "/api/profile/style/rebuild" && request.method === "POST") {
     const { user } = await requireEditorialUser(request, env);
     const db = requireDatabase(env);
-    const samples = await listWritingSamples(db, user.id);
-    if (!samples.length) throw new HttpError(409, "Adicione pelo menos um texto antes de atualizar o perfil de escrita.");
-    const profile = await analyzeWritingStyle(samples, {
+    const [samples, references] = await Promise.all([listWritingSamples(db, user.id), listProfileReferences(db, user.id)]);
+    const referenceSamples = references
+      .map(reference => ({ title:reference.title, sourceType:reference.type, content:reference.trainingText || "" }))
+      .filter(reference => String(reference.content || "").trim().length >= 40);
+    const trainingSamples = [...samples, ...referenceSamples].slice(0, MAX_STYLE_SAMPLES + MAX_PROFILE_REFERENCES);
+    if (!trainingSamples.length) throw new HttpError(409, "Adicione pelo menos uma referência com conteúdo, descrição ou transcrição antes de atualizar a linguagem.");
+    const profile = await analyzeWritingStyle(trainingSamples, {
       ai: articleAnalysisAi(env),
       model: env.STYLE_ANALYSIS_MODEL || env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
     });
-    const saved = await saveWritingProfile(db, user.id, profile, samples.length);
+    const saved = await saveWritingProfile(db, user.id, profile, trainingSamples.length);
     return json({ ok: true, writingProfile: publicWritingProfile(saved), ...(await profilePayload(db, user)) });
   }
 

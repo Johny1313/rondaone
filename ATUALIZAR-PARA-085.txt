@@ -1,0 +1,19 @@
+RONDA ONE Cloud v0.8.5 — OPEN EMAIL ACCESS
+
+Usuário comum: digita e-mail e entra imediatamente.
+Primeiro acesso cria o perfil automaticamente.
+Senha somente ao marcar "Entrar como ADM".
+E-mails bloqueados/removidos permanecem sem acesso.
+
+Dashboard ADM:
+- permanência hoje por usuário
+- permanência acumulada
+- área atual/status
+- bloquear/liberar acesso
+
+Deploy:
+npm install
+npm run check
+npm run verify:085
+npm run test:regression
+npm run deploy

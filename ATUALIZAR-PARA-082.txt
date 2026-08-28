@@ -1,0 +1,27 @@
+RONDA ONE Cloud v0.8.2 — ACCESS & STABILITY
+
+Versão COMPLETA baseada na v0.8.1 Source Recovery.
+
+NOVO
+- limite de 10 usuários ativos únicos;
+- administrador não ocupa vaga;
+- logout por 60 minutos de inatividade;
+- atualização de presença no máximo a cada 5 minutos e somente com atividade real;
+- painel /admin/ restrito ao administrador;
+- usuários cadastrados, sessões ativas, logout remoto e roles;
+- grupos de edição;
+- dashboard com rondas, carrosséis, assuntos/hora/dia/mês, tempo médio no app e Design;
+- saúde de fontes/jobs/rondas;
+- métricas agregadas no D1, sem telemetria por clique/mousemove;
+- Source Recovery 0.8.1 preservado.
+
+DEPLOY
+npm install
+npm run check
+npm run verify:082
+npm run test:regression
+npm run deploy
+
+CONFIRA
+/api/platform/status -> version 0.8.2
+/admin/ -> somente admin

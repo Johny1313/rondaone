@@ -10,6 +10,9 @@ export const PASSWORD_ITERATIONS = 120_000;
 export const MAX_STYLE_SAMPLES = 8;
 export const MAX_STYLE_SAMPLE_CHARS = 5_000;
 export const MAX_STYLE_TOTAL_CHARS = 30_000;
+export const MAX_PROFILE_REFERENCES = 32;
+export const MAX_PROFILE_REFERENCE_CHARS = 8_000;
+export const MAX_PROFILE_REFERENCE_TOTAL_CHARS = 80_000;
 export const MIN_SLIDE_COUNT = 3;
 export const MAX_SLIDE_COUNT = 15;
 export const DEFAULT_SLIDE_COUNT = 7;
@@ -61,6 +64,27 @@ export function validateSlideCount(value, fallback = DEFAULT_SLIDE_COUNT) {
     throw new Error(`Escolha entre ${MIN_SLIDE_COUNT} e ${MAX_SLIDE_COUNT} slides.`);
   }
   return normalized;
+}
+
+export function normalizeProfileReference(body = {}) {
+  const allowed = new Set(["text", "image", "file", "video"]);
+  const type = allowed.has(String(body.type || "").toLowerCase()) ? String(body.type).toLowerCase() : "text";
+  const title = plainText(body.title).replace(/\s+/g, " ").trim().slice(0, 120) || "Referência sem título";
+  const sourceUrl = String(body.sourceUrl || "").trim().slice(0, 1000);
+  if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) throw new Error("O link da referência precisa começar com http:// ou https://.");
+  const content = plainText(body.content).replace(/\n{4,}/g, "\n\n\n").trim().slice(0, MAX_PROFILE_REFERENCE_CHARS);
+  const notes = plainText(body.notes).replace(/\n{4,}/g, "\n\n\n").trim().slice(0, 2_000);
+  const fileName = plainText(body.fileName).replace(/\s+/g, " ").trim().slice(0, 180);
+  const mimeType = String(body.mimeType || "").trim().slice(0, 120);
+  const fileSize = Math.max(0, Math.min(50 * 1024 * 1024, Number(body.fileSize) || 0));
+  const trainingText = [title, content, notes].filter(Boolean).join("\n\n").trim();
+  if (type === "text" && trainingText.length < 40) throw new Error("A referência de texto precisa ter pelo menos 40 caracteres.");
+  if (type !== "text" && !sourceUrl && trainingText.length < 20) throw new Error("Adicione um link ou uma descrição/transcrição para esta referência.");
+  const fingerprint = [type, title, sourceUrl, trainingText, fileName, mimeType].join("|").toLocaleLowerCase("pt-BR");
+  return {
+    type, title, sourceUrl: sourceUrl || null, content, notes, fileName: fileName || null, mimeType: mimeType || null, fileSize,
+    trainingText, charCount: trainingText.length, contentHash: stableHash(fingerprint),
+  };
 }
 
 export function normalizeStyleSample(body = {}) {

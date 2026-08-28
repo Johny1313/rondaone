@@ -1,7 +1,7 @@
-import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
+import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.8.2";
+export const DATABASE_SCHEMA_VERSION = "2.8.3";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -198,6 +198,25 @@ const SCHEMA_STATEMENTS = [
     sample_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS profile_references (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    reference_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_url TEXT,
+    text_content TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    file_name TEXT,
+    mime_type TEXT,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL,
+    char_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, content_hash)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_profile_references_user ON profile_references(user_id, created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_profile_references_type ON profile_references(user_id, reference_type, created_at DESC)",
   `CREATE TABLE IF NOT EXISTS carousel_learning_examples (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -1545,6 +1564,14 @@ export async function getEditorialUserById(db, userId) {
   return publicUserRow(row);
 }
 
+export async function updateEditorialUserPassword(db, userId, { passwordHash, passwordSalt, passwordIterations } = {}) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`UPDATE users SET password_hash = ?, password_salt = ?, password_iterations = ?, updated_at = ? WHERE id = ?`)
+    .bind(passwordHash, passwordSalt, Number(passwordIterations) || 120000, updatedAt, userId).run();
+  return getEditorialUserById(db, userId);
+}
+
 export async function createUserSession(db, { tokenHash, userId, ttlDays = 30 } = {}) {
   await ensureSchema(db);
   const now = new Date().toISOString();
@@ -1651,6 +1678,19 @@ export async function revokeUserSessions(db, userId) {
   return Number(result?.meta?.changes) || 0;
 }
 
+export async function setUserAccessDisabled(db, userId, disabled = true) {
+  await ensureSchema(db);
+  const user = await getEditorialUserById(db, userId);
+  if (!user) return null;
+  if (String(user.email || '').toLowerCase() === ADMIN_EMAIL) return user;
+  await ensureUserAccess(db, userId, user.email, user.role || 'editor');
+  const now = new Date().toISOString();
+  await db.prepare("UPDATE user_access SET disabled = ?, updated_at = ? WHERE user_id = ?")
+    .bind(disabled ? 1 : 0, now, userId).run();
+  if (disabled) await revokeUserSessions(db, userId).catch(() => null);
+  return getEditorialUserById(db, userId);
+}
+
 export async function setUserAccessRole(db, userId, role) {
   await ensureSchema(db);
   const user = await getEditorialUserById(db, userId);
@@ -1738,7 +1778,9 @@ export async function listAdminUsers(db) {
       SELECT u.*, a.role AS access_role, a.disabled AS access_disabled,
              MAX(CASE WHEN s.expires_at > ? AND s.last_seen_at >= ? THEN s.last_seen_at ELSE NULL END) AS active_last_seen,
              COUNT(DISTINCT CASE WHEN s.expires_at > ? AND s.last_seen_at >= ? THEN s.token_hash ELSE NULL END) AS active_sessions,
-             p.area AS current_area, p.last_activity_at AS presence_at
+             p.area AS current_area, p.last_activity_at AS presence_at,
+             COALESCE((SELECT SUM(d.active_ms) FROM usage_daily_users d WHERE d.user_id=u.id),0) AS total_active_ms,
+             COALESCE((SELECT SUM(d.active_ms) FROM usage_daily_users d WHERE d.user_id=u.id AND d.day=date('now')),0) AS today_active_ms
       FROM users u
       LEFT JOIN user_access a ON a.user_id = u.id
       LEFT JOIN user_sessions s ON s.user_id = u.id
@@ -1756,6 +1798,7 @@ export async function listAdminUsers(db) {
     const user = publicUserRow(row);
     return { ...user, active: Number(row.active_sessions) > 0, activeSessions: Number(row.active_sessions)||0,
       lastSeenAt: row.active_last_seen || row.presence_at || null, currentArea: row.current_area || null,
+      todayActiveMs: Number(row.today_active_ms)||0, totalActiveMs: Number(row.total_active_ms)||0,
       groups: groupMap.get(user.id) || [] };
   });
 }
@@ -1815,7 +1858,7 @@ export async function getAdminDashboard(db) {
   const cutoff24 = new Date(now.getTime()-24*60*60*1000).toISOString().slice(0,13);
   const cutoff30 = new Date(now.getTime()-30*24*60*60*1000).toISOString().slice(0,10);
   const [activeUsers, registeredRow, groupsRow, dayMetrics, hourMetrics, monthTopics, hourlyTopics, dailyTopics, appUsage, designUsage,
-    jobRows, runRows, cacheRows, articleRows, sourceRows] = await Promise.all([
+    jobRows, runRows, cacheRows, articleRows, sourceRows, navigationRows] = await Promise.all([
     countActiveEditorialUsers(db),
     db.prepare("SELECT COUNT(*) AS total FROM users").first(),
     db.prepare("SELECT COUNT(*) AS total FROM editorial_groups").first(),
@@ -1831,6 +1874,7 @@ export async function getAdminDashboard(db) {
     db.prepare("SELECT (SELECT COUNT(*) FROM intelligent_carousels) AS carousels, (SELECT COUNT(*) FROM article_read_cache) AS articles").first(),
     db.prepare("SELECT COALESCE(SUM(attempts),0) AS attempts, COALESCE(SUM(successes),0) AS successes FROM article_source_stats").first(),
     db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status NOT IN ('failed','blocked','not-found') THEN 1 ELSE 0 END) AS healthy, SUM(CASE WHEN item_count>0 THEN 1 ELSE 0 END) AS with_content FROM source_state").first(),
+    db.prepare("SELECT area, SUM(active_ms) AS active_ms, COUNT(DISTINCT user_id) AS users FROM usage_daily_users WHERE day=? GROUP BY area ORDER BY active_ms DESC").bind(day).all(),
   ]);
   const dayMap = Object.fromEntries((dayMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
   const hourMap = Object.fromEntries((hourMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
@@ -1852,8 +1896,50 @@ export async function getAdminDashboard(db) {
       daily:(dailyTopics?.results||[]).map(row=>({bucket:row.bucket,value:Math.round(Number(row.value)||0)})) },
     health: { sources:{total:Number(sourceRows?.total)||0,healthy:Number(sourceRows?.healthy)||0,withContent:Number(sourceRows?.with_content)||0}, jobs:statuses(jobRows), runs:statuses(runRows) },
     resources: { carouselCache:Number(cacheRows?.carousels)||0, articleCache:Number(cacheRows?.articles)||0, articleReadAttempts:Number(articleRows?.attempts)||0, articleReadSuccesses:Number(articleRows?.successes)||0 },
+    navigation: (navigationRows?.results||[]).map(row=>({ area:row.area, activeMs:Number(row.active_ms)||0, users:Number(row.users)||0 })),
     note: 'Recursos são métricas internas do aplicativo; faturamento/CPU/rows da Cloudflare não são estimados aqui.'
   };
+}
+
+function parseProfileReference(row) {
+  return row ? {
+    id: row.id, userId: row.user_id, type: row.reference_type, title: row.title, sourceUrl: row.source_url || null,
+    content: row.text_content || "", notes: row.notes || "", fileName: row.file_name || null, mimeType: row.mime_type || null,
+    fileSize: Number(row.file_size) || 0, charCount: Number(row.char_count) || 0, createdAt: row.created_at, updatedAt: row.updated_at,
+    trainingText: [row.title, row.text_content, row.notes].filter(Boolean).join("\n\n").trim(),
+  } : null;
+}
+
+export async function listProfileReferences(db, userId, limit = MAX_PROFILE_REFERENCES) {
+  await ensureSchema(db);
+  const result = await db.prepare(`SELECT * FROM profile_references WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`)
+    .bind(userId, Math.max(1, Math.min(MAX_PROFILE_REFERENCES, Number(limit) || MAX_PROFILE_REFERENCES))).all();
+  return (result?.results || []).map(parseProfileReference);
+}
+
+export async function getProfileReferenceStats(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(char_count),0) AS total_chars FROM profile_references WHERE user_id = ?`).bind(userId).first();
+  return { count:Number(row?.total)||0, totalChars:Number(row?.total_chars)||0 };
+}
+
+export async function createProfileReference(db, userId, reference) {
+  await ensureSchema(db);
+  const stats = await getProfileReferenceStats(db, userId);
+  if (stats.count >= MAX_PROFILE_REFERENCES) throw new Error(`O perfil aceita no máximo ${MAX_PROFILE_REFERENCES} referências.`);
+  if (stats.totalChars + Number(reference.charCount || 0) > MAX_PROFILE_REFERENCE_TOTAL_CHARS) throw new Error(`As referências aceitam até ${MAX_PROFILE_REFERENCE_TOTAL_CHARS.toLocaleString("pt-BR")} caracteres somados.`);
+  const id = crypto.randomUUID(); const now = new Date().toISOString();
+  await db.prepare(`INSERT INTO profile_references (id,user_id,reference_type,title,source_url,text_content,notes,file_name,mime_type,file_size,content_hash,char_count,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id,userId,reference.type,reference.title,reference.sourceUrl || null,reference.content || "",reference.notes || "",reference.fileName || null,reference.mimeType || null,Number(reference.fileSize)||0,reference.contentHash,Number(reference.charCount)||0,now,now).run();
+  return parseProfileReference(await db.prepare("SELECT * FROM profile_references WHERE id = ? AND user_id = ?").bind(id,userId).first());
+}
+
+export async function deleteProfileReference(db, userId, id) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM profile_references WHERE id = ? AND user_id = ? LIMIT 1").bind(id,userId).first();
+  if (!current) return null;
+  await db.prepare("DELETE FROM profile_references WHERE id = ? AND user_id = ?").bind(id,userId).run();
+  return parseProfileReference(current);
 }
 
 export async function updateUserDefaultSlideCount(db, userId, slideCount) {

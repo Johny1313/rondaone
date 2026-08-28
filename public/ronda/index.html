@@ -71,60 +71,27 @@
       </section>
 
       <section class="profile-view" id="profileView" hidden aria-labelledby="profileTitle">
-        <div class="management-heading profile-heading">
-          <div><p class="eyebrow">Perfil editorial</p><h2 id="profileTitle">Sua escrita nos carrosséis</h2><p>Crie um perfil com e-mail, envie exemplos de textos e use o estilo identificado na geração dos roteiros.</p></div>
-          <span class="profile-session-status" id="profileSessionStatus">Verificando perfil</span>
-        </div>
-        <div class="background-note"><strong>Adaptação de estilo</strong><span>Os exemplos orientam tom, ritmo, títulos e CTA. A apuração continua limitada aos fatos da matéria selecionada; não ocorre fine-tuning do modelo.</span></div>
-
-        <section class="profile-auth-grid" id="profileLoggedOut">
-          <form class="profile-auth-card" id="loginForm">
-            <div><p class="eyebrow">Já tenho perfil</p><h3>Entrar</h3></div>
-            <label><span>E-mail</span><input id="loginEmail" type="email" maxlength="254" autocomplete="email" required></label>
-            <label><span>Senha</span><input id="loginPassword" type="password" minlength="8" maxlength="72" autocomplete="current-password" required></label>
-            <button class="primary" type="submit">Entrar no perfil</button>
-            <p class="config-message" id="loginMessage"></p>
-          </form>
-          <form class="profile-auth-card" id="registerForm">
-            <div><p class="eyebrow">Primeiro acesso</p><h3>Criar perfil</h3></div>
-            <label><span>Nome</span><input id="registerName" maxlength="80" autocomplete="name" placeholder="Nome ou redação"></label>
-            <label><span>E-mail</span><input id="registerEmail" type="email" maxlength="254" autocomplete="email" required></label>
-            <label><span>Senha</span><input id="registerPassword" type="password" minlength="8" maxlength="72" autocomplete="new-password" required></label>
-            <label><span>Slides padrão</span><select id="registerSlideCount"></select></label>
-            <button class="primary" type="submit">Criar perfil</button>
-            <p class="config-message" id="registerMessage"></p>
-          </form>
-        </section>
-
-        <section id="profileLoggedIn" hidden>
-          <div class="profile-account-bar">
-            <div><small>Perfil conectado</small><strong id="profileUserName">Perfil editorial</strong><span id="profileUserEmail"></span></div>
-            <label><span>Slides padrão</span><select id="profileDefaultSlideCount"></select></label>
-            <a class="secondary" id="adminDashboardLink" href="/admin/" hidden>Admin</a>
-            <button class="secondary" id="logoutProfile" type="button">Sair</button>
-          </div>
-
-          <div class="profile-workspace-grid">
-            <section class="profile-panel">
-              <div class="profile-panel-head"><div><p class="eyebrow">Biblioteca de exemplos</p><h3>Adicionar texto ou post</h3><p>Cole o conteúdo ou carregue um arquivo de texto. O limite evita crescimento excessivo do D1.</p></div><span id="profileSampleUsage">0/8 textos</span></div>
-              <form id="writingSampleForm" class="writing-sample-form">
-                <div class="profile-form-row">
-                  <label><span>Título do exemplo</span><input id="writingSampleTitle" maxlength="120" required placeholder="Ex.: Post de política"></label>
-                  <label><span>Tipo</span><select id="writingSampleType"><option value="post">Post</option><option value="legenda">Legenda</option><option value="roteiro">Roteiro</option><option value="artigo">Artigo</option><option value="texto">Texto</option></select></label>
-                </div>
-                <label><span>Arquivo opcional</span><input id="writingSampleFile" type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json"><small>TXT, MD, CSV ou JSON. O texto é lido no navegador e enviado sem o arquivo binário.</small></label>
-                <label><span>Conteúdo</span><textarea id="writingSampleContent" minlength="40" maxlength="5000" rows="10" required placeholder="Cole aqui um texto já publicado, legenda, roteiro ou post que represente o estilo desejado."></textarea><small id="writingSampleCounter">0/5.000 caracteres</small></label>
-                <button class="primary" type="submit">Adicionar à biblioteca</button>
-                <p class="config-message" id="writingSampleMessage"></p>
+        <div class="management-heading profile-heading"><div><p class="eyebrow">Perfil editorial</p><h2 id="profileTitle">Referências para a linguagem da IA</h2><p>Cadastre textos, imagens, arquivos e vídeos que representem o tom, repertório e linguagem desejados.</p></div><span class="profile-session-status active" id="profileSessionStatus">Perfil conectado</span></div>
+        <div class="background-note"><strong>Referência, não invenção factual</strong><span>As referências orientam linguagem, ritmo, vocabulário e estrutura. Os fatos do carrossel continuam restritos às evidências das matérias lidas.</span></div>
+        <section id="profileLoggedIn">
+          <div class="profile-account-bar"><div><small>Perfil conectado</small><strong id="profileUserName">Perfil editorial</strong><span id="profileUserEmail"></span></div><label><span>Slides padrão</span><select id="profileDefaultSlideCount"></select></label><a class="secondary" id="adminDashboardLink" href="/admin/" hidden>Admin</a><button class="secondary" id="logoutProfile" type="button">Sair</button></div>
+          <div class="profile-reference-tabs" role="tablist"><button class="active" data-profile-ref-tab="text" type="button">Textos</button><button data-profile-ref-tab="image" type="button">Imagens</button><button data-profile-ref-tab="file" type="button">Arquivos</button><button data-profile-ref-tab="video" type="button">Vídeos</button><button data-profile-ref-tab="language" type="button">Linguagem IA</button><button data-profile-ref-tab="account" type="button">Conta</button></div>
+          <div class="profile-workspace-grid profile-reference-layout">
+            <section class="profile-panel" id="profileReferencePanel">
+              <div class="profile-panel-head"><div><p class="eyebrow">Biblioteca de referência</p><h3 id="referenceFormTitle">Adicionar texto</h3><p id="referenceFormHelp">Cole um texto que represente a linguagem que deseja aproximar.</p></div><span id="profileReferenceUsage">0/32 referências</span></div>
+              <form id="profileReferenceForm" class="writing-sample-form">
+                <input id="profileReferenceType" type="hidden" value="text">
+                <label><span>Título</span><input id="profileReferenceTitle" maxlength="120" required placeholder="Ex.: Texto de abertura do jornal"></label>
+                <label><span>Link de origem</span><input id="profileReferenceUrl" type="url" maxlength="1000" placeholder="https://…"><small>Opcional para texto. Recomendado para imagem, arquivo e vídeo.</small></label>
+                <label id="profileReferenceFileLabel"><span>Arquivo local opcional</span><input id="profileReferenceFile" type="file"><small id="profileReferenceFileHelp">TXT/MD/CSV/JSON podem ser lidos no navegador. Para mídia pesada, salvamos metadados + descrição/transcrição + link, sem enviar o binário ao D1.</small></label>
+                <label><span id="profileReferenceContentLabel">Conteúdo</span><textarea id="profileReferenceContent" maxlength="8000" rows="9" placeholder="Cole a referência aqui…"></textarea><small id="profileReferenceCounter">0/8.000 caracteres</small></label>
+                <label><span>Observações de linguagem</span><textarea id="profileReferenceNotes" maxlength="2000" rows="4" placeholder="O que deve ser aprendido desta referência? Tom, ritmo, escolha de palavras, estrutura, abertura, CTA…"></textarea></label>
+                <button class="primary" type="submit">Salvar referência</button><p class="config-message" id="profileReferenceMessage"></p>
               </form>
-              <div class="writing-sample-list" id="writingSampleList"></div>
+              <div class="writing-sample-list" id="profileReferenceList"></div>
             </section>
-
-            <section class="profile-panel style-profile-panel">
-              <div class="profile-panel-head"><div><p class="eyebrow">Guia de escrita</p><h3>Estilo aplicado aos carrosséis</h3><p>Atualize o guia depois de adicionar ou remover exemplos.</p></div><button class="secondary" id="rebuildWritingStyle" type="button">Atualizar estilo</button></div>
-              <div class="writing-profile-summary" id="writingProfileSummary"><div class="empty"><strong>Perfil ainda não analisado</strong><span>Adicione exemplos e clique em Atualizar estilo.</span></div></div>
-              <p class="config-message" id="writingProfileMessage"></p>
-            </section>
+            <section class="profile-panel style-profile-panel" id="profileLanguagePanel"><div class="profile-panel-head"><div><p class="eyebrow">Guia de linguagem</p><h3>Estilo aplicado aos carrosséis</h3><p>Recalcule depois de adicionar ou remover referências.</p></div><button class="secondary" id="rebuildWritingStyle" type="button">Atualizar linguagem</button></div><div class="writing-profile-summary" id="writingProfileSummary"><div class="empty"><strong>Perfil ainda não analisado</strong><span>Adicione referências e clique em Atualizar linguagem.</span></div></div><p class="config-message" id="writingProfileMessage"></p></section>
+            <section class="profile-panel" id="profileAccountPanel" hidden><div class="profile-panel-head"><div><p class="eyebrow">Conta</p><h3>Segurança do acesso</h3><p>Troque sua senha sem perder o perfil editorial.</p></div></div><form id="changePasswordForm" class="writing-sample-form"><label><span>Senha atual</span><div class="profile-password-wrap"><input id="currentPassword" type="password" minlength="8" maxlength="72" autocomplete="current-password" required><button type="button" data-profile-password="currentPassword" aria-label="Mostrar senha">◉</button></div></label><label><span>Nova senha</span><div class="profile-password-wrap"><input id="newPassword" type="password" minlength="8" maxlength="72" autocomplete="new-password" required><button type="button" data-profile-password="newPassword" aria-label="Mostrar senha">◉</button></div></label><label><span>Confirmar nova senha</span><div class="profile-password-wrap"><input id="newPasswordConfirm" type="password" minlength="8" maxlength="72" autocomplete="new-password" required><button type="button" data-profile-password="newPasswordConfirm" aria-label="Mostrar senha">◉</button></div></label><button class="primary" type="submit">Atualizar senha</button><p class="config-message" id="changePasswordMessage"></p></form></section>
           </div>
         </section>
       </section>
