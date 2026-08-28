@@ -2,6 +2,10 @@ import { plainText, stableHash } from "./parser.js";
 
 export const SESSION_COOKIE_NAME = "ronda_session";
 export const SESSION_TTL_DAYS = 30;
+export const SESSION_IDLE_MINUTES = 60;
+export const SESSION_TOUCH_MINUTES = 5;
+export const MAX_ACTIVE_USERS = 10;
+export const ADMIN_EMAIL = "johnymoraes13@gmail.com";
 export const PASSWORD_ITERATIONS = 120_000;
 export const MAX_STYLE_SAMPLES = 8;
 export const MAX_STYLE_SAMPLE_CHARS = 5_000;

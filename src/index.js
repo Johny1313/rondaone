@@ -23,11 +23,12 @@ export default {
     if(url.pathname==='/') return Response.redirect(new URL('/ronda',request.url).toString(),302);
     if(url.pathname==='/design') return Response.redirect(new URL('/design/',request.url).toString(),302);
     if(url.pathname==='/projects') return Response.redirect(new URL('/projects/',request.url).toString(),302);
+    if(url.pathname==='/admin') return Response.redirect(new URL('/admin/',request.url).toString(),302);
 
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.1',
+      version:'0.8.3',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -50,6 +51,8 @@ export default {
       editorialEvents:true,
       editorialPipeline:'collect-normalize-deduplicate-cluster-event-read-enrich',
       editorialIntelligence:'incremental-evidence-first',
+      accessControl:{ enabled:true, maximumActiveUsers:10, idleLogoutMinutes:60, adminExcludedFromSeat:true, presenceWriteMinutes:5, adminDashboard:true, editorialGroups:true },
+      carouselStabilityV083:{ intelligentQueueConcurrency:2, queueRetries:5, queuedStaleMinutes:5, runningStaleMinutes:3, terminalStateImmutable:true, cacheRecovery:true, duplicateLockRetry:true, adaptivePolling:true },
       sourceRecovery:{
         cronMinutes:3,
         healthyMaxRefreshMinutes:5,
@@ -82,12 +85,13 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-081-source-recovery'
+        assetCacheBust:'2.8.5-083-carousel-stability'
       },
       navigation:{
         ronda:'/ronda',
         design:'/design/',
-        projects:'/projects/'
+        projects:'/projects/',
+        admin:'/admin/'
       },
       editorialMesa:{
         eventCentric:true,

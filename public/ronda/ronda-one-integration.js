@@ -1,8 +1,8 @@
 (()=>{
   'use strict';
 
-  const VERSION='0.8.1';
-  const BUILD='mesa-editorial-event-centric';
+  const VERSION='0.8.3';
+  const BUILD='carousel-stability-access';
   const JOB_KEY='rondaOne.intelligentJob';
   const MAX_LOCAL_JOB_AGE_MS=12*60*1000;
   const RECOVERY_COOLDOWN_MS=10*1000;
@@ -257,97 +257,80 @@
     }
   }
 
-  // Polling resiliente: 70 s é apenas aviso; 8 min libera a UI local.
+  // Polling adaptativo: reduz carga e preserva o job em oscilações de rede.
   try{
     if(typeof waitForIntelligentJob==='function'){
-      waitForIntelligentJob=async function(jobId,requestSerial,pollAfterMs=900){
+      waitForIntelligentJob=async function(jobId,requestSerial,pollAfterMs=1500){
         const startedAt=Date.now();
         const hardDeadline=startedAt+(8*60*1000);
         let transientErrors=0;
         let lastUiUpdateAt=0;
-
         const updateUi=(callback,minGap=1200)=>{
           const now=Date.now();
           if(now-lastUiUpdateAt<minGap)return;
           lastUiUpdateAt=now;
           try{callback()}catch{}
         };
-
+        const pollDelay=()=>{
+          const elapsed=Date.now()-startedAt;
+          if(elapsed<30_000)return Math.max(1300,Number(pollAfterMs)||1500);
+          if(elapsed<70_000)return 2200;
+          return 3500;
+        };
         storeJob(jobId);
-
         while(Date.now()<hardDeadline){
-          if(requestSerial!==state.carouselRequestSerial){
-            clearStoredJob(jobId);
-            return null;
-          }
-
-          await sleep(Math.max(700,Number(pollAfterMs)||900));
-
-          if(requestSerial!==state.carouselRequestSerial){
-            clearStoredJob(jobId);
-            return null;
-          }
-
+          if(requestSerial!==state.carouselRequestSerial){clearStoredJob(jobId);return null;}
+          await sleep(pollDelay());
+          if(requestSerial!==state.carouselRequestSerial){clearStoredJob(jobId);return null;}
           let response;
           try{
             response=await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);
             transientErrors=0;
           }catch(error){
             transientErrors+=1;
-
-            if(transientErrors>=5){
-              clearStoredJob(jobId);
-              try{state.carouselLoading=false}catch{}
-              throw new Error('A conexão com a tarefa foi interrompida. A interface foi liberada; tente novamente sem atualizar a página.');
-            }
-
             if(typeof setCarouselLoading==='function'){
               updateUi(()=>setCarouselLoading(
                 true,
-                'A conexão oscilou, mas o processamento continua na fila. Reconectando…',
-                {progress:5,title:'Processamento continua no Cloudflare'}
+                navigator.onLine===false
+                  ? 'Sem conexão. O carrossel continua no Cloudflare e será retomado quando a rede voltar.'
+                  : 'A conexão oscilou, mas o processamento continua. Reconectando sem cancelar o job…',
+                {progress:5,title:'Processamento preservado no Cloudflare'}
               ),2500);
             }
+            await sleep(Math.min(6000,1000+transientErrors*500));
             continue;
           }
-
           const job=response?.job||{};
-
           if(job.status==='succeeded'&&response?.data?.slides?.length){
-            clearStoredJob(jobId);
-            scheduleFlowSync();
-            return response.data;
+            clearStoredJob(jobId);scheduleFlowSync();return response.data;
           }
-
-          if(job.status==='failed'||job.stale===true){
+          if(job.status==='failed'){
             clearStoredJob(jobId);
-            const detail=job.error||job.message||(job.stale?'A tarefa anterior ficou sem atualização.':'O processamento foi interrompido.');
+            const detail=job.error||job.message||'O processamento foi interrompido.';
             throw new Error(`${detail} O sistema foi liberado para iniciar uma nova leitura.`);
           }
-
           const elapsed=Date.now()-startedAt;
-
           if(elapsed>=70_000){
             if(typeof setCarouselLoading==='function'){
               updateUi(()=>setCarouselLoading(
                 true,
-                `${job.message||'Processando a matéria.'} O job continua em segundo plano; não é necessário atualizar a página.`,
-                {
-                  progress:Number(job.progress)||1,
-                  title:job.status==='queued'
-                    ? 'Leitura ainda na fila'
-                    : 'Leitura inteligente continua em segundo plano'
-                }
+                `${job.message||'Processando a matéria.'} O job continua em segundo plano; não atualize a página.`,
+                {progress:Number(job.progress)||1,title:job.status==='queued'?'Aguardando vaga segura na fila':'Leitura inteligente continua em segundo plano'}
               ));
             }
           }else if(typeof setCarouselJobProgress==='function'){
             updateUi(()=>setCarouselJobProgress(job));
           }
         }
-
-        clearStoredJob(jobId);
+        try{
+          const response=await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?final=1&t=${Date.now()}`);
+          if(response?.job?.status==='succeeded'&&response?.data?.slides?.length){clearStoredJob(jobId);scheduleFlowSync();return response.data;}
+          if(response?.job?.status==='failed'){clearStoredJob(jobId);throw new Error(response.job.error||response.job.message||'O processamento foi encerrado.');}
+        }catch(error){
+          if(/processamento foi encerrado|ciclo|tarefa/i.test(String(error?.message||'')))throw error;
+        }
         try{state.carouselLoading=false}catch{}
-        throw new Error('A tarefa não recebeu conclusão em 8 minutos. A tela foi liberada para uma nova tentativa; a Ronda principal continua operacional.');
+        throw new Error('O carrossel ainda não retornou conclusão após 8 minutos. A tela foi liberada; ao tentar novamente, o RONDA reaproveita o mesmo job ou o resultado já salvo, sem duplicar processamento.');
       };
     }
   }catch(error){

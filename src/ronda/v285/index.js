@@ -61,16 +61,35 @@ import {
   addNewsroomStoryNote,
   toggleNewsroomStoryFollow,
   getNewsroomHandoff,
+  ensureUserAccess,
+  cleanupIdleUserSessions,
+  userHasActiveSeat,
+  countActiveEditorialUsers,
+  revokeUserSessions,
+  setUserAccessRole,
+  createEditorialGroup,
+  updateEditorialGroup,
+  deleteEditorialGroup,
+  addEditorialGroupMember,
+  removeEditorialGroupMember,
+  listEditorialGroups,
+  listAdminUsers,
+  recordUserActivity,
+  recordUsageMetric,
+  getAdminDashboard,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import {
+  ADMIN_EMAIL,
   DEFAULT_SLIDE_COUNT,
+  MAX_ACTIVE_USERS,
   MAX_SLIDE_COUNT,
   MAX_STYLE_SAMPLE_CHARS,
   MAX_STYLE_SAMPLES,
   MAX_STYLE_TOTAL_CHARS,
   MIN_SLIDE_COUNT,
   SESSION_COOKIE_NAME,
+  SESSION_IDLE_MINUTES,
   SESSION_TTL_DAYS,
   analyzeWritingStyle,
   clearSessionCookie,
@@ -94,7 +113,9 @@ import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from
 import { enqueueEditorialEnrichmentJobs, syncEditorialEvents } from "../editorial-events.js";
 
 const VERSION = "2.8.5";
-const INTELLIGENT_JOB_STALE_LABEL = "2 minutos";
+const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
+const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
+const INTELLIGENT_JOB_LOCK_TTL_MS = 12 * 60 * 1000;
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -261,6 +282,36 @@ async function requireEditorialUser(request, env) {
   return context;
 }
 
+
+function isAdminUser(user) {
+  return Boolean(user && (user.role === 'admin' || normalizeEmail(user.email) === ADMIN_EMAIL));
+}
+
+async function requireAdminUser(request, env) {
+  const context = await requireEditorialUser(request, env);
+  if (!isAdminUser(context.user)) throw new HttpError(403, 'Acesso restrito ao administrador.');
+  return context;
+}
+
+async function createControlledSession(db, user, tokenHash) {
+  const admin = isAdminUser(user);
+  const lock = await acquireLock(db, 'access-seat-lock', 6_000);
+  if (!lock) throw new HttpError(503, 'Controle de acesso ocupado. Tente novamente em alguns segundos.');
+  try {
+    await cleanupIdleUserSessions(db, SESSION_IDLE_MINUTES);
+    const alreadyActive = user?.id ? await userHasActiveSeat(db, user.id, SESSION_IDLE_MINUTES) : false;
+    if (!admin && !alreadyActive) {
+      const active = await countActiveEditorialUsers(db, SESSION_IDLE_MINUTES);
+      if (active >= MAX_ACTIVE_USERS) {
+        throw new HttpError(429, `O limite de ${MAX_ACTIVE_USERS} usuários ativos foi atingido. Uma vaga será liberada quando alguém sair ou completar ${SESSION_IDLE_MINUTES} minutos sem atividade.`);
+      }
+    }
+    return createUserSession(db, { tokenHash, userId:user.id, ttlDays:SESSION_TTL_DAYS });
+  } finally {
+    await releaseLock(db, lock).catch(() => null);
+  }
+}
+
 function publicWritingProfile(value) {
   if (!value?.profile) return null;
   return {
@@ -283,6 +334,7 @@ async function profilePayload(db, user) {
     samples,
     writingProfile: publicWritingProfile(writingProfile),
     carouselLearning,
+    access: { role:user.role || 'editor', idleMinutes:SESSION_IDLE_MINUTES, maximumActiveUsers:MAX_ACTIVE_USERS, admin:isAdminUser(user) },
     limits: {
       maximumSamples: MAX_STYLE_SAMPLES,
       maximumCharactersPerSample: MAX_STYLE_SAMPLE_CHARS,
@@ -411,8 +463,15 @@ function articleAnalysisAi(env) {
 
 function retryableProcessingError(error) {
   if (error?.code === "PUBLISHER_ARTICLE_UNAVAILABLE") return false;
+  if (error?.code === "JOB_LOCK_BUSY") return true;
   const message = error instanceof Error ? error.message : String(error || "");
   return /timeout|tempo limite|temporar|429|500|502|503|504|ai indisponível|falha de rede|network/i.test(message);
+}
+
+function jobLockBusyError(jobId) {
+  const error = new Error(`A tarefa ${jobId} já está sendo processada por outro consumidor.`);
+  error.code = "JOB_LOCK_BUSY";
+  return error;
 }
 
 function createProgressReporter(db, jobId, lock) {
@@ -431,6 +490,7 @@ function createProgressReporter(db, jobId, lock) {
       progress: safeProgress,
       message,
     });
+    await renewLock(db, lock, INTELLIGENT_JOB_LOCK_TTL_MS).catch(() => null);
     lastProgress = safeProgress;
     lastMessage = message || "";
     lastWriteAt = now;
@@ -449,6 +509,7 @@ function publicIntelligentJob(job) {
     updatedAt: job.updatedAt,
     expiresAt: job.expiresAt,
     stale: Boolean(job.stale),
+    staleAfterMs: Number(job.staleAfterMs) || null,
     terminal,
     released: terminal,
     nextCycleAllowed: terminal,
@@ -458,9 +519,36 @@ function publicIntelligentJob(job) {
 async function processIntelligentCarouselJob(env, job, topic, options = {}) {
   const jobStartedAt = Date.now();
   const db = requireDatabase(env);
-  const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, 12 * 60 * 1000);
-  if (!jobLock) return null;
+
+  const cachedBeforeLock = await getIntelligentCarousel(db, job.cacheKey).catch(() => null);
+  if (cachedBeforeLock?.slides?.length) {
+    const recovered = await updateIntelligentJob(db, {
+      jobId: job.jobId,
+      status: "succeeded",
+      progress: 100,
+      message: "Roteiro recuperado do cache. Ciclo concluído.",
+      payload: cachedBeforeLock,
+    });
+    structuredLog("intelligent_job_recovered_from_cache", { jobId: job.jobId, phase: "before-lock" });
+    return recovered?.status === "succeeded" ? (recovered.payload || cachedBeforeLock) : cachedBeforeLock;
+  }
+
+  const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, INTELLIGENT_JOB_LOCK_TTL_MS);
+  if (!jobLock) throw jobLockBusyError(job.jobId);
   try {
+    const cachedAfterLock = await getIntelligentCarousel(db, job.cacheKey).catch(() => null);
+    if (cachedAfterLock?.slides?.length) {
+      await updateIntelligentJob(db, {
+        jobId: job.jobId,
+        status: "succeeded",
+        progress: 100,
+        message: "Roteiro recuperado do cache. Ciclo concluído.",
+        payload: cachedAfterLock,
+      });
+      structuredLog("intelligent_job_recovered_from_cache", { jobId: job.jobId, phase: "after-lock" });
+      return cachedAfterLock;
+    }
+
     const started = await updateIntelligentJob(db, {
       jobId: job.jobId,
       status: "running",
@@ -550,9 +638,11 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       payload: storedData,
     });
     if (completed?.status !== "succeeded") throw new Error("Não foi possível registrar o encerramento do ciclo.");
+    const completedDurationMs = Date.now() - jobStartedAt;
+    await recordUsageMetric(db, 'carousels_generated', { value:1, samples:1, durationMs:completedDurationMs }).catch(() => null);
     structuredLog("intelligent_job_completed", {
       jobId: job.jobId,
-      durationMs: Date.now() - jobStartedAt,
+      durationMs: completedDurationMs,
       readingMs: Number(data?.performance?.readingMs) || null,
       aiMs: Number(data?.performance?.aiMs) || null,
       fastPath: Boolean(data?.performance?.fastPath),
@@ -571,6 +661,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       error: detail,
     });
     if (failed?.status !== "failed") throw error;
+    await recordUsageMetric(db, 'carousels_failed', { value:1, samples:1, durationMs:Date.now()-jobStartedAt }).catch(() => null);
     structuredLog("intelligent_job_failed", { jobId: job.jobId, detail });
     return null;
   } finally {
@@ -626,23 +717,33 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const attempts = Number(message?.attempts || 1);
-    structuredLog("intelligent_queue_error", { jobId, attempts, detail });
-    if (retryableProcessingError(error) && attempts < 3 && message?.retry) {
-      await updateIntelligentJob(requireDatabase(env), {
-        jobId,
-        status: "queued",
-        progress: Math.max(2, Math.min(90, 8 * attempts)),
-        message: `Falha temporária. Nova tentativa ${attempts + 1}/3 agendada.`,
-        error: null,
-      }).catch(() => null);
-      message.retry({ delaySeconds: 15 * attempts });
+    const lockBusy = error?.code === "JOB_LOCK_BUSY";
+    structuredLog("intelligent_queue_error", { jobId, attempts, lockBusy, detail });
+
+    if (retryableProcessingError(error) && attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
+      if (!lockBusy) {
+        const refreshed = await updateIntelligentJob(requireDatabase(env), {
+          jobId,
+          status: "queued",
+          progress: Math.max(2, Math.min(90, 7 * attempts)),
+          message: `Falha temporária. Nova tentativa ${attempts + 1}/${INTELLIGENT_QUEUE_MAX_ATTEMPTS} agendada.`,
+          error: null,
+        }).catch(() => null);
+        if (["succeeded", "failed"].includes(refreshed?.status)) {
+          message?.ack?.();
+          return;
+        }
+      }
+      const delaySeconds = lockBusy ? 8 : Math.min(60, 10 * (2 ** Math.max(0, attempts - 1)));
+      message.retry({ delaySeconds });
       return;
     }
+
     await updateIntelligentJob(requireDatabase(env), {
       jobId,
       status: "failed",
       progress: 100,
-      message: "Ciclo encerrado no consumidor. Sistema liberado para uma nova leitura.",
+      message: "Ciclo encerrado no consumidor após as tentativas de recuperação.",
       error: detail,
     }).catch(() => null);
     message?.ack?.();
@@ -921,6 +1022,64 @@ async function selfTest() {
 }
 
 async function handleApi(request, env, url, ctx) {
+  if (url.pathname === "/api/usage/ping" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    const activity = await recordUserActivity(requireDatabase(env), user.id, body.area);
+    return json({ ok:true, activity, access:{ idleMinutes:SESSION_IDLE_MINUTES, maximumActiveUsers:MAX_ACTIVE_USERS } });
+  }
+
+  if (url.pathname === "/api/admin/overview" && request.method === "GET") {
+    await requireAdminUser(request, env);
+    return json({ ok:true, dashboard:await getAdminDashboard(requireDatabase(env)) });
+  }
+  if (url.pathname === "/api/admin/users" && request.method === "GET") {
+    await requireAdminUser(request, env);
+    return json({ ok:true, users:await listAdminUsers(requireDatabase(env)) });
+  }
+  const adminLogoutMatch = /^\/api\/admin\/users\/([^/]+)\/logout$/.exec(url.pathname);
+  if (adminLogoutMatch && request.method === "POST") {
+    const { user:admin } = await requireAdminUser(request, env);
+    const userId = decodeURIComponent(adminLogoutMatch[1]);
+    if (userId === admin.id) throw new HttpError(400, 'Use o botão Sair para encerrar sua própria sessão.');
+    const revoked = await revokeUserSessions(requireDatabase(env), userId);
+    return json({ ok:true, revoked });
+  }
+  const adminRoleMatch = /^\/api\/admin\/users\/([^/]+)\/role$/.exec(url.pathname);
+  if (adminRoleMatch && request.method === "PATCH") {
+    await requireAdminUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    const user = await setUserAccessRole(requireDatabase(env), decodeURIComponent(adminRoleMatch[1]), body.role);
+    if (!user) throw new HttpError(404, 'Usuário não encontrado.');
+    return json({ ok:true, user });
+  }
+  if (url.pathname === "/api/admin/groups" && request.method === "GET") {
+    await requireAdminUser(request, env);
+    return json({ ok:true, groups:await listEditorialGroups(requireDatabase(env)) });
+  }
+  if (url.pathname === "/api/admin/groups" && request.method === "POST") {
+    await requireAdminUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    try { return json({ ok:true, group:await createEditorialGroup(requireDatabase(env), body.name) },201); }
+    catch(error){ throw new HttpError(/unique|constraint/i.test(String(error?.message||''))?409:400, error?.message||'Não foi possível criar o grupo.'); }
+  }
+  const groupMatch = /^\/api\/admin\/groups\/([^/]+)$/.exec(url.pathname);
+  if (groupMatch && request.method === "PATCH") {
+    await requireAdminUser(request, env); const body=await request.json().catch(() => ({}));
+    try { return json({ok:true,group:await updateEditorialGroup(requireDatabase(env),decodeURIComponent(groupMatch[1]),body.name)}); }
+    catch(error){ throw new HttpError(400,error?.message||'Não foi possível atualizar o grupo.'); }
+  }
+  if (groupMatch && request.method === "DELETE") {
+    await requireAdminUser(request, env); await deleteEditorialGroup(requireDatabase(env),decodeURIComponent(groupMatch[1])); return json({ok:true});
+  }
+  const groupMemberMatch = /^\/api\/admin\/groups\/([^/]+)\/members\/([^/]+)$/.exec(url.pathname);
+  if (groupMemberMatch && request.method === "POST") {
+    await requireAdminUser(request, env); await addEditorialGroupMember(requireDatabase(env),decodeURIComponent(groupMemberMatch[1]),decodeURIComponent(groupMemberMatch[2])); return json({ok:true});
+  }
+  if (groupMemberMatch && request.method === "DELETE") {
+    await requireAdminUser(request, env); await removeEditorialGroupMember(requireDatabase(env),decodeURIComponent(groupMemberMatch[1]),decodeURIComponent(groupMemberMatch[2])); return json({ok:true});
+  }
+
   if (url.pathname === "/api/auth/register" && request.method === "POST") {
     const body = await request.json().catch(() => ({}));
     let email;
@@ -937,6 +1096,11 @@ async function handleApi(request, env, url, ctx) {
     const emailKey = normalizeEmail(email);
     const db = requireDatabase(env);
     if (await getEditorialUserByEmailKey(db, emailKey)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
+    if (emailKey !== ADMIN_EMAIL) {
+      await cleanupIdleUserSessions(db, SESSION_IDLE_MINUTES);
+      const active = await countActiveEditorialUsers(db, SESSION_IDLE_MINUTES);
+      if (active >= MAX_ACTIVE_USERS) throw new HttpError(429, `O limite de ${MAX_ACTIVE_USERS} usuários ativos foi atingido.`);
+    }
     const credentials = await hashPassword(password);
     let user;
     try {
@@ -954,8 +1118,9 @@ async function handleApi(request, env, url, ctx) {
       if (/unique|constraint/i.test(detail)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
       throw error;
     }
+    user = await ensureUserAccess(db, user.id, user.email, 'editor');
     const token = randomToken();
-    await createUserSession(db, { tokenHash: await sha256Hex(token), userId: user.id, ttlDays: SESSION_TTL_DAYS });
+    await createControlledSession(db, user, await sha256Hex(token));
     return json({ ok: true, ...(await profilePayload(db, user)) }, 201, {
       "Set-Cookie": sessionCookie(token, { secure: secureCookieForRequest(request) }),
     });
@@ -968,9 +1133,10 @@ async function handleApi(request, env, url, ctx) {
     const record = emailKey ? await getEditorialUserByEmailKey(db, emailKey) : null;
     const valid = record ? await verifyPassword(String(body.password || ""), record) : false;
     if (!record || !valid) throw new HttpError(401, "E-mail ou senha inválidos.");
+    if (record.disabled) throw new HttpError(403, "Este acesso foi desativado pelo administrador.");
+    const user = await ensureUserAccess(db, record.id, record.email, record.role || 'editor');
     const token = randomToken();
-    await createUserSession(db, { tokenHash: await sha256Hex(token), userId: record.id, ttlDays: SESSION_TTL_DAYS });
-    const user = await getEditorialUserById(db, record.id);
+    await createControlledSession(db, user, await sha256Hex(token));
     return json({ ok: true, ...(await profilePayload(db, user)) }, 200, {
       "Set-Cookie": sessionCookie(token, { secure: secureCookieForRequest(request) }),
     });
@@ -1353,13 +1519,24 @@ async function handleApi(request, env, url, ctx) {
     let job = await getIntelligentJob(db, intelligentJobRoute[1]);
     if (!job) throw new HttpError(404, "Processamento não encontrado ou expirado.");
     if (job.stale && ["queued", "running"].includes(job.status)) {
-      job = await updateIntelligentJob(db, {
-        jobId: job.jobId,
-        status: "failed",
-        progress: 100,
-        message: "O processamento foi interrompido e pode ser reiniciado.",
-        error: `A tarefa ficou sem atualização por mais de ${INTELLIGENT_JOB_STALE_LABEL}.`,
-      });
+      const cached = await getIntelligentCarousel(db, job.cacheKey).catch(() => null);
+      if (cached?.slides?.length) {
+        job = await updateIntelligentJob(db, {
+          jobId: job.jobId,
+          status: "succeeded",
+          progress: 100,
+          message: "Resultado recuperado após interrupção do consumidor.",
+          payload: cached,
+        });
+      } else {
+        job = await updateIntelligentJob(db, {
+          jobId: job.jobId,
+          status: "failed",
+          progress: 100,
+          message: "O processamento ficou sem progresso e foi encerrado com segurança.",
+          error: `A tarefa ultrapassou ${INTELLIGENT_JOB_STALE_LABEL}.`,
+        });
+      }
     }
     return json({
       ok: true,
@@ -1454,7 +1631,7 @@ async function handleApi(request, env, url, ctx) {
       queued: true,
       status: queued.job.status,
       job: publicIntelligentJob(queued.job),
-      pollAfterMs: 900,
+      pollAfterMs: 1500,
       configuration: { slideCount, profileApplied: Boolean(writingProfile), profileUpdatedAt: writingProfile?.updatedAt || null, adaptiveMemoryCount: learningStats.count },
     }, 202);
   }

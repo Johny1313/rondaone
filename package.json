@@ -1,16 +1,20 @@
 {
-  "name": "ronda-one-v081",
-  "version": "0.8.1",
+  "name": "ronda-one-v083",
+  "version": "0.8.3",
   "private": true,
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "check": "node --check src/index.js && node --check src/ronda/router.js && node --check src/ronda/shell.js && node --check src/projects/service.js && node --check src/ai/service.js && node --check src/ronda/v285/index.js && node --check src/ronda/v285/database.js && node --check src/ronda/v285/article-reader.js && node --check src/ronda/v285/collector.js && node --check public/ronda/ronda-one-integration.js && node --check src/ronda/search-news.js && node --check public/ronda/search-boost.js && node --check src/ronda/editorial-events.js && node --check public/ronda/editorial-mesa.js",
+    "check": "node --check src/index.js && node --check src/ronda/router.js && node --check src/ronda/shell.js && node --check src/projects/service.js && node --check src/ai/service.js && node --check src/ronda/v285/index.js && node --check src/ronda/v285/database.js && node --check src/ronda/v285/article-reader.js && node --check src/ronda/v285/collector.js && node --check public/ronda/ronda-one-integration.js && node --check src/ronda/search-news.js && node --check public/ronda/search-boost.js && node --check src/ronda/editorial-events.js && node --check public/ronda/editorial-mesa.js && node --check public/access-client.js && node --check public/admin/admin.js",
     "test:080": "node scripts/test-080-functional.mjs && node scripts/test-080-editorial.mjs && node scripts/test-080-stability.mjs",
     "test:081": "node scripts/test-081-source-recovery.mjs",
-    "test:regression": "node scripts/test-080-functional.mjs && node scripts/test-080-editorial.mjs && node scripts/test-080-stability.mjs && node scripts/test-081-source-recovery.mjs",
-    "verify:081": "node scripts/verify-081.mjs"
+    "test:regression": "node scripts/test-080-functional.mjs && node scripts/test-080-editorial.mjs && node scripts/test-080-stability.mjs && node scripts/test-081-source-recovery.mjs && node scripts/test-082-access-stability.mjs && node scripts/test-083-carousel-stability.mjs",
+    "verify:081": "node scripts/verify-081.mjs",
+    "verify:082": "node scripts/verify-082.mjs",
+    "test:082": "node scripts/test-082-access-stability.mjs",
+    "test:083": "node scripts/test-083-carousel-stability.mjs",
+    "verify:083": "node scripts/verify-083.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.20.0"

@@ -37,9 +37,9 @@
         "queue": "ronda-one-intelligent-jobs",
         "max_batch_size": 1,
         "max_batch_timeout": 1,
-        "max_retries": 3,
+        "max_retries": 5,
         "dead_letter_queue": "ronda-one-jobs-dlq",
-        "max_concurrency": 4
+        "max_concurrency": 2
       }
     ]
   },

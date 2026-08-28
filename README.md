@@ -1,8 +1,26 @@
-# RONDA ONE Cloud v0.8.1 — Mesa Editorial Inteligente + Source Recovery
+# RONDA ONE Cloud v0.8.3 — Mesa Editorial Inteligente + Carousel Stability
 
 Versão completa do **RONDA ONE** para Cloudflare Workers, evoluindo a plataforma de agregador de notícias para uma **Mesa Editorial orientada por eventos**, sem sacrificar a prioridade de estabilidade, velocidade e coleta contínua.
 
-## Hotfix v0.8.1 — Source Recovery
+## v0.8.3 — Carousel Stability
+
+A geração de carrossel agora limita a concorrência pesada a 2 jobs simultâneos, aceita até 5 tentativas de Queue, diferencia espera em fila de execução travada, protege estados terminais e recupera resultados já salvos sem repetir leitura/IA. O polling do navegador também ficou adaptativo e tolerante a oscilações de rede.
+
+## v0.8.2 — Access & Stability
+
+A v0.8.2 adiciona controle de acesso para operação em equipe sem transformar o RONDA ONE em uma aplicação de telemetria pesada.
+
+- até 10 usuários ativos únicos simultaneamente;
+- administrador fora da contagem;
+- idle logout em 60 minutos;
+- presença consolidada a cada 5 minutos apenas quando houve interação;
+- dashboard administrativo;
+- grupos de edição;
+- métricas agregadas de uso, produção e estabilidade;
+- sem registro de mousemove/clique individual;
+- dados administrativos protegidos no backend.
+
+## Base preservada — Source Recovery v0.8.1
 
 - Cron a cada **3 minutos**.
 - Fontes prioritárias: **3 minutos**.

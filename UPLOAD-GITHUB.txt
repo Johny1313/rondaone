@@ -1,10 +1,9 @@
-RONDA ONE v0.8.1 — UPLOAD GITHUB
+RONDA ONE v0.8.3 — UPLOAD GITHUB
 
-Substitua o repositório pelo conteúdo deste ZIP.
-
-Depois:
+Este ZIP é completo.
+Substitua o conteúdo do repositório e execute:
 npm install
 npm run check
-npm run verify:081
+npm run verify:083
 npm run test:regression
 npm run deploy

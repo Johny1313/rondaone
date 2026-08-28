@@ -266,6 +266,7 @@ function updatePortalFilter() {
 }
 
 function showView(view) {
+  if (view !== "profile" && state.profile && !state.profile.authenticated) view = "profile";
   state.view = view;
   roundView.hidden = view !== "round";
   sourcesView.hidden = view !== "sources";
@@ -753,7 +754,8 @@ function renderProfile() {
   if (!loggedIn) return;
   const user = payload.user;
   document.getElementById("profileUserName").textContent = user.displayName || "Perfil editorial";
-  document.getElementById("profileUserEmail").textContent = user.email || "";
+  document.getElementById("profileUserEmail").textContent = `${user.email || ""}${user.role ? ` · ${user.role === "admin" ? "Administrador" : user.role === "editor" ? "Editor" : "Usuário"}` : ""}`;
+  const adminLink=document.getElementById("adminDashboardLink"); if(adminLink) adminLink.hidden=user.role!=="admin";
   document.getElementById("profileDefaultSlideCount").value = String(Number(user.defaultSlideCount) || 7);
   const samples = Array.isArray(payload.samples) ? payload.samples : [];
   const limits = payload.limits || {};
@@ -798,6 +800,9 @@ async function submitProfileAuth(event, mode) {
     event.currentTarget.reset();
     message.textContent = "";
     renderProfile();
+    operationalStarted=false;
+    await startOperationalApplication();
+    showView("round");
   } catch (error) {
     message.textContent = error.message;
   }
@@ -808,6 +813,7 @@ async function logoutProfile() {
   state.profile = { authenticated: false };
   state.smartCarousels.clear();
   renderProfile();
+  showView("profile");
 }
 
 async function updateDefaultSlideCount(event) {
@@ -1340,16 +1346,23 @@ async function pollStatus({ force = false } = {}) {
   }
 }
 
-async function startApplication() {
-  render();
-  initializeSlideCountSelectors();
-  loadProfile().catch(() => null);
+let operationalStarted=false;
+async function startOperationalApplication(){
+  if(operationalStarted)return; operationalStarted=true;
   document.getElementById("operationToken").value = operationToken();
   const healthy = await checkHealth();
   if (!healthy) return;
   await pollStatus({ force: true });
   const latest = state.data || await loadLatest();
   if (!latest && (!state.health.manualAuthRequired || operationToken())) executeRound(true);
+}
+
+async function startApplication() {
+  render();
+  initializeSlideCountSelectors();
+  const profile=await loadProfile().catch(() => null);
+  if(!profile?.authenticated){showView("profile");return;}
+  await startOperationalApplication();
 }
 
 runButton.addEventListener("click", () => executeRound(false));
@@ -1465,5 +1478,9 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") do
 
 document.addEventListener("visibilitychange", () => scheduleStatusPolling(250));
 window.addEventListener("online", () => scheduleStatusPolling(250));
+window.addEventListener("ronda:session-expired",(event)=>{
+  state.profile={authenticated:false}; state.smartCarousels.clear(); renderProfile(); showView("profile");
+  const message=document.getElementById("loginMessage"); if(message) message.textContent=event.detail?.message||"Sua sessão terminou. Entre novamente.";
+});
 
 startApplication();

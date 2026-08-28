@@ -1,7 +1,7 @@
-import { DEFAULT_SLIDE_COUNT, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, validateSlideCount } from "./profile.js";
+import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.8.0";
+export const DATABASE_SCHEMA_VERSION = "2.8.2";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -130,6 +130,55 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, expires_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)",
+  `CREATE TABLE IF NOT EXISTS user_access (
+    user_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL DEFAULT 'editor',
+    disabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_user_access_role ON user_access(role, disabled)",
+  `CREATE TABLE IF NOT EXISTS editorial_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS editorial_group_members (
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(group_id, user_id)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_group_members_user ON editorial_group_members(user_id, group_id)",
+  `CREATE TABLE IF NOT EXISTS user_presence (
+    user_id TEXT PRIMARY KEY,
+    area TEXT NOT NULL,
+    last_activity_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_user_presence_activity ON user_presence(last_activity_at DESC)",
+  `CREATE TABLE IF NOT EXISTS usage_daily_users (
+    day TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    area TEXT NOT NULL,
+    active_ms INTEGER NOT NULL DEFAULT 0,
+    last_activity_at TEXT NOT NULL,
+    PRIMARY KEY(day, user_id, area)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_usage_daily_users_day ON usage_daily_users(day, area)",
+  `CREATE TABLE IF NOT EXISTS usage_metrics (
+    bucket TEXT NOT NULL,
+    granularity TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value REAL NOT NULL DEFAULT 0,
+    samples INTEGER NOT NULL DEFAULT 0,
+    total_ms INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(bucket, granularity, metric)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_usage_metrics_metric ON usage_metrics(metric, granularity, bucket DESC)",
   `CREATE TABLE IF NOT EXISTS writing_samples (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -238,7 +287,10 @@ async function emergencyCleanupRaw(db) {
     `DELETE FROM translation_cache WHERE updated_at < '${translationCutoff}'`,
     `DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`,
     `DELETE FROM locks WHERE expires_at < ${Date.now() - 5 * 60 * 1000}`,
-    `DELETE FROM user_sessions WHERE expires_at < '${now}'`,
+    `DELETE FROM user_sessions WHERE expires_at < '${now}' OR last_seen_at < '${new Date(Date.now() - SESSION_IDLE_MINUTES * 60 * 1000).toISOString()}'`,
+    `DELETE FROM user_presence WHERE last_activity_at < '${new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()}'`,
+    `DELETE FROM usage_daily_users WHERE day < '${new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0,10)}'`,
+    `DELETE FROM usage_metrics WHERE substr(bucket,1,10) < '${new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0,10)}'`,
     `DELETE FROM carousel_learning_examples WHERE id NOT IN (SELECT id FROM carousel_learning_examples ORDER BY created_at DESC LIMIT 240)`,
     `DELETE FROM newsroom_story_events WHERE id NOT IN (SELECT id FROM newsroom_story_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomEvents})`,
     `DELETE FROM newsroom_story_notes WHERE id NOT IN (SELECT id FROM newsroom_story_notes ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomNotes})`,
@@ -626,6 +678,12 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
     await emergencyCleanupRaw(db);
     await write();
   }
+  const durationMs = Math.max(0, Date.parse(completedAt) - Date.parse(startedAt || completedAt));
+  await recordUsageMetric(db, status === 'success' ? 'rounds_completed' : 'rounds_failed', { value:1, samples:1, durationMs, at:new Date(completedAt) }).catch(() => null);
+  if (status === 'success') {
+    await recordUsageMetric(db, 'topics_generated', { value:Number(totals.topics)||0, samples:1, at:new Date(completedAt) }).catch(() => null);
+    await recordUsageMetric(db, 'items_collected', { value:Number(totals.items)||0, samples:1, at:new Date(completedAt) }).catch(() => null);
+  }
   return { id, status, completedAt };
 }
 
@@ -880,6 +938,13 @@ function parseIntelligentJob(row) {
   }
   const updatedAt = row.updated_at || row.created_at;
   const active = row.status === "queued" || row.status === "running";
+  const updatedMs = Date.parse(updatedAt || "");
+  const staleAfterMs = row.status === "queued"
+    ? 5 * 60 * 1000
+    : row.status === "running"
+      ? 3 * 60 * 1000
+      : 0;
+  const stale = active && (!Number.isFinite(updatedMs) || Date.now() - updatedMs > staleAfterMs);
   return {
     cacheKey: row.cache_key,
     jobId: row.job_id,
@@ -893,7 +958,8 @@ function parseIntelligentJob(row) {
     createdAt: row.created_at,
     updatedAt,
     expiresAt: row.expires_at,
-    stale: active && Date.now() - Date.parse(updatedAt) > 2 * 60 * 1000,
+    stale,
+    staleAfterMs,
   };
 }
 
@@ -910,7 +976,7 @@ export async function createIntelligentJob(db, {
   cacheKey,
   runId,
   topicId,
-  staleMs = 2 * 60 * 1000,
+  staleMs = 5 * 60 * 1000,
   ttlMinutes = 120,
   replaceCompleted = false,
 } = {}) {
@@ -921,8 +987,11 @@ export async function createIntelligentJob(db, {
     .first();
   const existing = parseIntelligentJob(existingRow);
   const existingAge = existing?.updatedAt ? Date.now() - Date.parse(existing.updatedAt) : Number.POSITIVE_INFINITY;
+  const activeReuseMs = existing?.status === "running"
+    ? Math.min(Number(staleMs) || 5 * 60 * 1000, 3 * 60 * 1000)
+    : Number(staleMs) || 5 * 60 * 1000;
   if (existing && (
-    (["queued", "running"].includes(existing.status) && existingAge <= staleMs)
+    (["queued", "running"].includes(existing.status) && existingAge <= activeReuseMs)
     || (!replaceCompleted && existing.status === "succeeded" && existing.payload)
   )) {
     return { created: false, job: existing };
@@ -985,6 +1054,7 @@ export async function updateIntelligentJob(db, {
     UPDATE intelligent_jobs
     SET status = ?, progress = ?, message = ?, error = ?, payload_json = ?, updated_at = ?, expires_at = ?
     WHERE job_id = ?
+      AND status NOT IN ('succeeded','failed')
   `).bind(
     status,
     Math.max(0, Math.min(100, Number(progress) || 0)),
@@ -1173,7 +1243,10 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
     db.prepare(`UPDATE runs SET payload_json = NULL WHERE payload_json IS NOT NULL AND status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status = 'success' AND payload_json IS NOT NULL ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxRunPayloads})`),
     db.prepare(`DELETE FROM runs WHERE status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status NOT IN ('queued', 'running') ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC LIMIT ${STORAGE_GUARD.maxRunRows})`),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
-    db.prepare("DELETE FROM user_sessions WHERE expires_at < ?").bind(now),
+    db.prepare("DELETE FROM user_sessions WHERE expires_at < ? OR last_seen_at < ?").bind(now, new Date(nowMs - SESSION_IDLE_MINUTES * 60 * 1000).toISOString()),
+    db.prepare("DELETE FROM user_presence WHERE last_activity_at < ?").bind(new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString()),
+    db.prepare("DELETE FROM usage_daily_users WHERE day < ?").bind(new Date(nowMs - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0,10)),
+    db.prepare("DELETE FROM usage_metrics WHERE substr(bucket,1,10) < ?").bind(new Date(nowMs - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0,10)),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
     db.prepare(`DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
@@ -1415,11 +1488,14 @@ export async function databaseSelfTest(db) {
 
 function publicUserRow(row) {
   if (!row) return null;
+  const admin = String(row.email_key || row.email || '').toLowerCase() === ADMIN_EMAIL;
   return {
     id: row.id,
     email: row.email,
     displayName: row.display_name,
     defaultSlideCount: validateSlideCount(row.default_slide_count, DEFAULT_SLIDE_COUNT),
+    role: admin ? 'admin' : (row.access_role || 'editor'),
+    disabled: admin ? false : Number(row.access_disabled) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1445,7 +1521,11 @@ export async function createEditorialUser(db, {
 
 export async function getEditorialUserByEmailKey(db, emailKey) {
   await ensureSchema(db);
-  const row = await db.prepare("SELECT * FROM users WHERE email_key = ? LIMIT 1").bind(emailKey).first();
+  const row = await db.prepare(`
+    SELECT u.*, a.role AS access_role, a.disabled AS access_disabled
+    FROM users u LEFT JOIN user_access a ON a.user_id = u.id
+    WHERE u.email_key = ? LIMIT 1
+  `).bind(emailKey).first();
   if (!row) return null;
   return {
     ...publicUserRow(row),
@@ -1457,7 +1537,11 @@ export async function getEditorialUserByEmailKey(db, emailKey) {
 
 export async function getEditorialUserById(db, userId) {
   await ensureSchema(db);
-  const row = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(userId).first();
+  const row = await db.prepare(`
+    SELECT u.*, a.role AS access_role, a.disabled AS access_disabled
+    FROM users u LEFT JOIN user_access a ON a.user_id = u.id
+    WHERE u.id = ? LIMIT 1
+  `).bind(userId).first();
   return publicUserRow(row);
 }
 
@@ -1474,23 +1558,302 @@ export async function createUserSession(db, { tokenHash, userId, ttlDays = 30 } 
 
 export async function getUserBySessionHash(db, tokenHash) {
   await ensureSchema(db);
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const idleCutoff = new Date(nowMs - SESSION_IDLE_MINUTES * 60 * 1000).toISOString();
   const row = await db.prepare(`
-    SELECT u.*, s.expires_at AS session_expires_at
+    SELECT u.*, a.role AS access_role, a.disabled AS access_disabled,
+           s.expires_at AS session_expires_at, s.last_seen_at AS session_last_seen_at
     FROM user_sessions s
     JOIN users u ON u.id = s.user_id
+    LEFT JOIN user_access a ON a.user_id = u.id
     WHERE s.token_hash = ? AND s.expires_at > ?
     LIMIT 1
-  `).bind(tokenHash, new Date().toISOString()).first();
+  `).bind(tokenHash, now).first();
   if (!row) return null;
-  db.prepare("UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?")
-    .bind(new Date().toISOString(), tokenHash).run().catch(() => null);
-  return { ...publicUserRow(row), sessionExpiresAt: row.session_expires_at };
+  if (String(row.session_last_seen_at || '') < idleCutoff) {
+    await db.prepare("DELETE FROM user_sessions WHERE token_hash = ?").bind(tokenHash).run().catch(() => null);
+    return null;
+  }
+  const user = publicUserRow(row);
+  if (user?.disabled) {
+    await db.prepare("DELETE FROM user_sessions WHERE user_id = ?").bind(user.id).run().catch(() => null);
+    return null;
+  }
+  const lastSeenMs = Date.parse(row.session_last_seen_at || '');
+  if (!Number.isFinite(lastSeenMs) || nowMs - lastSeenMs >= SESSION_TOUCH_MINUTES * 60 * 1000) {
+    db.prepare("UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?")
+      .bind(now, tokenHash).run().catch(() => null);
+  }
+  return { ...user, sessionExpiresAt: row.session_expires_at, sessionLastSeenAt: row.session_last_seen_at };
 }
 
 export async function deleteUserSession(db, tokenHash) {
   await ensureSchema(db);
   await db.prepare("DELETE FROM user_sessions WHERE token_hash = ?").bind(tokenHash).run();
   return true;
+}
+
+export async function ensureUserAccess(db, userId, email, defaultRole = 'editor') {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const admin = String(email || '').trim().toLowerCase() === ADMIN_EMAIL;
+  const role = admin ? 'admin' : (['user','editor'].includes(defaultRole) ? defaultRole : 'editor');
+  await db.prepare(`
+    INSERT INTO user_access (user_id, role, disabled, created_at, updated_at)
+    VALUES (?, ?, 0, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      role = CASE WHEN ? = 1 THEN 'admin' ELSE user_access.role END,
+      disabled = CASE WHEN ? = 1 THEN 0 ELSE user_access.disabled END,
+      updated_at = excluded.updated_at
+  `).bind(userId, role, now, now, admin ? 1 : 0, admin ? 1 : 0).run();
+  return getEditorialUserById(db, userId);
+}
+
+export async function cleanupIdleUserSessions(db, idleMinutes = SESSION_IDLE_MINUTES) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - Math.max(5, Number(idleMinutes) || SESSION_IDLE_MINUTES) * 60 * 1000).toISOString();
+  const result = await db.prepare("DELETE FROM user_sessions WHERE expires_at <= ? OR last_seen_at < ?").bind(now, cutoff).run();
+  return Number(result?.meta?.changes) || 0;
+}
+
+export async function userHasActiveSeat(db, userId, idleMinutes = SESSION_IDLE_MINUTES) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - idleMinutes * 60 * 1000).toISOString();
+  const row = await db.prepare(`SELECT 1 AS active FROM user_sessions WHERE user_id = ? AND expires_at > ? AND last_seen_at >= ? LIMIT 1`)
+    .bind(userId, now, cutoff).first();
+  return Boolean(row?.active);
+}
+
+export async function countActiveEditorialUsers(db, idleMinutes = SESSION_IDLE_MINUTES) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - idleMinutes * 60 * 1000).toISOString();
+  const row = await db.prepare(`
+    SELECT COUNT(DISTINCT s.user_id) AS total
+    FROM user_sessions s
+    JOIN users u ON u.id = s.user_id
+    LEFT JOIN user_access a ON a.user_id = u.id
+    WHERE s.expires_at > ? AND s.last_seen_at >= ?
+      AND LOWER(u.email_key) <> ?
+      AND COALESCE(a.role, 'editor') <> 'admin'
+      AND COALESCE(a.disabled, 0) = 0
+  `).bind(now, cutoff, ADMIN_EMAIL).first();
+  return Number(row?.total) || 0;
+}
+
+export async function revokeUserSessions(db, userId) {
+  await ensureSchema(db);
+  const result = await db.prepare("DELETE FROM user_sessions WHERE user_id = ?").bind(userId).run();
+  await db.prepare("DELETE FROM user_presence WHERE user_id = ?").bind(userId).run().catch(() => null);
+  return Number(result?.meta?.changes) || 0;
+}
+
+export async function setUserAccessRole(db, userId, role) {
+  await ensureSchema(db);
+  const user = await getEditorialUserById(db, userId);
+  if (!user) return null;
+  if (String(user.email || '').toLowerCase() === ADMIN_EMAIL) return user;
+  const normalized = ['user','editor'].includes(String(role)) ? String(role) : 'editor';
+  await ensureUserAccess(db, userId, user.email, normalized);
+  const now = new Date().toISOString();
+  await db.prepare("UPDATE user_access SET role = ?, updated_at = ? WHERE user_id = ?").bind(normalized, now, userId).run();
+  return getEditorialUserById(db, userId);
+}
+
+function groupNameKey(value) {
+  return String(value || '').trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+}
+
+export async function createEditorialGroup(db, name) {
+  await ensureSchema(db);
+  const clean = String(name || '').replace(/\s+/g,' ').trim().slice(0,80);
+  if (clean.length < 2) throw new Error('Informe um nome de grupo com pelo menos 2 caracteres.');
+  const id = crypto.randomUUID(); const now = new Date().toISOString();
+  await db.prepare("INSERT INTO editorial_groups (id, name, name_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(id, clean, groupNameKey(clean), now, now).run();
+  return { id, name: clean, members: [], createdAt: now, updatedAt: now };
+}
+
+export async function updateEditorialGroup(db, id, name) {
+  await ensureSchema(db);
+  const clean = String(name || '').replace(/\s+/g,' ').trim().slice(0,80);
+  if (clean.length < 2) throw new Error('Informe um nome válido.');
+  const now = new Date().toISOString();
+  await db.prepare("UPDATE editorial_groups SET name = ?, name_key = ?, updated_at = ? WHERE id = ?")
+    .bind(clean, groupNameKey(clean), now, id).run();
+  return listEditorialGroups(db).then(groups => groups.find(group => group.id === id) || null);
+}
+
+export async function deleteEditorialGroup(db, id) {
+  await ensureSchema(db);
+  await db.batch([
+    db.prepare("DELETE FROM editorial_group_members WHERE group_id = ?").bind(id),
+    db.prepare("DELETE FROM editorial_groups WHERE id = ?").bind(id),
+  ]);
+  return true;
+}
+
+export async function addEditorialGroupMember(db, groupId, userId) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  await db.prepare("INSERT OR IGNORE INTO editorial_group_members (group_id, user_id, created_at) VALUES (?, ?, ?)")
+    .bind(groupId, userId, now).run();
+  return true;
+}
+
+export async function removeEditorialGroupMember(db, groupId, userId) {
+  await ensureSchema(db);
+  await db.prepare("DELETE FROM editorial_group_members WHERE group_id = ? AND user_id = ?").bind(groupId, userId).run();
+  return true;
+}
+
+export async function listEditorialGroups(db) {
+  await ensureSchema(db);
+  const [groupsResult, membersResult] = await Promise.all([
+    db.prepare("SELECT * FROM editorial_groups ORDER BY name COLLATE NOCASE").all(),
+    db.prepare(`SELECT m.group_id, u.id AS user_id, u.email, u.display_name FROM editorial_group_members m JOIN users u ON u.id = m.user_id ORDER BY u.display_name COLLATE NOCASE`).all(),
+  ]);
+  const membersByGroup = new Map();
+  for (const row of membersResult?.results || []) {
+    const list = membersByGroup.get(row.group_id) || [];
+    list.push({ id: row.user_id, email: row.email, displayName: row.display_name });
+    membersByGroup.set(row.group_id, list);
+  }
+  return (groupsResult?.results || []).map(row => ({
+    id: row.id, name: row.name, createdAt: row.created_at, updatedAt: row.updated_at,
+    members: membersByGroup.get(row.id) || [],
+  }));
+}
+
+export async function listAdminUsers(db) {
+  await ensureSchema(db);
+  await cleanupIdleUserSessions(db);
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - SESSION_IDLE_MINUTES * 60 * 1000).toISOString();
+  const [usersResult, groups] = await Promise.all([
+    db.prepare(`
+      SELECT u.*, a.role AS access_role, a.disabled AS access_disabled,
+             MAX(CASE WHEN s.expires_at > ? AND s.last_seen_at >= ? THEN s.last_seen_at ELSE NULL END) AS active_last_seen,
+             COUNT(DISTINCT CASE WHEN s.expires_at > ? AND s.last_seen_at >= ? THEN s.token_hash ELSE NULL END) AS active_sessions,
+             p.area AS current_area, p.last_activity_at AS presence_at
+      FROM users u
+      LEFT JOIN user_access a ON a.user_id = u.id
+      LEFT JOIN user_sessions s ON s.user_id = u.id
+      LEFT JOIN user_presence p ON p.user_id = u.id
+      GROUP BY u.id
+      ORDER BY active_last_seen DESC, u.created_at DESC
+    `).bind(now, cutoff, now, cutoff).all(),
+    listEditorialGroups(db),
+  ]);
+  const groupMap = new Map();
+  for (const group of groups) for (const member of group.members) {
+    const list = groupMap.get(member.id) || []; list.push({ id: group.id, name: group.name }); groupMap.set(member.id, list);
+  }
+  return (usersResult?.results || []).map(row => {
+    const user = publicUserRow(row);
+    return { ...user, active: Number(row.active_sessions) > 0, activeSessions: Number(row.active_sessions)||0,
+      lastSeenAt: row.active_last_seen || row.presence_at || null, currentArea: row.current_area || null,
+      groups: groupMap.get(user.id) || [] };
+  });
+}
+
+export async function recordUsageMetric(db, metric, { value = 1, samples = 1, durationMs = 0, at = new Date() } = {}) {
+  await ensureSchema(db);
+  const date = at instanceof Date ? at : new Date(at);
+  const iso = Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+  const rows = [
+    { bucket: iso.slice(0,13), granularity: 'hour' },
+    { bucket: iso.slice(0,10), granularity: 'day' },
+  ];
+  const updatedAt = new Date().toISOString();
+  await db.batch(rows.map(row => db.prepare(`
+    INSERT INTO usage_metrics (bucket, granularity, metric, value, samples, total_ms, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(bucket, granularity, metric) DO UPDATE SET
+      value = usage_metrics.value + excluded.value,
+      samples = usage_metrics.samples + excluded.samples,
+      total_ms = usage_metrics.total_ms + excluded.total_ms,
+      updated_at = excluded.updated_at
+  `).bind(row.bucket, row.granularity, String(metric), Number(value)||0, Math.max(0,Number(samples)||0), Math.max(0,Math.round(Number(durationMs)||0)), updatedAt)));
+  return true;
+}
+
+export async function recordUserActivity(db, userId, area = 'ronda') {
+  await ensureSchema(db);
+  const allowed = new Set(['ronda','design','projects','admin']);
+  const currentArea = allowed.has(String(area)) ? String(area) : 'ronda';
+  const nowMs = Date.now(); const now = new Date(nowMs).toISOString(); const day = now.slice(0,10);
+  const previous = await db.prepare("SELECT area, last_activity_at FROM user_presence WHERE user_id = ? LIMIT 1").bind(userId).first();
+  const previousMs = Date.parse(previous?.last_activity_at || '');
+  const rawDelta = Number.isFinite(previousMs) ? nowMs - previousMs : 0;
+  const deltaMs = rawDelta > 0 && rawDelta <= 10 * 60 * 1000 ? Math.min(rawDelta, SESSION_TOUCH_MINUTES * 60 * 1000) : 0;
+  const creditArea = previous?.area || currentArea;
+  await db.prepare(`
+    INSERT INTO user_presence (user_id, area, last_activity_at, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET area=excluded.area, last_activity_at=excluded.last_activity_at, updated_at=excluded.updated_at
+  `).bind(userId, currentArea, now, now).run();
+  if (deltaMs > 0) {
+    await db.prepare(`
+      INSERT INTO usage_daily_users (day, user_id, area, active_ms, last_activity_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(day, user_id, area) DO UPDATE SET active_ms = usage_daily_users.active_ms + excluded.active_ms, last_activity_at = excluded.last_activity_at
+    `).bind(day, userId, creditArea, deltaMs, now).run();
+  }
+  return { area: currentArea, activeDeltaMs: deltaMs, idleMinutes: SESSION_IDLE_MINUTES, touchedAt: now };
+}
+
+function metricRow(row) {
+  return row ? { value:Number(row.value)||0, samples:Number(row.samples)||0, totalMs:Number(row.total_ms)||0 } : { value:0, samples:0, totalMs:0 };
+}
+
+export async function getAdminDashboard(db) {
+  await ensureSchema(db);
+  await cleanupIdleUserSessions(db);
+  const now = new Date(); const day = now.toISOString().slice(0,10); const hour = now.toISOString().slice(0,13); const month = day.slice(0,7);
+  const cutoff24 = new Date(now.getTime()-24*60*60*1000).toISOString().slice(0,13);
+  const cutoff30 = new Date(now.getTime()-30*24*60*60*1000).toISOString().slice(0,10);
+  const [activeUsers, registeredRow, groupsRow, dayMetrics, hourMetrics, monthTopics, hourlyTopics, dailyTopics, appUsage, designUsage,
+    jobRows, runRows, cacheRows, articleRows, sourceRows] = await Promise.all([
+    countActiveEditorialUsers(db),
+    db.prepare("SELECT COUNT(*) AS total FROM users").first(),
+    db.prepare("SELECT COUNT(*) AS total FROM editorial_groups").first(),
+    db.prepare("SELECT metric,value,samples,total_ms FROM usage_metrics WHERE granularity='day' AND bucket=?").bind(day).all(),
+    db.prepare("SELECT metric,value,samples,total_ms FROM usage_metrics WHERE granularity='hour' AND bucket=?").bind(hour).all(),
+    db.prepare("SELECT COALESCE(SUM(value),0) AS total FROM usage_metrics WHERE granularity='day' AND metric='topics_generated' AND substr(bucket,1,7)=?").bind(month).first(),
+    db.prepare("SELECT bucket,value FROM usage_metrics WHERE granularity='hour' AND metric='topics_generated' AND bucket>=? ORDER BY bucket").bind(cutoff24).all(),
+    db.prepare("SELECT bucket,value FROM usage_metrics WHERE granularity='day' AND metric='topics_generated' AND bucket>=? ORDER BY bucket").bind(cutoff30).all(),
+    db.prepare("SELECT user_id, SUM(active_ms) AS active_ms FROM usage_daily_users WHERE day=? GROUP BY user_id").bind(day).all(),
+    db.prepare("SELECT user_id, SUM(active_ms) AS active_ms FROM usage_daily_users WHERE day=? AND area='design' GROUP BY user_id").bind(day).all(),
+    db.prepare("SELECT status,COUNT(*) AS total FROM intelligent_jobs GROUP BY status").all(),
+    db.prepare("SELECT status,COUNT(*) AS total FROM runs GROUP BY status").all(),
+    db.prepare("SELECT (SELECT COUNT(*) FROM intelligent_carousels) AS carousels, (SELECT COUNT(*) FROM article_read_cache) AS articles").first(),
+    db.prepare("SELECT COALESCE(SUM(attempts),0) AS attempts, COALESCE(SUM(successes),0) AS successes FROM article_source_stats").first(),
+    db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status NOT IN ('failed','blocked','not-found') THEN 1 ELSE 0 END) AS healthy, SUM(CASE WHEN item_count>0 THEN 1 ELSE 0 END) AS with_content FROM source_state").first(),
+  ]);
+  const dayMap = Object.fromEntries((dayMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
+  const hourMap = Object.fromEntries((hourMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
+  const avg = rows => { const list=rows?.results||[]; return list.length ? Math.round(list.reduce((sum,row)=>sum+(Number(row.active_ms)||0),0)/list.length) : 0; };
+  const statuses = rows => Object.fromEntries((rows?.results||[]).map(row=>[row.status,Number(row.total)||0]));
+  const rounds = dayMap.rounds_completed || metricRow(null); const carousels = dayMap.carousels_generated || metricRow(null);
+  return {
+    generatedAt: now.toISOString(),
+    seats: { active: activeUsers, maximum: MAX_ACTIVE_USERS, available: Math.max(0,MAX_ACTIVE_USERS-activeUsers), adminExcluded:true, idleMinutes:SESSION_IDLE_MINUTES },
+    users: { registered:Number(registeredRow?.total)||0, groups:Number(groupsRow?.total)||0 },
+    today: {
+      rounds: Math.round(rounds.value), roundAverageMs: rounds.samples ? Math.round(rounds.totalMs/rounds.samples) : 0,
+      carousels: Math.round(carousels.value), carouselAverageMs: carousels.samples ? Math.round(carousels.totalMs/carousels.samples) : 0,
+      topics: Math.round((dayMap.topics_generated||{}).value||0), items: Math.round((dayMap.items_collected||{}).value||0),
+      appAverageMs: avg(appUsage), designAverageMs: avg(designUsage),
+    },
+    topics: { hour:Math.round((hourMap.topics_generated||{}).value||0), day:Math.round((dayMap.topics_generated||{}).value||0), month:Math.round(Number(monthTopics?.total)||0),
+      hourly:(hourlyTopics?.results||[]).map(row=>({bucket:row.bucket,value:Math.round(Number(row.value)||0)})),
+      daily:(dailyTopics?.results||[]).map(row=>({bucket:row.bucket,value:Math.round(Number(row.value)||0)})) },
+    health: { sources:{total:Number(sourceRows?.total)||0,healthy:Number(sourceRows?.healthy)||0,withContent:Number(sourceRows?.with_content)||0}, jobs:statuses(jobRows), runs:statuses(runRows) },
+    resources: { carouselCache:Number(cacheRows?.carousels)||0, articleCache:Number(cacheRows?.articles)||0, articleReadAttempts:Number(articleRows?.attempts)||0, articleReadSuccesses:Number(articleRows?.successes)||0 },
+    note: 'Recursos são métricas internas do aplicativo; faturamento/CPU/rows da Cloudflare não são estimados aqui.'
+  };
 }
 
 export async function updateUserDefaultSlideCount(db, userId, slideCount) {
