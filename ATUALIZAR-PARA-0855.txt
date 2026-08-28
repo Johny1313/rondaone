@@ -1,0 +1,20 @@
+RONDA ONE v0.8.5.5 — CAROUSEL RECOVERY
+
+Corrige carrossel parado na fila.
+
+Fluxo:
+POST cria job
+→ Queue tenta processar
+→ frontend acompanha
+→ após 12s queued sem progresso: rescue
+→ lock impede duplicação
+→ cache é reutilizado se já existir
+→ job termina succeeded ou failed
+
+Deploy:
+npm install
+npm run check
+npm run verify:0855
+npm run test:0855
+npm run test:regression
+npm run deploy

@@ -1,12 +1,13 @@
 RONDA ONE CLOUD
-Versão: 0.8.5.4
-Produto: Email-only Auth + Frontend Recovery + Full 39 Sources
+Versão: 0.8.5.5
+Produto: Carousel Recovery + Email-only Auth + Frontend Recovery + Full 39 Sources
 
-CORREÇÃO
-- usuário comum não executa PBKDF2
-- primeiro acesso cria conta diretamente pelo e-mail
-- colunas históricas de senha recebem marcador interno SHA-256 não autenticável
-- cadastro por senha desativado
-- troca de senha do Perfil desativada
-- Perfil dedicado a textos, imagens, arquivos, vídeos e linguagem IA
-- ADM continua usando ADMIN_BOOTSTRAP_PASSWORD no Cloudflare
+CAROUSEL RECOVERY
+- Queue continua sendo o caminho principal.
+- Se job ficar queued por 12s sem progresso, o navegador aciona resgate.
+- Resgate usa o mesmo lock do job: sem processamento duplicado.
+- Se Queue já começou, resgate não interfere.
+- Cache é reutilizado antes de qualquer nova leitura.
+- Polling de 8 minutos agora está no app.js principal.
+- Integration não sobrescreve o polling nativo.
+- GET do job expõe ageMs e idleMs para diagnóstico.

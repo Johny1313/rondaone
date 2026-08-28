@@ -1,8 +1,8 @@
 (()=>{
   'use strict';
 
-  const VERSION='0.8.3';
-  const BUILD='carousel-stability-access';
+  const VERSION='0.8.5.5';
+  const BUILD='carousel-recovery-native';
   const JOB_KEY='rondaOne.intelligentJob';
   const MAX_LOCAL_JOB_AGE_MS=12*60*1000;
   const RECOVERY_COOLDOWN_MS=10*1000;
@@ -259,7 +259,7 @@
 
   // Polling adaptativo: reduz carga e preserva o job em oscilações de rede.
   try{
-    if(typeof waitForIntelligentJob==='function'){
+    if(typeof waitForIntelligentJob==='function' && !waitForIntelligentJob.__rondaNativeResilient){
       waitForIntelligentJob=async function(jobId,requestSerial,pollAfterMs=1500){
         const startedAt=Date.now();
         const hardDeadline=startedAt+(8*60*1000);

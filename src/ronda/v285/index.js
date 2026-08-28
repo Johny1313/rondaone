@@ -516,6 +516,9 @@ function createProgressReporter(db, jobId, lock) {
 
 function publicIntelligentJob(job) {
   const terminal = ["succeeded", "failed"].includes(job.status);
+  const createdMs = Date.parse(job.createdAt || "");
+  const updatedMs = Date.parse(job.updatedAt || "");
+  const now = Date.now();
   return {
     jobId: job.jobId,
     status: job.status,
@@ -527,6 +530,8 @@ function publicIntelligentJob(job) {
     expiresAt: job.expiresAt,
     stale: Boolean(job.stale),
     staleAfterMs: Number(job.staleAfterMs) || null,
+    ageMs: Number.isFinite(createdMs) ? Math.max(0, now - createdMs) : null,
+    idleMs: Number.isFinite(updatedMs) ? Math.max(0, now - updatedMs) : null,
     terminal,
     released: terminal,
     nextCycleAllowed: terminal,
@@ -764,6 +769,72 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
       error: detail,
     }).catch(() => null);
     message?.ack?.();
+  }
+}
+
+
+async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) {
+  const db = requireDatabase(env);
+  let job = await getIntelligentJob(db, jobId);
+  if (!job) throw new HttpError(404, "Processamento não encontrado ou expirado.");
+
+  if (job.status === "succeeded" && job.payload?.slides?.length) {
+    return { status: "succeeded", job, data: job.payload, recovered: true };
+  }
+  if (job.status === "failed") {
+    return { status: "failed", job, data: null, recovered: false };
+  }
+
+  const cached = await getIntelligentCarousel(db, job.cacheKey).catch(() => null);
+  if (cached?.slides?.length) {
+    job = await updateIntelligentJob(db, {
+      jobId,
+      status: "succeeded",
+      progress: 100,
+      message: "Resultado recuperado do cache pelo modo de resgate.",
+      payload: cached,
+    });
+    return { status: "succeeded", job, data: cached, recovered: true };
+  }
+
+  const topic = await resolveTopicForIntelligentJob(env, job);
+
+  try {
+    const data = await processIntelligentCarouselJob(env, job, topic, {
+      userId,
+      slideCount: null,
+      writingProfile: null,
+      styleKey: "rescue",
+    });
+
+    job = await getIntelligentJob(db, jobId);
+
+    if (job?.status === "succeeded" && (job.payload?.slides?.length || data?.slides?.length)) {
+      return {
+        status: "succeeded",
+        job,
+        data: job.payload || data,
+        recovered: true,
+      };
+    }
+
+    if (job?.status === "failed") {
+      return { status: "failed", job, data: null, recovered: false };
+    }
+
+    return { status: job?.status || "running", job, data: null, recovered: false };
+  } catch (error) {
+    if (error?.code === "JOB_LOCK_BUSY") {
+      job = await getIntelligentJob(db, jobId);
+      return {
+        status: job?.status || "running",
+        job,
+        data: job?.status === "succeeded" ? job.payload : null,
+        recovered: false,
+        lockBusy: true,
+      };
+    }
+    throw error;
   }
 }
 
@@ -1607,6 +1678,40 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok: true, run });
   }
 
+  const intelligentRescueRoute = /^\/api\/intelligent-jobs\/([a-z0-9-]{16,80})\/rescue$/i.exec(url.pathname);
+  if (intelligentRescueRoute && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const result = await rescueIntelligentCarouselJob(env, intelligentRescueRoute[1], { userId: user.id });
+
+    if (result.status === "succeeded" && result.data?.slides?.length) {
+      return json({
+        ok: true,
+        rescued: true,
+        status: "succeeded",
+        job: publicIntelligentJob(result.job),
+        data: result.data,
+      });
+    }
+
+    if (result.status === "failed") {
+      return json({
+        ok: false,
+        rescued: false,
+        status: "failed",
+        job: publicIntelligentJob(result.job),
+        error: result.job?.error || result.job?.message || "A leitura não pôde ser concluída.",
+      }, 409);
+    }
+
+    return json({
+      ok: true,
+      rescued: false,
+      status: result.status,
+      lockBusy: Boolean(result.lockBusy),
+      job: publicIntelligentJob(result.job),
+    }, 202);
+  }
+
   const intelligentJobRoute = /^\/api\/intelligent-jobs\/([a-z0-9-]{16,80})$/i.exec(url.pathname);
   if (intelligentJobRoute && request.method === "GET") {
     const db = requireDatabase(env);
@@ -1701,7 +1806,7 @@ async function handleApi(request, env, url, ctx) {
             jobId: queued.job.jobId,
             status: "queued",
             progress: 2,
-            message: "Leitura enviada para processamento seguro.",
+            message: "Leitura enviada para processamento seguro. Recuperação automática disponível se a fila atrasar.",
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);

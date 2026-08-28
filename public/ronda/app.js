@@ -995,23 +995,104 @@ function setCarouselJobProgress(job = {}) {
   });
 }
 
-async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 900) {
-  const deadline = Date.now() + 75_000;
+async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
+  const startedAt = Date.now();
+  const deadline = startedAt + 8 * 60_000;
+  let rescueAttempted = false;
+  let transientErrors = 0;
+
+  const pollDelay = () => {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 30_000) return Math.max(1300, Number(pollAfterMs) || 1500);
+    if (elapsed < 70_000) return 2200;
+    return 3500;
+  };
+
+  async function tryRescue(job) {
+    if (rescueAttempted) return null;
+    const ageMs = Number(job?.ageMs) || (Date.now() - startedAt);
+    const idleMs = Number(job?.idleMs) || 0;
+
+    if (job?.status !== "queued" || ageMs < 12_000 || idleMs < 8_000) return null;
+
+    rescueAttempted = true;
+    setCarouselLoading(true, "A fila está demorando. Ativando recuperação automática do carrossel…", {
+      progress: Math.max(3, Number(job.progress) || 3),
+      title: "Recuperando processamento",
+    });
+
+    try {
+      const rescued = await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}/rescue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (rescued?.status === "succeeded" && rescued?.data?.slides?.length) return rescued.data;
+      return null;
+    } catch (error) {
+      if (error.status === 409) throw error;
+      console.warn("RONDA ONE carousel rescue unavailable", error);
+      return null;
+    }
+  }
+
   while (Date.now() < deadline) {
     if (requestSerial !== state.carouselRequestSerial) return null;
-    await wait(Math.max(650, Number(pollAfterMs) || 900));
+    await wait(pollDelay());
     if (requestSerial !== state.carouselRequestSerial) return null;
-    const response = await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);
+
+    let response;
+    try {
+      response = await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);
+      transientErrors = 0;
+    } catch (error) {
+      transientErrors += 1;
+      setCarouselLoading(
+        true,
+        navigator.onLine === false
+          ? "Sem conexão. O job continua no Cloudflare e será retomado quando a internet voltar."
+          : "A conexão oscilou. O job continua ativo; reconectando…",
+        { progress: 5, title: "Processamento preservado" }
+      );
+      await wait(Math.min(6000, 1000 + transientErrors * 500));
+      continue;
+    }
+
     const job = response?.job || {};
-    if (job.status === "succeeded" && response?.data?.slides?.length) return response.data;
+
+    if (job.status === "succeeded" && response?.data?.slides?.length) {
+      return response.data;
+    }
+
     if (job.status === "failed") {
       const detail = job.error || job.message || "O processamento foi interrompido.";
-      throw new Error(/ciclo (?:foi )?encerrado/i.test(detail) ? detail : `${detail} O ciclo foi encerrado e o sistema está liberado para tentar uma nova leitura.`);
+      throw new Error(
+        /ciclo (?:foi )?encerrado/i.test(detail)
+          ? detail
+          : `${detail} O ciclo foi encerrado e o sistema está liberado para tentar uma nova leitura.`
+      );
     }
-    setCarouselJobProgress(job);
+
+    const rescuedData = await tryRescue(job);
+    if (rescuedData?.slides?.length) return rescuedData;
+
+    if (job.status === "queued" && (Number(job.ageMs) || 0) >= 12_000) {
+      setCarouselLoading(true, job.message || "Aguardando a recuperação automática da fila.", {
+        progress: Math.max(3, Number(job.progress) || 3),
+        title: "Fila em recuperação",
+      });
+    } else {
+      setCarouselJobProgress(job);
+    }
   }
-  throw new Error("A geração ultrapassou 75 segundos. O ciclo foi considerado lento demais; tente novamente para iniciar uma tarefa limpa.");
+
+  const final = await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?final=1&t=${Date.now()}`).catch(() => null);
+  if (final?.job?.status === "succeeded" && final?.data?.slides?.length) return final.data;
+  if (final?.job?.status === "failed") throw new Error(final.job.error || final.job.message || "O processamento foi encerrado.");
+
+  throw new Error("O carrossel não concluiu em 8 minutos. O job permanece rastreável e pode ser retomado sem duplicar processamento.");
 }
+waitForIntelligentJob.__rondaNativeResilient = true;
 
 function questionCard(label, value) {
   return `<article><small>${escapeHtml(label)}</small><p>${escapeHtml(value || "Não informado no conteúdo coletado.")}</p></article>`;
@@ -1209,6 +1290,8 @@ async function generateActiveCarousel({ force = false } = {}) {
     if (!data?.slides?.length && response?.job?.jobId) {
       setCarouselJobProgress(response.job);
       data = await waitForIntelligentJob(response.job.jobId, requestSerial, response.pollAfterMs);
+    } else if (!data?.slides?.length && response?.status !== "succeeded") {
+      throw new Error("O servidor não retornou um job válido para o carrossel. Recarregue a versão publicada e tente novamente.");
     }
     if (requestSerial !== state.carouselRequestSerial || !data) return;
     const actualSlideCount = Array.isArray(data.slides) ? data.slides.length : 0;
