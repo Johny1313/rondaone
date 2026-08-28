@@ -85,6 +85,46 @@ function buildSlideVisualAssignments(slides, articleVisuals){
   });
 }
 
+function semanticRoleType(role,index,total){
+  const key=String(role||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if(/titulo principal|capa|cover|abertura/.test(key)) return 'cover';
+  if(/cta|encerramento|fechamento|conclusao/.test(key)) return 'closing';
+  if(/citacao|quote/.test(key)) return 'quote';
+  if(/estatistica|numero|dado|indicador/.test(key)) return 'statistic';
+  return index===0&&total>1?'cover':'content';
+}
+
+function buildSemanticContentModel({title,editoria,slides,verificationLinks,articleVisuals}){
+  const sourceNames=[...new Set((verificationLinks||[]).map(x=>clean(x?.sourceName||'',120)).filter(Boolean))];
+  const source=sourceNames.length?`Fonte: ${sourceNames.slice(0,3).join(' · ')}`:'Origem verificada na Ronda Editorial';
+  const images=[articleVisuals?.primary,...(articleVisuals?.alternatives||[])].filter(Boolean).map(asset=>({
+    url:asset.url,credit:asset.credit||'',sourceName:asset.sourceName||'',articleUrl:asset.articleUrl||''
+  }));
+  return {
+    version:1,
+    contract:'ronda-content-model-v1',
+    title:clean(title||'Carrossel da Ronda',240),
+    editoria:clean(editoria||'',80),
+    source,
+    images,
+    slides:(slides||[]).map((slide,index)=>({
+      index,
+      number:Number(slide?.number)||index+1,
+      role:clean(slide?.role||`Slide ${index+1}`,80),
+      roleType:semanticRoleType(slide?.role,index,slides.length),
+      title:clean(slide?.title||'',180),
+      subtitle:clean(slide?.subtitle||slide?.body||'',700),
+      body:clean(slide?.body||slide?.subtitle||'',700),
+      cta:/^CTA$/i.test(String(slide?.role||''))?clean(slide?.subtitle||slide?.body||'',700):clean(slide?.cta||'',300),
+      source,
+      editoria:clean(editoria||'',80),
+      image:clean(slide?.visual?.asset?.url||'',2000),
+      imageCredit:clean(slide?.visual?.creditText||slide?.visual?.asset?.credit||'',300),
+      imageSource:clean(slide?.visual?.asset?.sourceName||'',120),
+    })),
+  };
+}
+
 function collectVisualCredits(articleVisuals){
   const library=[articleVisuals?.primary, ...(Array.isArray(articleVisuals?.alternatives)?articleVisuals.alternatives:[])].filter(Boolean);
   const output=[];
@@ -149,17 +189,22 @@ function normalizeProject(input={}){
     || carousel.validation?.reviewRequired
   );
 
+  const projectTitle=clean(topic.title || input.title || carousel.topicTitle || 'Projeto da Ronda',240);
+  const projectEditoria=clean(topic.editoria || input.editoria || 'Notícias',80);
+  const contentModel=buildSemanticContentModel({title:projectTitle,editoria:projectEditoria,slides,verificationLinks,articleVisuals});
+
   return {
-    contractVersion:'ronda-one-import-v3-carousel-first',
+    contractVersion:'ronda-one-import-v4-semantic-content',
     source:'ronda-editorial',
     sourceVersion:clean(input.sourceVersion || 'ronda-module',80),
     handoffVersion:clean(input.handoffVersion || 'ronda-one-0.7.8-carousel-first',80),
-    title:clean(topic.title || input.title || carousel.topicTitle || 'Projeto da Ronda',240),
-    editoria:clean(topic.editoria || input.editoria || 'Notícias',80),
+    title:projectTitle,
+    editoria:projectEditoria,
     runId:clean(input.runId || '',120),
     topicId:clean(topic.id || input.topicId || '',120),
     generatedAt:new Date().toISOString(),
     slides,
+    contentModel,
     questions:carousel.questions || {},
     entities:carousel.entities || {},
     reading:carousel.reading || {},
@@ -185,6 +230,8 @@ function normalizeProject(input={}){
       preferredImageSource:'article-visuals-or-free-bank',
       imagePlacement:'per-slide',
       creditHandling:'show-when-available',
+      semanticContentModel:true,
+      smartTemplateSlots:['TITLE','SUBTITLE','BODY','ROLE','SOURCE','IMAGE','IMAGE_CREDIT','CTA','SLIDE_NUMBER','EDITORIA'],
     },
     imagePolicy:{mode:'non-generative',status:articleVisuals.primary||articleVisuals.alternatives?.length?'article-visuals-attached':'free-bank-available',provider:'publisher-or-wikimedia-commons',sourceLabel:'Fonte da foto',creditHandling:'show-when-available',ai:false},
   };
