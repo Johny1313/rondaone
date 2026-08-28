@@ -1,20 +1,23 @@
 RONDA ONE CLOUD
-Versão: 0.8.8.1
-Hotfix: Lock Coordination + Mesa Filters
+Versão: 0.8.9
+Produto: Mesa Filter Recovery + Direct Article Composer + Reliability 90
 
-CARROSSEL
-- JOB_LOCK_BUSY deixa de ser falha terminal
-- consumidor duplicado não derruba o job principal
-- lease do lock: 90s, renovado durante progresso
-- rescue pode repetir até 3 vezes
-- running sem progresso por 45s pode ser recuperado
-- FORMA acompanha o consumidor ativo sem mostrar falso erro
-
-MESA
-- Breaking: status Breaking
-- Em alta: status Em alta OU tração >=75
-- Em desenvolvimento: status ou informação nova em evento alterado
-- Monitorados: eventos vinculados a termos
+MESA EDITORIAL
+- filtros agora alteram a Mesa inteira, não só a grade inferior
+- cada botão mostra quantidade de resultados
+- Breaking: status BREAKING
+- Em alta: status EM ALTA ou tração >=75
+- Em desenvolvimento: EM DESENVOLVIMENTO + NOVO + ATUALIZADO
+- Monitorados: eventos vinculados a termos monitorados
 - Brasil/Mundo: região real das matérias
-- Últimas: últimas 2h, fallback nos 20 mais recentes
-- todos os filtros exibem contagem
+- Últimas: 20 eventos atualizados mais recentemente
+- resumo, mudanças, aceleração, alertas e cards respeitam o filtro ativo
+- empty state deixa claro quando o filtro funciona mas tem 0 resultados
+
+PRESERVADO
+- Direct Article Composer 0.8.8
+- Reliability 90 0.8.7
+- Smart Templates 0.8.6
+- Carousel Recovery
+- 39 fontes
+- Access Recovery

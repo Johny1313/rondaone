@@ -6,7 +6,17 @@
 
   let filter='TODOS';
   let events=[];
+  let changes=[];
+  let radar=[];
+  let alerts=[];
   let lastLoad=0;
+  let lastLoadedAt=null;
+  const filterRules=window.RondaMesaFilters;
+  const FILTER_LABELS={
+    TODOS:'Todos',BREAKING:'Breaking','EM ALTA':'Em alta',
+    'EM DESENVOLVIMENTO':'Em desenvolvimento',MONITORADO:'Monitorados',
+    BRASIL:'Brasil',MUNDO:'Mundo',ULTIMAS:'Últimas'
+  };
   let timer=null;
   const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const fmtDate=value=>{const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';};
@@ -24,9 +34,9 @@
   host.innerHTML=`
     <div class="event-mesa-toolbar">
       <div class="event-mesa-tabs" id="eventMesaTabs">
-        ${[['TODOS','Todos'],['BREAKING','Breaking'],['EM ALTA','Em alta'],['EM DESENVOLVIMENTO','Em desenvolvimento'],['MONITORADO','Monitorados'],['BRASIL','Brasil'],['MUNDO','Mundo'],['ULTIMAS','Últimas']].map(([value,label])=>`<button class="event-filter${value==='TODOS'?' active':''}" data-event-filter="${value}" type="button">${label}</button>`).join('')}
+        ${[['TODOS','Todos'],['BREAKING','Breaking'],['EM ALTA','Em alta'],['EM DESENVOLVIMENTO','Em desenvolvimento'],['MONITORADO','Monitorados'],['BRASIL','Brasil'],['MUNDO','Mundo'],['ULTIMAS','Últimas']].map(([value,label])=>`<button class="event-filter${value==='TODOS'?' active':''}" data-event-filter="${value}" data-filter-label="${label}" aria-pressed="${value==='TODOS'?'true':'false'}" type="button"><span>${label}</span><b data-filter-count>0</b></button>`).join('')}
       </div>
-      <button class="event-legacy-toggle" id="eventLegacyToggle" type="button">Mostrar operação clássica</button>
+      <div class="event-mesa-toolbar-side"><span class="event-filter-meta" id="eventFilterMeta">Todos os eventos</span><button class="event-legacy-toggle" id="eventLegacyToggle" type="button">Mostrar operação clássica</button></div>
     </div>
     <section class="event-summary" id="eventSummary">
       <div><strong>0</strong><span>eventos ativos</span></div><div class="warn"><strong>0</strong><span>breaking</span></div><div class="hot"><strong>0</strong><span>em alta</span></div><div><strong>0</strong><span>mudaram</span></div><div><strong>0</strong><span>divergências</span></div>
@@ -52,70 +62,71 @@
     return data;
   }
 
-  function eventRegions(event){
-    const regions=new Set((event?.materias||[]).map(item=>String(item?.region||'').trim()).filter(Boolean));
-    if(!regions.size&&event?.editoria==='Mundo')regions.add('Mundo');
-    if(!regions.size)regions.add('Brasil');
-    return regions;
-  }
-
-  function eventMatchesFilter(event,value=filter){
-    if(value==='TODOS')return true;
-    const status=String(event?.status||'').toUpperCase();
-    const traction=Number(event?.tracao?.score)||0;
-    const changed=Boolean(event?.mudouDesdeUltimaRonda);
-    const newInfo=Array.isArray(event?.informacoesNovas)&&event.informacoesNovas.length>0;
-
-    if(value==='BREAKING')return status==='BREAKING';
-    if(value==='EM ALTA')return status==='EM ALTA'||traction>=75;
-    if(value==='EM DESENVOLVIMENTO')return status==='EM DESENVOLVIMENTO'||(changed&&newInfo&&!['BREAKING','ENCERRADO'].includes(status));
-    if(value==='MONITORADO')return Array.isArray(event?.termosMonitorados)&&event.termosMonitorados.length>0;
-    if(value==='BRASIL')return eventRegions(event).has('Brasil');
-    if(value==='MUNDO')return eventRegions(event).has('Mundo');
-    if(value==='ULTIMAS'){
-      const updated=Date.parse(event?.ultimaAtualizacao||'');
-      return Number.isFinite(updated)&&Date.now()-updated<=2*60*60*1000;
-    }
-    return status===value;
-  }
-
   function filteredEvents(){
-    const sorted=[...events].sort((a,b)=>Date.parse(b.ultimaAtualizacao||0)-Date.parse(a.ultimaAtualizacao||0));
-    if(filter==='TODOS')return sorted;
-    if(filter==='ULTIMAS'){
-      const recent=sorted.filter(event=>eventMatchesFilter(event,'ULTIMAS'));
-      return recent.length?recent:sorted.slice(0,20);
-    }
-    return sorted.filter(event=>eventMatchesFilter(event,filter));
+    return filterRules?.filterEvents
+      ? filterRules.filterEvents(events,filter,{latestLimit:20})
+      : events;
   }
 
-  function updateFilterCounts(){
-    document.querySelectorAll('[data-event-filter]').forEach(button=>{
-      const value=button.dataset.eventFilter;
-      let total;
-      if(value==='TODOS')total=events.length;
-      else if(value==='ULTIMAS'){
-        const recent=events.filter(event=>eventMatchesFilter(event,'ULTIMAS'));
-        total=recent.length||Math.min(20,events.length);
-      }else total=events.filter(event=>eventMatchesFilter(event,value)).length;
-      button.dataset.count=String(total);
-      const base=button.dataset.label||button.textContent.replace(/\s+\d+$/,'').trim();
-      button.dataset.label=base;
-      button.innerHTML=`<span>${esc(base)}</span><b>${total}</b>`;
-      button.setAttribute('aria-pressed',String(value===filter));
-      button.title=total?`${total} evento(s) neste filtro`:'Nenhum evento neste filtro no momento';
-    });
+  function linkedItems(items){
+    return filterRules?.filterLinked
+      ? filterRules.filterLinked(items,events,filter,{latestLimit:20})
+      : items;
   }
 
-  function renderSummary(data){
+  function renderSummary(list){
+    const data=filterRules?.summary?filterRules.summary(list):{
+      events:list.length,
+      breaking:list.filter(event=>event.status==='BREAKING').length,
+      hot:list.filter(event=>event.status==='EM ALTA').length,
+      changed:list.filter(event=>event.mudouDesdeUltimaRonda).length,
+      divergences:list.filter(event=>event.divergencias?.length).length,
+    };
     const values=[data.events||0,data.breaking||0,data.hot||0,data.changed||0,data.divergences||0];
     document.querySelectorAll('#eventSummary strong').forEach((node,index)=>node.textContent=String(values[index]||0));
   }
 
-  function renderEvents(){
-    const grid=document.getElementById('eventGrid');
+  function updateFilterButtons(){
+    const counts=filterRules?.counts?filterRules.counts(events):{};
+    document.querySelectorAll('[data-event-filter]').forEach(button=>{
+      const value=button.dataset.eventFilter;
+      const active=value===filter;
+      button.classList.toggle('active',active);
+      button.setAttribute('aria-pressed',active?'true':'false');
+      const count=button.querySelector('[data-filter-count]');
+      if(count)count.textContent=String(counts[value]??0);
+    });
+  }
+
+  function renderFilteredMesa(){
     const list=filteredEvents();
-    if(!list.length){grid.innerHTML='<div class="event-empty" style="grid-column:1/-1"><div><strong>Nenhum evento neste filtro</strong><span>Troque o filtro ou aguarde a próxima ronda.</span></div></div>';return;}
+    renderSummary(list);
+    renderEvents(list);
+    renderChanges(linkedItems(changes));
+    renderRadar(linkedItems(radar));
+    renderAlerts(linkedItems(alerts));
+    updateFilterButtons();
+
+    const meta=document.getElementById('eventFilterMeta');
+    if(meta){
+      const label=FILTER_LABELS[filter]||filter;
+      const suffix=filter==='ULTIMAS'?'mais recentes':'no filtro';
+      meta.textContent=`${list.length} ${list.length===1?'evento':'eventos'} ${suffix} · ${label}`;
+    }
+
+    const updated=document.getElementById('eventUpdated');
+    if(updated&&lastLoadedAt){
+      updated.textContent=`${list.length} exibidos · atualizado ${lastLoadedAt}`;
+    }
+  }
+
+  function renderEvents(list=filteredEvents()){
+    const grid=document.getElementById('eventGrid');
+    if(!list.length){
+      const label=FILTER_LABELS[filter]||filter;
+      grid.innerHTML=`<div class="event-empty" style="grid-column:1/-1"><div><strong>Nenhum evento em “${esc(label)}”</strong><span>O filtro está funcionando, mas não há eventos que atendam a este critério agora.</span></div></div>`;
+      return;
+    }
     grid.innerHTML=list.slice(0,80).map(event=>{
       const info=event.informacoesNovas?.[0]?.text||'';
       const growth=Number(event.tracao?.growth30m)||0;
@@ -206,9 +217,11 @@
         request('/api/editorial-alerts?hours=8&limit=40'),
       ]);
       events=eventData.events||[];
-      updateFilterCounts();
-      renderSummary(eventData.totals||{});renderEvents();renderChanges(changesData.items||[]);renderRadar(radarData.items||[]);renderAlerts(alertsData.items||[]);
-      if(updated)updated.textContent=`Atualizado ${new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`;
+      changes=changesData.items||[];
+      radar=radarData.items||[];
+      alerts=alertsData.items||[];
+      lastLoadedAt=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+      renderFilteredMesa();
     }catch(error){
       document.getElementById('eventGrid').innerHTML=`<div class="event-empty" style="grid-column:1/-1"><div><strong>Mesa Editorial indisponível</strong><span>${esc(error.message)}</span></div></div>`;
       if(updated)updated.textContent='Falha na atualização';
@@ -217,7 +230,8 @@
 
   document.getElementById('eventMesaTabs')?.addEventListener('click',event=>{
     const button=event.target.closest('[data-event-filter]');if(!button)return;
-    filter=button.dataset.eventFilter;document.querySelectorAll('[data-event-filter]').forEach(node=>node.classList.toggle('active',node===button));updateFilterCounts();renderEvents();
+    filter=button.dataset.eventFilter||'TODOS';
+    renderFilteredMesa();
   });
   document.getElementById('eventLegacyToggle')?.addEventListener('click',event=>{
     const hidden=oldSummary?.classList.contains('event-legacy-hidden');

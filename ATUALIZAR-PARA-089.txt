@@ -1,0 +1,29 @@
+RONDA ONE v0.8.9 — MESA FILTER RECOVERY
+
+Corrige os botões:
+Todos
+Breaking
+Em alta
+Em desenvolvimento
+Monitorados
+Brasil
+Mundo
+Últimas
+
+Mudança principal:
+o filtro passa a controlar toda a Mesa Editorial:
+- resumo
+- mudanças
+- assuntos em aceleração
+- alertas
+- eventos
+
+Os botões exibem contagem para deixar claro quando um filtro tem zero resultados.
+
+Deploy:
+npm install
+npm run check
+npm run verify:089
+npm run test:089
+npm run test:regression
+npm run deploy

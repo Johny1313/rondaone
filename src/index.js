@@ -39,7 +39,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.8.1',
+      version:'0.8.9',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -94,14 +94,15 @@ export default {
         detach:true,
         multiLayout:true
       },
-      lockCoordinationV0881:{
-        lockBusyIsFailure:false,
-        renewableLockLeaseSeconds:90,
-        duplicateQueueConsumerSafe:true,
-        rescueCanRetry:true,
-        runningIdleRescueSeconds:45,
-        mesaFacetFilters:true,
-        mesaFilterCounts:true
+      mesaFiltersV089:{
+        enabled:true,
+        wholeMesaFiltering:true,
+        visibleCounts:true,
+        latestLimit:20,
+        developmentIncludes:['EM DESENVOLVIMENTO','NOVO','ATUALIZADO'],
+        hotIncludesTractionScore:75,
+        regionFiltering:true,
+        linkedPanelsFiltered:true
       },
       directArticleComposerV088:{
         enabled:true,
@@ -165,7 +166,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-0881-lock-mesa-hotfix'
+        assetCacheBust:'2.8.5-089-mesa-filter-recovery'
       },
       navigation:{
         ronda:'/ronda',
