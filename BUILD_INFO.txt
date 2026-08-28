@@ -1,28 +1,20 @@
 RONDA ONE CLOUD
-Versão: 0.8.8
-Produto: Direct Article Composer + Smart Templates + Reliability 90
+Versão: 0.8.8.1
+Hotfix: Lock Coordination + Mesa Filters
 
-FORMA DESIGN — MATÉRIA → CARROSSEL
-- campo para colar URL direta da matéria
-- quantidade de slides 3–10
-- seleção do template antes da geração
-- usa exatamente o mesmo pipeline editorial da RONDA
-- Queue + Rescue + Reliability Ledger
-- leitura direta do portal obrigatória
-- imagem da matéria quando liberada para uso automático
-- fallback não generativo pelo Banco Free/Wikimedia Commons
-- conteúdo entra diretamente no template selecionado
-- Auto Fit e semantic slots continuam ativos
-- releitura opcional ignorando cache
+CARROSSEL
+- JOB_LOCK_BUSY deixa de ser falha terminal
+- consumidor duplicado não derruba o job principal
+- lease do lock: 90s, renovado durante progresso
+- rescue pode repetir até 3 vezes
+- running sem progresso por 45s pode ser recuperado
+- FORMA acompanha o consumidor ativo sem mostrar falso erro
 
-SEM IA DE IMAGEM
-- não existe fallback generativo de imagem neste fluxo
-- prioridade visual: publisher -> Wikimedia Commons -> sem imagem automática
-
-PRESERVADO
-- Reliability 90 v0.8.7
-- Smart Templates v0.8.6
-- Carousel Recovery v0.8.5.5
-- Access Recovery
-- 39 fontes
-- 10 usuários
+MESA
+- Breaking: status Breaking
+- Em alta: status Em alta OU tração >=75
+- Em desenvolvimento: status ou informação nova em evento alterado
+- Monitorados: eventos vinculados a termos
+- Brasil/Mundo: região real das matérias
+- Últimas: últimas 2h, fallback nos 20 mais recentes
+- todos os filtros exibem contagem

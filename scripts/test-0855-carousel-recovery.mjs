@@ -18,7 +18,7 @@ assert.ok(worker.includes("idleMs:"));
 
 assert.ok(app.includes("async function tryRescue(job)"));
 assert.ok(app.includes("/rescue"));
-assert.ok(app.includes("ageMs < 12_000"));
+assert.ok(app.includes("ageMs < 12_000") || app.includes("queuedStalled"));
 assert.ok(app.includes("8 * 60_000"));
 assert.ok(app.includes("__rondaNativeResilient = true"));
 assert.ok(integration.includes("!waitForIntelligentJob.__rondaNativeResilient"));

@@ -998,7 +998,8 @@ function setCarouselJobProgress(job = {}) {
 async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
   const startedAt = Date.now();
   const deadline = startedAt + 8 * 60_000;
-  let rescueAttempted = false;
+  let rescueAttempts = 0;
+  let nextRescueAt = startedAt + 12_000;
   let transientErrors = 0;
 
   const pollDelay = () => {
@@ -1009,16 +1010,21 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
   };
 
   async function tryRescue(job) {
-    if (rescueAttempted) return null;
-    const ageMs = Number(job?.ageMs) || (Date.now() - startedAt);
+    const now = Date.now();
+    if (rescueAttempts >= 3 || now < nextRescueAt) return null;
+
+    const ageMs = Number(job?.ageMs) || (now - startedAt);
     const idleMs = Number(job?.idleMs) || 0;
+    const queuedStalled = job?.status === "queued" && ageMs >= 12_000 && idleMs >= 8_000;
+    const runningStalled = job?.status === "running" && ageMs >= 60_000 && idleMs >= 45_000;
+    if (!queuedStalled && !runningStalled) return null;
 
-    if (job?.status !== "queued" || ageMs < 12_000 || idleMs < 8_000) return null;
+    rescueAttempts += 1;
+    nextRescueAt = now + 30_000;
 
-    rescueAttempted = true;
-    setCarouselLoading(true, "A fila está demorando. Ativando recuperação automática do carrossel…", {
+    setCarouselLoading(true, "Verificando a execução ativa antes de assumir o carrossel…", {
       progress: Math.max(3, Number(job.progress) || 3),
-      title: "Recuperando processamento",
+      title: "Recuperação segura",
     });
 
     try {
@@ -1028,6 +1034,12 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
         body: "{}",
       });
       if (rescued?.status === "succeeded" && rescued?.data?.slides?.length) return rescued.data;
+      if (rescued?.lockBusy) {
+        setCarouselLoading(true, "Outro consumidor já está processando este carrossel. Apenas acompanhando o mesmo job…", {
+          progress: Math.max(4, Number(rescued?.job?.progress ?? job.progress) || 4),
+          title: "Processamento ativo",
+        });
+      }
       return null;
     } catch (error) {
       if (error.status === 409) throw error;

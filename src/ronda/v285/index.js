@@ -129,7 +129,7 @@ import { enqueueEditorialEnrichmentJobs, syncEditorialEvents } from "../editoria
 const VERSION = "2.8.5";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
-const INTELLIGENT_JOB_LOCK_TTL_MS = 12 * 60 * 1000;
+const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -775,21 +775,46 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
     const lockBusy = error?.code === "JOB_LOCK_BUSY";
     structuredLog("intelligent_queue_error", { jobId, attempts, lockBusy, detail });
 
-    if (retryableProcessingError(error) && attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
-      if (!lockBusy) {
-        const refreshed = await updateIntelligentJob(requireDatabase(env), {
-          jobId,
-          status: "queued",
-          progress: Math.max(2, Math.min(90, 7 * attempts)),
-          message: `Falha temporária. Nova tentativa ${attempts + 1}/${INTELLIGENT_QUEUE_MAX_ATTEMPTS} agendada.`,
-          error: null,
-        }).catch(() => null);
-        if (["succeeded", "failed"].includes(refreshed?.status)) {
-          message?.ack?.();
-          return;
-        }
+    if (lockBusy) {
+      const current = await getIntelligentJob(requireDatabase(env), jobId).catch(() => null);
+      if (!current || ["succeeded", "failed"].includes(current.status)) {
+        message?.ack?.();
+        return;
       }
-      const delaySeconds = lockBusy ? 8 : Math.min(60, 10 * (2 ** Math.max(0, attempts - 1)));
+
+      await touchCarouselReliabilityAttempt(requireDatabase(env), {
+        jobId,
+        queueAttempts: attempts,
+      }).catch(() => null);
+
+      if (attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
+        message.retry({ delaySeconds: 18 });
+        return;
+      }
+
+      structuredLog("intelligent_queue_duplicate_released", {
+        jobId,
+        attempts,
+        status: current.status,
+        progress: current.progress,
+      });
+      message?.ack?.();
+      return;
+    }
+
+    if (retryableProcessingError(error) && attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
+      const refreshed = await updateIntelligentJob(requireDatabase(env), {
+        jobId,
+        status: "queued",
+        progress: Math.max(2, Math.min(90, 7 * attempts)),
+        message: `Falha temporária. Nova tentativa ${attempts + 1}/${INTELLIGENT_QUEUE_MAX_ATTEMPTS} agendada.`,
+        error: null,
+      }).catch(() => null);
+      if (["succeeded", "failed"].includes(refreshed?.status)) {
+        message?.ack?.();
+        return;
+      }
+      const delaySeconds = Math.min(60, 10 * (2 ** Math.max(0, attempts - 1)));
       message.retry({ delaySeconds });
       return;
     }

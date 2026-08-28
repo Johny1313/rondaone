@@ -52,13 +52,59 @@
     return data;
   }
 
+  function eventRegions(event){
+    const regions=new Set((event?.materias||[]).map(item=>String(item?.region||'').trim()).filter(Boolean));
+    if(!regions.size&&event?.editoria==='Mundo')regions.add('Mundo');
+    if(!regions.size)regions.add('Brasil');
+    return regions;
+  }
+
+  function eventMatchesFilter(event,value=filter){
+    if(value==='TODOS')return true;
+    const status=String(event?.status||'').toUpperCase();
+    const traction=Number(event?.tracao?.score)||0;
+    const changed=Boolean(event?.mudouDesdeUltimaRonda);
+    const newInfo=Array.isArray(event?.informacoesNovas)&&event.informacoesNovas.length>0;
+
+    if(value==='BREAKING')return status==='BREAKING';
+    if(value==='EM ALTA')return status==='EM ALTA'||traction>=75;
+    if(value==='EM DESENVOLVIMENTO')return status==='EM DESENVOLVIMENTO'||(changed&&newInfo&&!['BREAKING','ENCERRADO'].includes(status));
+    if(value==='MONITORADO')return Array.isArray(event?.termosMonitorados)&&event.termosMonitorados.length>0;
+    if(value==='BRASIL')return eventRegions(event).has('Brasil');
+    if(value==='MUNDO')return eventRegions(event).has('Mundo');
+    if(value==='ULTIMAS'){
+      const updated=Date.parse(event?.ultimaAtualizacao||'');
+      return Number.isFinite(updated)&&Date.now()-updated<=2*60*60*1000;
+    }
+    return status===value;
+  }
+
   function filteredEvents(){
-    if(filter==='TODOS')return events;
-    if(filter==='BRASIL')return events.filter(event=>event.materias?.some(item=>item.region==='Brasil'));
-    if(filter==='MUNDO')return events.filter(event=>event.materias?.some(item=>item.region==='Mundo'));
-    if(filter==='MONITORADO')return events.filter(event=>event.termosMonitorados?.length);
-    if(filter==='ULTIMAS')return [...events].sort((a,b)=>Date.parse(b.ultimaAtualizacao||0)-Date.parse(a.ultimaAtualizacao||0));
-    return events.filter(event=>event.status===filter);
+    const sorted=[...events].sort((a,b)=>Date.parse(b.ultimaAtualizacao||0)-Date.parse(a.ultimaAtualizacao||0));
+    if(filter==='TODOS')return sorted;
+    if(filter==='ULTIMAS'){
+      const recent=sorted.filter(event=>eventMatchesFilter(event,'ULTIMAS'));
+      return recent.length?recent:sorted.slice(0,20);
+    }
+    return sorted.filter(event=>eventMatchesFilter(event,filter));
+  }
+
+  function updateFilterCounts(){
+    document.querySelectorAll('[data-event-filter]').forEach(button=>{
+      const value=button.dataset.eventFilter;
+      let total;
+      if(value==='TODOS')total=events.length;
+      else if(value==='ULTIMAS'){
+        const recent=events.filter(event=>eventMatchesFilter(event,'ULTIMAS'));
+        total=recent.length||Math.min(20,events.length);
+      }else total=events.filter(event=>eventMatchesFilter(event,value)).length;
+      button.dataset.count=String(total);
+      const base=button.dataset.label||button.textContent.replace(/\s+\d+$/,'').trim();
+      button.dataset.label=base;
+      button.innerHTML=`<span>${esc(base)}</span><b>${total}</b>`;
+      button.setAttribute('aria-pressed',String(value===filter));
+      button.title=total?`${total} evento(s) neste filtro`:'Nenhum evento neste filtro no momento';
+    });
   }
 
   function renderSummary(data){
@@ -160,6 +206,7 @@
         request('/api/editorial-alerts?hours=8&limit=40'),
       ]);
       events=eventData.events||[];
+      updateFilterCounts();
       renderSummary(eventData.totals||{});renderEvents();renderChanges(changesData.items||[]);renderRadar(radarData.items||[]);renderAlerts(alertsData.items||[]);
       if(updated)updated.textContent=`Atualizado ${new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`;
     }catch(error){
@@ -170,7 +217,7 @@
 
   document.getElementById('eventMesaTabs')?.addEventListener('click',event=>{
     const button=event.target.closest('[data-event-filter]');if(!button)return;
-    filter=button.dataset.eventFilter;document.querySelectorAll('[data-event-filter]').forEach(node=>node.classList.toggle('active',node===button));renderEvents();
+    filter=button.dataset.eventFilter;document.querySelectorAll('[data-event-filter]').forEach(node=>node.classList.toggle('active',node===button));updateFilterCounts();renderEvents();
   });
   document.getElementById('eventLegacyToggle')?.addEventListener('click',event=>{
     const hidden=oldSummary?.classList.contains('event-legacy-hidden');
