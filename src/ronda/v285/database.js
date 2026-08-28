@@ -435,6 +435,32 @@ async function ensureRunStateColumns(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_runs_status_activity ON runs(status, heartbeat_at DESC, queued_at DESC)").run();
 }
 
+
+async function ensureCarouselReliabilitySchema(db) {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS carousel_reliability (
+      job_id TEXT PRIMARY KEY,
+      cache_key TEXT,
+      user_id TEXT,
+      run_id TEXT,
+      topic_id TEXT,
+      slide_count INTEGER NOT NULL DEFAULT 7,
+      status TEXT NOT NULL DEFAULT 'attempted',
+      recovered INTEGER NOT NULL DEFAULT 0,
+      queue_attempts INTEGER NOT NULL DEFAULT 0,
+      failure_stage TEXT,
+      error_code TEXT,
+      error_detail TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_carousel_reliability_started ON carousel_reliability(started_at DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_carousel_reliability_status ON carousel_reliability(status, completed_at DESC)").run();
+}
+
 export async function ensureSchema(db) {
   if (!db) throw new Error("Binding D1 'DB' não configurado.");
   if (initializedBindings.has(db)) return;
@@ -444,6 +470,7 @@ export async function ensureSchema(db) {
       for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
     }
     await ensureRunStateColumns(db);
+    await ensureCarouselReliabilitySchema(db);
     if (version !== DATABASE_SCHEMA_VERSION) {
       const now = new Date().toISOString();
       await db.prepare(`
@@ -1533,7 +1560,7 @@ export async function createEditorialUser(db, {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     id, email, emailKey, displayName, passwordHash, passwordSalt,
-    Number(passwordIterations) || 120000, validateSlideCount(defaultSlideCount), now, now,
+    Number.isFinite(Number(passwordIterations)) ? Math.max(0, Math.round(Number(passwordIterations))) : 120000, validateSlideCount(defaultSlideCount), now, now,
   ).run();
   return { id, email, displayName, defaultSlideCount: validateSlideCount(defaultSlideCount), createdAt: now, updatedAt: now };
 }
@@ -1550,7 +1577,7 @@ export async function getEditorialUserByEmailKey(db, emailKey) {
     ...publicUserRow(row),
     passwordHash: row.password_hash,
     passwordSalt: row.password_salt,
-    passwordIterations: Number(row.password_iterations) || 120000,
+    passwordIterations: Number.isFinite(Number(row.password_iterations)) ? Number(row.password_iterations) : 120000,
   };
 }
 
@@ -1803,6 +1830,140 @@ export async function listAdminUsers(db) {
   });
 }
 
+
+export async function startCarouselReliabilityAttempt(db, {
+  jobId, cacheKey = null, userId = null, runId = null, topicId = null, slideCount = 7,
+  startedAt = new Date().toISOString(),
+} = {}) {
+  await ensureSchema(db);
+  if (!jobId) return null;
+  await db.prepare(`
+    INSERT OR IGNORE INTO carousel_reliability (
+      job_id, cache_key, user_id, run_id, topic_id, slide_count, status, recovered,
+      queue_attempts, failure_stage, error_code, error_detail, started_at, completed_at,
+      duration_ms, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'attempted', 0, 0, NULL, NULL, NULL, ?, NULL, 0, ?)
+  `).bind(
+    jobId, cacheKey, userId, runId, topicId,
+    Math.max(3, Math.min(15, Number(slideCount) || 7)),
+    startedAt, startedAt,
+  ).run();
+  return true;
+}
+
+export async function touchCarouselReliabilityAttempt(db, {
+  jobId, queueAttempts = null, recovered = null,
+} = {}) {
+  await ensureSchema(db);
+  if (!jobId) return null;
+  const row = await db.prepare("SELECT queue_attempts,recovered FROM carousel_reliability WHERE job_id=? LIMIT 1").bind(jobId).first();
+  if (!row) return null;
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    UPDATE carousel_reliability SET queue_attempts=?, recovered=?, updated_at=? WHERE job_id=?
+  `).bind(
+    queueAttempts == null ? Number(row.queue_attempts)||0 : Math.max(Number(row.queue_attempts)||0, Number(queueAttempts)||0),
+    recovered == null ? Number(row.recovered)||0 : (recovered ? 1 : Number(row.recovered)||0),
+    updatedAt, jobId,
+  ).run();
+  return true;
+}
+
+export async function finishCarouselReliabilityAttempt(db, {
+  jobId, status, recovered = false, queueAttempts = null,
+  failureStage = null, errorCode = null, errorDetail = null,
+  completedAt = new Date().toISOString(),
+} = {}) {
+  await ensureSchema(db);
+  if (!jobId || !['succeeded','failed'].includes(status)) return null;
+  const row = await db.prepare("SELECT * FROM carousel_reliability WHERE job_id=? LIMIT 1").bind(jobId).first();
+  if (!row) return null;
+
+  if (['succeeded','failed'].includes(String(row.status))) {
+    if (recovered && !Number(row.recovered)) {
+      await db.prepare("UPDATE carousel_reliability SET recovered=1,updated_at=? WHERE job_id=?")
+        .bind(completedAt,jobId).run();
+    }
+    return {status:row.status,alreadyTerminal:true};
+  }
+
+  const startMs=Date.parse(row.started_at||'');
+  const endMs=Date.parse(completedAt);
+  const durationMs=Number.isFinite(startMs)&&Number.isFinite(endMs)?Math.max(0,endMs-startMs):0;
+
+  await db.prepare(`
+    UPDATE carousel_reliability SET
+      status=?, recovered=?, queue_attempts=?, failure_stage=?, error_code=?, error_detail=?,
+      completed_at=?, duration_ms=?, updated_at=?
+    WHERE job_id=?
+  `).bind(
+    status,
+    recovered ? 1 : Number(row.recovered)||0,
+    queueAttempts == null ? Number(row.queue_attempts)||0 : Math.max(Number(row.queue_attempts)||0,Number(queueAttempts)||0),
+    status==='failed' ? String(failureStage||'unknown').slice(0,40) : null,
+    status==='failed' && errorCode ? String(errorCode).slice(0,80) : null,
+    status==='failed' && errorDetail ? String(errorDetail).slice(0,300) : null,
+    completedAt,durationMs,completedAt,jobId,
+  ).run();
+  return {status,alreadyTerminal:false,durationMs};
+}
+
+export async function getCarouselReliabilitySummary(db,{hours=24}={}) {
+  await ensureSchema(db);
+  const safeHours=Math.max(1,Math.min(720,Number(hours)||24));
+  const cutoff=new Date(Date.now()-safeHours*60*60*1000).toISOString();
+
+  const [summary,recent,stages]=await Promise.all([
+    db.prepare(`
+      SELECT COUNT(*) AS attempts,
+        SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END) AS succeeded,
+        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN status='attempted' THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN recovered=1 AND status='succeeded' THEN 1 ELSE 0 END) AS recovered,
+        COALESCE(AVG(CASE WHEN status='succeeded' THEN duration_ms END),0) AS avg_success_ms
+      FROM carousel_reliability WHERE started_at>=?
+    `).bind(cutoff).first(),
+    db.prepare(`
+      SELECT job_id,status,recovered,failure_stage,completed_at,duration_ms
+      FROM carousel_reliability
+      WHERE status IN ('succeeded','failed')
+      ORDER BY completed_at DESC LIMIT 10
+    `).all(),
+    db.prepare(`
+      SELECT COALESCE(failure_stage,'unknown') AS stage,COUNT(*) AS total
+      FROM carousel_reliability
+      WHERE status='failed' AND started_at>=?
+      GROUP BY COALESCE(failure_stage,'unknown')
+      ORDER BY total DESC
+    `).bind(cutoff).all(),
+  ]);
+
+  const succeeded=Number(summary?.succeeded)||0;
+  const failed=Number(summary?.failed)||0;
+  const terminal=succeeded+failed;
+  const successRate=terminal?succeeded/terminal:null;
+  const rows=recent?.results||[];
+  const recentSucceeded=rows.filter(r=>r.status==='succeeded').length;
+  const recentFailed=rows.filter(r=>r.status==='failed').length;
+  const recentTerminal=recentSucceeded+recentFailed;
+  const recentRate=recentTerminal?recentSucceeded/recentTerminal:null;
+
+  return {
+    target:0.90,targetLabel:'9/10',windowHours:safeHours,
+    attempts:Number(summary?.attempts)||0,terminal,succeeded,failed,
+    active:Number(summary?.active)||0,recovered:Number(summary?.recovered)||0,
+    successRate,successPercent:successRate==null?null:Math.round(successRate*1000)/10,
+    averageSuccessMs:Math.round(Number(summary?.avg_success_ms)||0),
+    sampleReady:terminal>=10,onTarget:terminal>=10?successRate>=0.90:null,
+    recent10:{
+      completed:recentTerminal,succeeded:recentSucceeded,failed:recentFailed,
+      successRate:recentRate,successPercent:recentRate==null?null:Math.round(recentRate*1000)/10,
+      onTarget:recentTerminal>=10?recentSucceeded>=9:null,
+    },
+    failureStages:(stages?.results||[]).map(r=>({stage:r.stage,total:Number(r.total)||0})),
+  };
+}
+
 export async function recordUsageMetric(db, metric, { value = 1, samples = 1, durationMs = 0, at = new Date() } = {}) {
   await ensureSchema(db);
   const date = at instanceof Date ? at : new Date(at);
@@ -1858,7 +2019,7 @@ export async function getAdminDashboard(db) {
   const cutoff24 = new Date(now.getTime()-24*60*60*1000).toISOString().slice(0,13);
   const cutoff30 = new Date(now.getTime()-30*24*60*60*1000).toISOString().slice(0,10);
   const [activeUsers, registeredRow, groupsRow, dayMetrics, hourMetrics, monthTopics, hourlyTopics, dailyTopics, appUsage, designUsage,
-    jobRows, runRows, cacheRows, articleRows, sourceRows, navigationRows] = await Promise.all([
+    jobRows, runRows, cacheRows, articleRows, sourceRows, navigationRows, carouselReliability] = await Promise.all([
     countActiveEditorialUsers(db),
     db.prepare("SELECT COUNT(*) AS total FROM users").first(),
     db.prepare("SELECT COUNT(*) AS total FROM editorial_groups").first(),
@@ -1875,6 +2036,7 @@ export async function getAdminDashboard(db) {
     db.prepare("SELECT COALESCE(SUM(attempts),0) AS attempts, COALESCE(SUM(successes),0) AS successes FROM article_source_stats").first(),
     db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status NOT IN ('failed','blocked','not-found') THEN 1 ELSE 0 END) AS healthy, SUM(CASE WHEN item_count>0 THEN 1 ELSE 0 END) AS with_content FROM source_state").first(),
     db.prepare("SELECT area, SUM(active_ms) AS active_ms, COUNT(DISTINCT user_id) AS users FROM usage_daily_users WHERE day=? GROUP BY area ORDER BY active_ms DESC").bind(day).all(),
+    getCarouselReliabilitySummary(db,{hours:24}),
   ]);
   const dayMap = Object.fromEntries((dayMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
   const hourMap = Object.fromEntries((hourMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
@@ -1896,6 +2058,7 @@ export async function getAdminDashboard(db) {
       daily:(dailyTopics?.results||[]).map(row=>({bucket:row.bucket,value:Math.round(Number(row.value)||0)})) },
     health: { sources:{total:Number(sourceRows?.total)||0,healthy:Number(sourceRows?.healthy)||0,withContent:Number(sourceRows?.with_content)||0}, jobs:statuses(jobRows), runs:statuses(runRows) },
     resources: { carouselCache:Number(cacheRows?.carousels)||0, articleCache:Number(cacheRows?.articles)||0, articleReadAttempts:Number(articleRows?.attempts)||0, articleReadSuccesses:Number(articleRows?.successes)||0 },
+    carouselReliability,
     navigation: (navigationRows?.results||[]).map(row=>({ area:row.area, activeMs:Number(row.active_ms)||0, users:Number(row.users)||0 })),
     note: 'Recursos são métricas internas do aplicativo; faturamento/CPU/rows da Cloudflare não são estimados aqui.'
   };

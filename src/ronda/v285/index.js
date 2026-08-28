@@ -83,6 +83,10 @@ import {
   recordUserActivity,
   recordUsageMetric,
   getAdminDashboard,
+  getCarouselReliabilitySummary,
+  finishCarouselReliabilityAttempt,
+  touchCarouselReliabilityAttempt,
+  startCarouselReliabilityAttempt,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import {
@@ -478,11 +482,22 @@ function articleAnalysisAi(env) {
 }
 
 
+function carouselFailureStage(error) {
+  const code=String(error?.code||'').toUpperCase();
+  const message=String(error instanceof Error?error.message:error||'').toLocaleLowerCase('pt-BR');
+  if(code==='PUBLISHER_ARTICLE_UNAVAILABLE'||/matéria|materia|publisher|artigo|article|conteúdo insuficiente|conteudo insuficiente/.test(message))return 'reading';
+  if(/queue|fila|job|lock/.test(message)||code==='JOB_LOCK_BUSY')return 'queue';
+  if(/ai|workers ai|modelo|model|inference|json|parse|token/.test(message))return 'ai';
+  if(/d1|database|banco|storage|sqlite/.test(message))return 'database';
+  if(/timeout|tempo limite|network|rede|fetch|429|500|502|503|504/.test(message))return 'network';
+  return 'processing';
+}
+
 function retryableProcessingError(error) {
   if (error?.code === "PUBLISHER_ARTICLE_UNAVAILABLE") return false;
   if (error?.code === "JOB_LOCK_BUSY") return true;
   const message = error instanceof Error ? error.message : String(error || "");
-  return /timeout|tempo limite|temporar|429|500|502|503|504|ai indisponível|falha de rede|network/i.test(message);
+  return /timeout|tempo limite|temporar|429|500|502|503|504|ai indisponível|workers ai|inference|model overloaded|modelo indisponível|falha de rede|network|unexpected end|json.*(?:invalid|parse)|internal error/i.test(message);
 }
 
 function jobLockBusyError(jobId) {
@@ -551,6 +566,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       message: "Roteiro recuperado do cache. Ciclo concluído.",
       payload: cachedBeforeLock,
     });
+    await finishCarouselReliabilityAttempt(db,{jobId:job.jobId,status:"succeeded",recovered:true}).catch(()=>null);
     structuredLog("intelligent_job_recovered_from_cache", { jobId: job.jobId, phase: "before-lock" });
     return recovered?.status === "succeeded" ? (recovered.payload || cachedBeforeLock) : cachedBeforeLock;
   }
@@ -567,6 +583,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
         message: "Roteiro recuperado do cache. Ciclo concluído.",
         payload: cachedAfterLock,
       });
+      await finishCarouselReliabilityAttempt(db,{jobId:job.jobId,status:"succeeded",recovered:true}).catch(()=>null);
       structuredLog("intelligent_job_recovered_from_cache", { jobId: job.jobId, phase: "after-lock" });
       return cachedAfterLock;
     }
@@ -661,6 +678,10 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
     });
     if (completed?.status !== "succeeded") throw new Error("Não foi possível registrar o encerramento do ciclo.");
     const completedDurationMs = Date.now() - jobStartedAt;
+    await finishCarouselReliabilityAttempt(db,{
+      jobId:job.jobId,status:"succeeded",recovered:Boolean(options.recoveryMode),
+    }).catch(()=>null);
+    if(options.recoveryMode)await recordUsageMetric(db,'carousels_recovered',{value:1,samples:1,durationMs:completedDurationMs}).catch(()=>null);
     await recordUsageMetric(db, 'carousels_generated', { value:1, samples:1, durationMs:completedDurationMs }).catch(() => null);
     structuredLog("intelligent_job_completed", {
       jobId: job.jobId,
@@ -683,8 +704,12 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       error: detail,
     });
     if (failed?.status !== "failed") throw error;
+    await finishCarouselReliabilityAttempt(db,{
+      jobId:job.jobId,status:"failed",failureStage:carouselFailureStage(error),
+      errorCode:error?.code||null,errorDetail:detail,
+    }).catch(()=>null);
     await recordUsageMetric(db, 'carousels_failed', { value:1, samples:1, durationMs:Date.now()-jobStartedAt }).catch(() => null);
-    structuredLog("intelligent_job_failed", { jobId: job.jobId, detail });
+    structuredLog("intelligent_job_failed", { jobId: job.jobId, detail, stage:carouselFailureStage(error) });
     return null;
   } finally {
     try { await releaseLock(db, jobLock); } catch (error) {
@@ -723,6 +748,7 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
   }
   try {
     const db = requireDatabase(env);
+    await touchCarouselReliabilityAttempt(db,{jobId,queueAttempts:Number(message?.attempts||1)}).catch(()=>null);
     const job = await getIntelligentJob(db, jobId);
     if (!job || ["succeeded", "failed"].includes(job.status)) {
       message?.ack?.();
@@ -768,6 +794,11 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
       message: "Ciclo encerrado no consumidor após as tentativas de recuperação.",
       error: detail,
     }).catch(() => null);
+    await finishCarouselReliabilityAttempt(requireDatabase(env),{
+      jobId,status:"failed",queueAttempts:attempts,failureStage:carouselFailureStage(error),
+      errorCode:error?.code||"QUEUE_RETRIES_EXHAUSTED",errorDetail:detail,
+    }).catch(()=>null);
+    await recordUsageMetric(requireDatabase(env),'carousels_failed',{value:1,samples:1}).catch(()=>null);
     message?.ack?.();
   }
 }
@@ -794,6 +825,7 @@ async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) 
       message: "Resultado recuperado do cache pelo modo de resgate.",
       payload: cached,
     });
+    await finishCarouselReliabilityAttempt(db,{jobId,status:"succeeded",recovered:true}).catch(()=>null);
     return { status: "succeeded", job, data: cached, recovered: true };
   }
 
@@ -805,6 +837,7 @@ async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) 
       slideCount: null,
       writingProfile: null,
       styleKey: "rescue",
+      recoveryMode: true,
     });
 
     job = await getIntelligentJob(db, jobId);
@@ -1277,18 +1310,22 @@ async function handleApi(request, env, url, ctx) {
   }
 
   if ((url.pathname === "/api/auth/me" || url.pathname === "/api/profile") && request.method === "GET") {
-    const user = await optionalEditorialUser(request, env);
-    if (!user) return json({
+    const context = await sessionContext(request, env);
+    if (!context.user) return json({
       ok: true,
       authenticated: false,
+      sessionRecovered: Boolean(context.token),
       limits: {
         maximumSamples: MAX_STYLE_SAMPLES,
         maximumCharactersPerSample: MAX_STYLE_SAMPLE_CHARS,
         maximumTotalCharacters: MAX_STYLE_TOTAL_CHARS,
         slideCount: { minimum: MIN_SLIDE_COUNT, maximum: MAX_SLIDE_COUNT, default: DEFAULT_SLIDE_COUNT },
       },
-    });
-    return json({ ok: true, ...(await profilePayload(requireDatabase(env), user)) });
+    },200,context.token?{
+      "Set-Cookie":clearSessionCookie({secure:secureCookieForRequest(request)}),
+      "X-Ronda-Session-Recovery":"cleared-stale-cookie",
+    }:{});
+    return json({ ok: true, ...(await profilePayload(requireDatabase(env), context.user)) });
   }
 
   if (url.pathname === "/api/profile/preferences" && request.method === "PATCH") {
@@ -1407,6 +1444,11 @@ async function handleApi(request, env, url, ctx) {
       database: { configured: true, readWriteDelete: databaseOk },
     };
     return json(result, result.ok ? 200 : 500);
+  }
+
+  if (url.pathname === "/api/reliability/status" && request.method === "GET") {
+    const summary=await getCarouselReliabilitySummary(requireDatabase(env),{hours:24});
+    return json({ok:true,target:{successRate:0.90,label:"9/10"},carousel:summary,generatedAt:new Date().toISOString()});
   }
 
   if (url.pathname === "/api/status" && request.method === "GET") {
@@ -1727,6 +1769,7 @@ async function handleApi(request, env, url, ctx) {
           message: "Resultado recuperado após interrupção do consumidor.",
           payload: cached,
         });
+        await finishCarouselReliabilityAttempt(db,{jobId:job.jobId,status:"succeeded",recovered:true}).catch(()=>null);
       } else {
         job = await updateIntelligentJob(db, {
           jobId: job.jobId,
@@ -1735,6 +1778,10 @@ async function handleApi(request, env, url, ctx) {
           message: "O processamento ficou sem progresso e foi encerrado com segurança.",
           error: `A tarefa ultrapassou ${INTELLIGENT_JOB_STALE_LABEL}.`,
         });
+        await finishCarouselReliabilityAttempt(db,{
+          jobId:job.jobId,status:"failed",failureStage:"queue",errorCode:"JOB_STALE",
+          errorDetail:`A tarefa ultrapassou ${INTELLIGENT_JOB_STALE_LABEL}.`,
+        }).catch(()=>null);
       }
     }
     return json({
@@ -1790,6 +1837,11 @@ async function handleApi(request, env, url, ctx) {
       return json({ ok: true, cached: true, status: "succeeded", data: queued.job.payload });
     }
     if (queued.created) {
+      await startCarouselReliabilityAttempt(db,{
+        jobId:queued.job.jobId,cacheKey,userId:user?.id||null,runId,topicId,slideCount,
+      }).catch(()=>null);
+      await recordUsageMetric(db,'carousels_attempted',{value:1,samples:1}).catch(()=>null);
+
       if (env.INTELLIGENT_JOBS_QUEUE?.send) {
         try {
           await env.INTELLIGENT_JOBS_QUEUE.send({
@@ -1817,6 +1869,11 @@ async function handleApi(request, env, url, ctx) {
             message: "Não foi possível enviar a leitura para a fila.",
             error: detail,
           });
+          await finishCarouselReliabilityAttempt(db,{
+            jobId:queued.job.jobId,status:"failed",failureStage:"queue",
+            errorCode:"QUEUE_SEND_FAILED",errorDetail:detail,
+          }).catch(()=>null);
+          await recordUsageMetric(db,'carousels_failed',{value:1,samples:1}).catch(()=>null);
           throw new HttpError(503, "Fila de leitura indisponível.", detail);
         }
       } else {

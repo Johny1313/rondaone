@@ -48,6 +48,13 @@
     "binding": "ASSETS",
     "run_worker_first": [
       "/api/*",
+      "/",
+      "/login.js",
+      "/login.css",
+      "/access-client.js",
+      "/admin/",
+      "/design/",
+      "/projects/",
       "/ronda",
       "/ronda/",
       "/ronda/index.html"

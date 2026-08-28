@@ -7,6 +7,15 @@ import { handleRegisteredNewsSearchApi } from './ronda/search-news.js';
 import { handleEditorialEventsApi } from './ronda/editorial-events.js';
 import { handleAdminLoginHotfix } from './ronda/admin-auth-hotfix.js';
 
+async function noStoreAsset(request,env){
+  const response=await env.ASSETS.fetch(request);
+  const headers=new Headers(response.headers);
+  headers.set('Cache-Control','no-store, no-cache, must-revalidate, max-age=0');
+  headers.set('Pragma','no-cache');headers.set('Expires','0');
+  headers.set('X-Ronda-Asset-Policy','auth-no-store');
+  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+}
+
 function json(data,status=200){
   return Response.json(data,{
     status,
@@ -21,7 +30,8 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
 
-    if(url.pathname==='/') return env.ASSETS.fetch(request);
+    if(['/','/login.js','/login.css','/access-client.js'].includes(url.pathname)) return noStoreAsset(request,env);
+    if(['/design/','/projects/','/admin/'].includes(url.pathname)) return noStoreAsset(request,env);
     if(url.pathname==='/design') return Response.redirect(new URL('/design/',request.url).toString(),302);
     if(url.pathname==='/projects') return Response.redirect(new URL('/projects/',request.url).toString(),302);
     if(url.pathname==='/admin') return Response.redirect(new URL('/admin/',request.url).toString(),302);
@@ -29,7 +39,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.6',
+      version:'0.8.7',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -84,6 +94,17 @@ export default {
         detach:true,
         multiLayout:true
       },
+      reliabilityV087:{
+        accessCacheRecovery:true,
+        staleCookieAutoClear:true,
+        authAssetsNoStore:true,
+        carouselTargetSuccessRate:0.90,
+        carouselTargetLabel:'9/10',
+        reliabilityLedger:true,
+        recent10Tracking:true,
+        failureStageTracking:true,
+        publicReliabilityStatus:true
+      },
       carouselRecoveryV0855:{
         queuePrimary:true,
         rescueAfterQueuedSeconds:12,
@@ -124,7 +145,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-086-smart-templates'
+        assetCacheBust:'2.8.5-087-reliability-90'
       },
       navigation:{
         ronda:'/ronda',

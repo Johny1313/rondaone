@@ -1,6 +1,7 @@
 import {
   createEditorialUser,
   createUserSession,
+  deleteUserSession,
   ensureUserAccess,
   getEditorialUserByEmailKey,
 } from './v285/database.js';
@@ -8,6 +9,7 @@ import {
   ADMIN_EMAIL,
   SESSION_TTL_DAYS,
   normalizeEmail,
+  parseCookies,
   randomToken,
   sessionCookie,
   sha256Hex,
@@ -104,6 +106,9 @@ export async function handleAdminLoginHotfix(request, env) {
 
   await ensureUserAccess(env.DB, user.id, user.email, 'admin');
   user = await getEditorialUserByEmailKey(env.DB, ADMIN_EMAIL);
+
+  const staleToken=parseCookies(request.headers.get("Cookie"))[SESSION_COOKIE_NAME];
+  if(staleToken)await deleteUserSession(env.DB,await sha256Hex(staleToken)).catch(()=>null);
 
   const token = randomToken(32);
   await createUserSession(env.DB, {

@@ -1,16 +1,24 @@
 RONDA ONE CLOUD
-Versão: 0.8.6
-Produto: Smart Templates + Carousel Recovery + Email-only Auth + Full 39 Sources
+Versão: 0.8.7
+Produto: Reliability 90 + Smart Templates + Carousel Recovery
 
-SMART TEMPLATES
-- contrato estável ronda-content-model-v1
-- conteúdo separado do layout
-- template salva todas as pranchetas
-- slots: TITLE, SUBTITLE, BODY, ROLE, SOURCE, IMAGE, IMAGE_CREDIT, CTA, SLIDE_NUMBER, EDITORIA
-- clique no template aplica o conteúdo do carrossel inteiro
-- capa/conteúdo/dado/citação/encerramento
-- autofit sem cortar palavras
-- imagens em cover mantendo camada editável
-- Reaplicar
-- Desvincular
-- templates legados continuam abrindo
+SLO CARROSSEL
+- alvo >= 90% de sucesso terminal
+- leitura operacional: 9 sucessos nas últimas 10 conclusões
+- amostra válida a partir de 10 conclusões
+- tentativas, sucessos, falhas, recuperações e estágios de falha registrados
+- falhas: reading / queue / ai / database / network / processing
+
+ACESSO
+- cookie expirado é removido do navegador automaticamente
+- acesso invalido faz logout/limpeza antes do redirect
+- BFCache e retorno online revalidam sessão
+- login/access assets sem cache
+- revisão de assets de acesso atualizada para 087
+
+PRESERVADO
+- Smart Templates 0.8.6
+- Carousel Recovery 0.8.5.5
+- Email-only Auth
+- 39 fontes
+- limite 10 usuários
