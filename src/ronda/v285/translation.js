@@ -177,22 +177,26 @@ export async function translateWorldItems(items, {
 
 function recalculateSources(sources, items) {
   return (sources || []).map((source) => {
-    const count = items.filter((item) => item.collectorName === source.name).length;
+    const availableCount = items.filter((item) => item.collectorName === source.name).length;
     if (source.region === "Mundo") {
-      const collected = Number(source.count) || 0;
-      const omitted = Math.max(0, collected - count);
+      const collectedCount = Number(source.count) || 0;
+      const pendingCount = Math.max(0, collectedCount - availableCount);
+      const collectionOk = Boolean(source.ok);
       return {
         ...source,
-        count,
-        ok: count > 0,
-        error: count > 0
-          ? omitted > 0 ? `${omitted} conteúdo(s) aguardando tradução em uma próxima ronda.` : null
-          : source.error || "Tradução para português indisponível nesta ronda.",
-        translation: count > 0 ? omitted > 0 ? "partial" : "translated" : "failed",
+        count: availableCount,
+        collectedCount,
+        translationAvailableCount: availableCount,
+        translationPendingCount: pendingCount,
+        ok: collectionOk,
+        error: source.error || null,
+        warning: source.warning || null,
+        translationError: pendingCount > 0 ? `${pendingCount} conteúdo(s) aguardando tradução em uma próxima ronda.` : null,
+        translation: pendingCount > 0 ? (availableCount > 0 ? "partial" : "pending") : (collectedCount > 0 ? "translated" : "none"),
       };
     }
     if (source.region === "Rede") {
-      return { ...source, count, ok: source.ok && (count > 0 || Number(source.count) === 0) };
+      return { ...source, count: availableCount, ok: source.ok && (availableCount > 0 || Number(source.count) === 0) };
     }
     return source;
   });

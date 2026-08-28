@@ -1,3 +1,10 @@
+## v0.8.5.2 — UI + Source Sync
+
+- Produção usa pipeline Workers Paid completo, não 1 fonte por ciclo.
+- UI força a última ronda no login e reconexão.
+- Backoffs legados são limitados.
+- Tradução é separada da saúde operacional da fonte.
+
 # RONDA ONE Cloud v0.8.4 — Login First + Perfil de Referências + Admin Dashboard
 
 A v0.8.4 preserva Source Recovery, Access & Stability, Mesa Editorial e Carousel Stability, e reorganiza autenticação, perfil e administração.

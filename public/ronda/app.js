@@ -177,7 +177,9 @@ function sourceDiagnosticTitle(source) {
   const parts = [source.name];
   parts.push(source.ok ? `Status: ${sourceRouteLabel(source) || "fonte acessível"}` : `Status: ${sourceFailureLabel(source)}`);
   if (source.httpStatus) parts.push(`HTTP: ${source.httpStatus}`);
-  if (source.count) parts.push(`Conteúdos: ${source.count}`);
+  if (Number(source.collectedCount ?? source.count) > 0) parts.push(`Coletados: ${Number(source.collectedCount ?? source.count)}`);
+  if (Number(source.translationAvailableCount) > 0) parts.push(`Disponíveis em português: ${Number(source.translationAvailableCount)}`);
+  if (Number(source.translationPendingCount) > 0) parts.push(`Aguardando tradução: ${Number(source.translationPendingCount)}`);
   if (source.lastSuccessAt) parts.push(`Último sucesso: ${formatDate(source.lastSuccessAt)}`);
   if (source.nextCheckAt) parts.push(`Próxima verificação: ${formatDate(source.nextCheckAt)}`);
   if (source.responseMs != null) parts.push(`Resposta: ${source.responseMs} ms`);
@@ -189,8 +191,11 @@ function portalCardMarkup(source) {
   const available = source.ok && Number(source.count) > 0;
   const portalAttribute = available ? `data-portal="${escapeHtml(source.name)}"` : "disabled";
   const route = sourceRouteLabel(source);
+  const collectedCount = Number(source.collectedCount ?? source.count) || 0;
+  const translationPending = Number(source.translationPendingCount) || 0;
   const detail = available
-    ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo recolhido" : "conteúdos recolhidos"}${route ? ` · ${route}` : ""}`
+    ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo disponível" : "conteúdos disponíveis"}${route ? ` · ${route}` : ""}${translationPending ? ` · ${translationPending} aguardando tradução` : ""}`
+    : source.ok && translationPending ? `${collectedCount} coletados · aguardando tradução`
     : source.ok ? `Nenhuma notícia recente${source.nextCheckAt ? ` · próxima ${relativeTime(source.nextCheckAt)}` : ""}` : sourceFailureLabel(source);
   const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}${source.degraded ? " degraded" : ""}` : `error ${escapeHtml(source.errorCode || "failed")}`;
   return `<button class="portal-card ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" title="${escapeHtml(sourceDiagnosticTitle(source))}"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : source.ok ? "Sem novas" : escapeHtml(sourceFailureLabel(source, true))}</span></button>`;
@@ -228,11 +233,14 @@ function renderSourceHealth(message = "", warning = false) {
   }
   const portals = sources.filter((source) => sourceRegion(source) !== "Rede");
   const operational = portals.filter((source) => source.ok).length;
-  const withNews = portals.filter((source) => source.ok && Number(source.count) > 0).length;
+  const collected = portals.filter((source) => source.ok && Number(source.collectedCount ?? source.count) > 0).length;
+  const available = portals.filter((source) => source.ok && Number(source.count) > 0).length;
+  const translationPending = portals.filter((source) => Number(source.translationPendingCount) > 0).length;
   const cached = portals.filter((source) => source.ok && source.cached).length;
   const attention = portals.filter((source) => !source.ok || source.degraded).length;
   const prefix = attemptSources.length ? "Última tentativa · dados da ronda válida preservados" : "Fontes";
-  const parts = [`${operational}/${portals.length} operacionais`, `${withNews} com conteúdo`];
+  const parts = [`${operational}/${portals.length} operacionais`, `${collected} com coleta`, `${available} disponíveis`];
+  if (translationPending) parts.push(`${translationPending} aguardando tradução`);
   if (cached) parts.push(`${cached} em cache`);
   if (attention) parts.push(`${attention} com atenção`);
   holder.innerHTML = `<span class="health-label"><strong>${escapeHtml(prefix)}</strong> · ${parts.map(escapeHtml).join(" · ")}</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button>`;
@@ -499,7 +507,7 @@ async function loadLatest({ quiet = false, force = false } = {}) {
     if (response.notModified) return state.data;
     state.latestEtag = response.etag;
     const payload = response.payload?.data;
-    if (payload?.ok && (!state.lastRunId || payload.runId !== state.lastRunId || force)) applyRound(payload);
+    if (payload?.ok && (!state.data || !state.lastRunId || payload.runId !== state.lastRunId || force)) applyRound(payload);
     return payload;
   } catch (error) {
     if (!quiet) renderSourceHealth(error.message);
@@ -1298,8 +1306,8 @@ async function pollStatus({ force = false } = {}) {
           renderSourceHealth();
         }
         setStatus("warn", status.lastAttempt.status === "expired" ? "Última tentativa expirou" : "Última tentativa falhou", `${roundDiagnosticsSummary(status.lastAttempt.diagnostics)} · ${lastValidRoundLabel()}`);
-      } else if (status?.lastRunId && status.lastRunId !== state.lastRunId) {
-        await loadLatest({ quiet: true });
+      } else if (status?.lastRunId && (!state.data || status.lastRunId !== state.lastRunId)) {
+        await loadLatest({ quiet: true, force: !state.data });
         const completedAt = status.lastSuccessAt || state.data?.collectedAt;
         if (completedAt) setStatus("ok", "Serviço online", `Última ronda ${relativeTime(completedAt)}`);
       } else if (status?.schedulerHealthy && state.health?.translation?.ready !== false) {
@@ -1316,13 +1324,32 @@ async function pollStatus({ force = false } = {}) {
 }
 
 let operationalStarted=false;
+async function syncLatestRound({ reason = "sync" } = {}) {
+  if (!state.profile?.authenticated) return null;
+  state.statusEtag = "";
+  state.latestEtag = "";
+  try {
+    const latest = await loadLatest({ quiet: true, force: true });
+    await pollStatus({ force: true });
+    if (latest?.ok) {
+      const completedAt = latest.collectedAt || latest.storedAt || state.health?.lastSuccessAt;
+      if (completedAt) setStatus("ok", "Serviço online", `Última ronda ${relativeTime(completedAt)}`);
+    }
+    return latest;
+  } catch (error) {
+    console.warn("RONDA ONE sync failed", reason, error);
+    return null;
+  }
+}
+
 async function startOperationalApplication(){
   if(operationalStarted)return; operationalStarted=true;
   document.getElementById("operationToken").value = operationToken();
+  renderSourceHealth("Carregando última ronda…");
+  setStatus("", "Sincronizando", "Carregando a última ronda válida");
   const healthy = await checkHealth();
   if (!healthy) return;
-  await pollStatus({ force: true });
-  const latest = state.data || await loadLatest();
+  const latest = await syncLatestRound({ reason: "startup" });
   if (!latest && (!state.health.manualAuthRequired || operationToken())) executeRound(true);
 }
 
@@ -1443,8 +1470,14 @@ document.querySelectorAll("[data-close]").forEach((button) => button.addEventLis
 document.querySelectorAll(".modal-backdrop").forEach((backdrop) => backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); }));
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelectorAll(".modal-backdrop:not([hidden])").forEach((modal) => closeModal(modal.id)); });
 
-document.addEventListener("visibilitychange", () => scheduleStatusPolling(250));
-window.addEventListener("online", () => scheduleStatusPolling(250));
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) syncLatestRound({ reason: "visibility" });
+  else scheduleStatusPolling(250);
+});
+window.addEventListener("online", () => syncLatestRound({ reason: "online" }));
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted && state.profile?.authenticated) syncLatestRound({ reason: "pageshow" });
+});
 window.addEventListener("ronda:session-expired",(event)=>{
   state.profile={authenticated:false}; state.smartCarousels.clear(); location.replace(`/?next=${encodeURIComponent(location.pathname+location.search)}`);
   const message=document.getElementById("loginMessage"); if(message) message.textContent=event.detail?.message||"Sua sessão terminou. Entre novamente.";

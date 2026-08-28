@@ -691,21 +691,19 @@ function sourceStateFor(sourceStates, sourceId) {
   return null;
 }
 
+function effectiveNextCheckAt(sourceState, feed, referenceMs = Date.now()) {
+  const storedNext = Date.parse(sourceState?.nextCheckAt || "");
+  const lastAttempt = Date.parse(sourceState?.lastAttemptAt || "");
+  const failed = Number(sourceState?.failureCount) > 0;
+  const maxSilenceMinutes = failed ? 10 : Math.max(3, Number(feed?.refreshMinutes) || 5);
+  if (!Number.isFinite(lastAttempt)) return Number.isFinite(storedNext) ? storedNext : referenceMs;
+  const recoveryCap = lastAttempt + maxSilenceMinutes * 60 * 1000;
+  return Number.isFinite(storedNext) ? Math.min(storedNext, recoveryCap) : recoveryCap;
+}
+
 function sourceIsDue(sourceState, collectedAt, feed) {
   if (!sourceState?.nextCheckAt) return true;
-  const now = collectedAt.getTime();
-  const next = Date.parse(sourceState.nextCheckAt);
-  if (!Number.isFinite(next) || next <= now) return true;
-
-  const lastAttempt = Date.parse(sourceState?.lastAttemptAt || "");
-  const healthyMaxSilenceMinutes = Math.max(3, Number(feed?.refreshMinutes) || 5);
-  const failedMaxSilenceMinutes = 10;
-  const maxSilenceMinutes = Number(sourceState?.failureCount) > 0
-    ? failedMaxSilenceMinutes
-    : healthyMaxSilenceMinutes;
-
-  return !Number.isFinite(lastAttempt)
-    || now - lastAttempt >= maxSilenceMinutes * 60 * 1000;
+  return effectiveNextCheckAt(sourceState, feed, collectedAt.getTime()) <= collectedAt.getTime();
 }
 
 function deferredSourceResult(feed, sourceState, cutoff) {
@@ -731,7 +729,7 @@ function deferredSourceResult(feed, sourceState, cutoff) {
       lastUrl: sourceState?.lastUrl || null,
       lastAttemptAt: sourceState?.lastAttemptAt || null,
       lastSuccessAt: sourceState?.lastSuccessAt || null,
-      nextCheckAt: sourceState?.nextCheckAt || null,
+      nextCheckAt: sourceState ? new Date(effectiveNextCheckAt(sourceState, feed)).toISOString() : null,
       refreshMinutes: feed.refreshMinutes,
       deferred: true,
     },
@@ -768,8 +766,8 @@ function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState,
   const healthy = Boolean(rawResult?.status?.ok);
   const failureCount = healthy ? 0 : (Number(previousState?.failureCount) || 0) + 1;
   const nextMinutes = healthy
-    ? Math.max(5, Number(feed.refreshMinutes) || 15)
-    : retryBackoffMinutes(rawResult?.status?.errorCode, failureCount);
+    ? Math.max(3, Number(feed.refreshMinutes) || 5)
+    : Math.min(15, retryBackoffMinutes(rawResult?.status?.errorCode, failureCount));
   const nextCheckAt = new Date(collectedAt.getTime() + nextMinutes * 60 * 1000).toISOString();
   const items = snapshotItems(feed, resilientResult?.items, previousState, collectedAt);
   const status = healthy

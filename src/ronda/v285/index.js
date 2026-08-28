@@ -1439,7 +1439,7 @@ async function handleApi(request, env, url, ctx) {
       service: "ronda-editorial-webapp",
       version: VERSION,
       database: dbOk ? "connected" : "error",
-      scheduleMinutes: 5,
+      scheduleMinutes: 3,
       schedulerHealthy: ageMs <= 12 * 60 * 1000,
       lastSuccessAt,
       lastRunId: latest?.id ?? null,
@@ -1448,8 +1448,8 @@ async function handleApi(request, env, url, ctx) {
       backgroundMonitoring: {
         active: true,
         browserRequired: false,
-        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue" : "cloudflare-cron",
-        scheduleMinutes: 5,
+        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue-paid-full" : "cloudflare-cron-full",
+        scheduleMinutes: 3,
         monitoringTerms: monitoringTerms.length,
         dedicatedResults: null,
         catalogPortals: FEEDS.length,
@@ -1464,7 +1464,7 @@ async function handleApi(request, env, url, ctx) {
         lastKnownGoodCache: true,
         cacheWindowHours: 72,
         maxConcurrency: 8,
-        staggeredIntervalsMinutes: [5, 10, 15],
+        staggeredIntervalsMinutes: [3, 5],
         statusModes: ["direct", "fallback", "not-modified", "cache", "no-new", "blocked", "rate-limited", "timeout", "failed"],
       },
       editorialClassification: {
