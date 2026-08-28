@@ -1,9 +1,9 @@
 ## v0.8.5.2 — UI + Source Sync
 
-- Produção usa pipeline Workers Paid completo, não 1 fonte por ciclo.
-- UI força a última ronda no login e reconexão.
-- Backoffs legados são limitados.
-- Tradução é separada da saúde operacional da fonte.
+- Ronda em produção usa o pipeline **Workers Paid completo**, não o runtime Free de uma fonte por ciclo.
+- A interface força a última ronda válida no login, reconexão e retorno à aba.
+- `nextCheckAt` legado é limitado para impedir fontes congeladas por horas.
+- Tradução internacional é uma etapa separada da saúde operacional da fonte.
 
 # RONDA ONE Cloud v0.8.4 — Login First + Perfil de Referências + Admin Dashboard
 

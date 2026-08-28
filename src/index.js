@@ -29,7 +29,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.5.2',
+      version:'0.8.5.3',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -65,7 +65,9 @@ export default {
         oneSourcePerRound:false,
         uiForceLatestOnStartup:true,
         legacyBackoffClampMinutes:10,
-        translationDoesNotChangeSourceHealth:true
+        translationDoesNotChangeSourceHealth:true,
+        frontendSyntaxGuard:true,
+        searchAutofillGuard:true
       },
       openEmailAccess:{ enabled:true, firstAccessAutoCreate:true, commonUserPassword:false, adminPasswordOnlyWhenTicked:true, blockedUsersCannotRecreate:true, permanencePerUser:true },
       accessControl:{ enabled:true, loginFirst:true, twoStepLogin:true, passwordVisibilityToggle:true, maximumActiveUsers:10, idleLogoutMinutes:60, adminExcludedFromSeat:true, presenceWriteMinutes:5, adminDashboard:true, adminDashboardTabs:true, editorialGroups:true, profileReferences:['text','image','file','video'] },
@@ -102,7 +104,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-0852-ui-source-sync'
+        assetCacheBust:'2.8.5-0853-frontend-recovery'
       },
       navigation:{
         ronda:'/ronda',

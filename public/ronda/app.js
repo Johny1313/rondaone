@@ -879,7 +879,22 @@ async function loadWritingSampleFile(event) {
   }
 }
 
-let activeProfileReferenceType='text';\nfunction setProfileReferenceTab(type){\n  activeProfileReferenceType=type;document.querySelectorAll('[data-profile-ref-tab]').forEach(b=>b.classList.toggle('active',b.dataset.profileRefTab===type));\n  const refPanel=document.getElementById('profileReferencePanel'),lang=document.getElementById('profileLanguagePanel'),account=document.getElementById('profileAccountPanel');\n  const special=type==='language'||type==='account';refPanel.hidden=special;lang.hidden=type==='account';account.hidden=type!=='account';\n  if(special)return;document.getElementById('profileReferenceType').value=type;\n  const cfg={text:['Adicionar texto','Conteúdo do texto','Cole um texto que represente a linguagem que deseja aproximar.'],image:['Adicionar referência de imagem','Descrição da imagem','Use link + descrição do visual, tom, texto na arte ou linguagem que deve inspirar a IA.'],file:['Adicionar referência de arquivo','Conteúdo ou descrição','TXT/MD/CSV/JSON são lidos no navegador. Outros arquivos podem ser cadastrados por link + descrição.'],video:['Adicionar referência de vídeo','Transcrição ou descrição','Cadastre o link e uma transcrição/descrição dos trechos e linguagem que devem servir de referência.']};\n  const c=cfg[type];document.getElementById('referenceFormTitle').textContent=c[0];document.getElementById('profileReferenceContentLabel').textContent=c[1];document.getElementById('referenceFormHelp').textContent=c[2];\n  const file=document.getElementById('profileReferenceFile');file.accept=type==='image'?'image/*':type==='video'?'video/*':type==='file'?'.txt,.md,.csv,.json,.pdf,.doc,.docx,.rtf,application/pdf':'text/plain,text/markdown,text/csv,application/json,.txt,.md,.csv,.json';\n}\nasync function submitProfileReference(event){event.preventDefault();const msg=document.getElementById('profileReferenceMessage');msg.textContent='Salvando referência…';const file=document.getElementById('profileReferenceFile').files?.[0]||null;try{state.profile=await api('/api/profile/references',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:document.getElementById('profileReferenceType').value,title:document.getElementById('profileReferenceTitle').value,sourceUrl:document.getElementById('profileReferenceUrl').value,content:document.getElementById('profileReferenceContent').value,notes:document.getElementById('profileReferenceNotes').value,fileName:file?.name||'',mimeType:file?.type||'',fileSize:file?.size||0})});event.currentTarget.reset();document.getElementById('profileReferenceCounter').textContent='0/8.000 caracteres';msg.textContent='Referência salva. Atualize a linguagem para incorporá-la aos próximos carrosséis.';renderProfile();setProfileReferenceTab(activeProfileReferenceType);}catch(error){msg.textContent=error.message;}}\nasync function deleteProfileReference(id){const msg=document.getElementById('profileReferenceMessage');try{state.profile=await api(`/api/profile/references/${encodeURIComponent(id)}`,{method:'DELETE'});msg.textContent='Referência removida. Atualize a linguagem para recalcular o perfil.';renderProfile();}catch(error){msg.textContent=error.message;}}\nasync function loadProfileReferenceFile(event){const file=event.target.files?.[0];if(!file)return;const msg=document.getElementById('profileReferenceMessage');if(!document.getElementById('profileReferenceTitle').value)document.getElementById('profileReferenceTitle').value=file.name.replace(/\.[^.]+$/,'').slice(0,120);const textLike=/^text\//.test(file.type)||/\.(txt|md|csv|json|html|rtf)$/i.test(file.name);if(textLike){if(file.size>250000){msg.textContent='Arquivo textual muito grande. Use até 250 KB ou cole somente o trecho de referência.';return;}try{const text=await file.text();const max=Number(state.profile?.limits?.maximumReferenceCharacters)||8000;document.getElementById('profileReferenceContent').value=text.slice(0,max);document.getElementById('profileReferenceCounter').textContent=`${Math.min(text.length,max).toLocaleString('pt-BR')}/${max.toLocaleString('pt-BR')} caracteres`;msg.textContent=text.length>max?'O conteúdo foi limitado ao trecho inicial para manter o perfil leve.':'Arquivo lido. Revise antes de salvar.';}catch{msg.textContent='Não foi possível ler o arquivo como texto.';}}else{msg.textContent='O arquivo foi identificado. Para manter o sistema leve, o binário não vai para o D1; adicione link e descrição/transcrição para treinar a linguagem.';}}\nasync function changeProfilePassword(event){event.preventDefault();const msg=document.getElementById('changePasswordMessage');const current=document.getElementById('currentPassword').value,next=document.getElementById('newPassword').value,confirm=document.getElementById('newPasswordConfirm').value;if(next!==confirm){msg.textContent='As novas senhas não coincidem.';return;}msg.textContent='Atualizando senha…';try{state.profile=await api('/api/profile/password',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:current,newPassword:next})});event.currentTarget.reset();msg.textContent='Senha atualizada com sucesso.';renderProfile();}catch(error){msg.textContent=error.message;}}\n\nfunction updateCarouselProfileStatus() {
+let activeProfileReferenceType='text';
+function setProfileReferenceTab(type){
+  activeProfileReferenceType=type;document.querySelectorAll('[data-profile-ref-tab]').forEach(b=>b.classList.toggle('active',b.dataset.profileRefTab===type));
+  const refPanel=document.getElementById('profileReferencePanel'),lang=document.getElementById('profileLanguagePanel'),account=document.getElementById('profileAccountPanel');
+  const special=type==='language'||type==='account';refPanel.hidden=special;lang.hidden=type==='account';account.hidden=type!=='account';
+  if(special)return;document.getElementById('profileReferenceType').value=type;
+  const cfg={text:['Adicionar texto','Conteúdo do texto','Cole um texto que represente a linguagem que deseja aproximar.'],image:['Adicionar referência de imagem','Descrição da imagem','Use link + descrição do visual, tom, texto na arte ou linguagem que deve inspirar a IA.'],file:['Adicionar referência de arquivo','Conteúdo ou descrição','TXT/MD/CSV/JSON são lidos no navegador. Outros arquivos podem ser cadastrados por link + descrição.'],video:['Adicionar referência de vídeo','Transcrição ou descrição','Cadastre o link e uma transcrição/descrição dos trechos e linguagem que devem servir de referência.']};
+  const c=cfg[type];document.getElementById('referenceFormTitle').textContent=c[0];document.getElementById('profileReferenceContentLabel').textContent=c[1];document.getElementById('referenceFormHelp').textContent=c[2];
+  const file=document.getElementById('profileReferenceFile');file.accept=type==='image'?'image/*':type==='video'?'video/*':type==='file'?'.txt,.md,.csv,.json,.pdf,.doc,.docx,.rtf,application/pdf':'text/plain,text/markdown,text/csv,application/json,.txt,.md,.csv,.json';
+}
+async function submitProfileReference(event){event.preventDefault();const msg=document.getElementById('profileReferenceMessage');msg.textContent='Salvando referência…';const file=document.getElementById('profileReferenceFile').files?.[0]||null;try{state.profile=await api('/api/profile/references',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:document.getElementById('profileReferenceType').value,title:document.getElementById('profileReferenceTitle').value,sourceUrl:document.getElementById('profileReferenceUrl').value,content:document.getElementById('profileReferenceContent').value,notes:document.getElementById('profileReferenceNotes').value,fileName:file?.name||'',mimeType:file?.type||'',fileSize:file?.size||0})});event.currentTarget.reset();document.getElementById('profileReferenceCounter').textContent='0/8.000 caracteres';msg.textContent='Referência salva. Atualize a linguagem para incorporá-la aos próximos carrosséis.';renderProfile();setProfileReferenceTab(activeProfileReferenceType);}catch(error){msg.textContent=error.message;}}
+async function deleteProfileReference(id){const msg=document.getElementById('profileReferenceMessage');try{state.profile=await api(`/api/profile/references/${encodeURIComponent(id)}`,{method:'DELETE'});msg.textContent='Referência removida. Atualize a linguagem para recalcular o perfil.';renderProfile();}catch(error){msg.textContent=error.message;}}
+async function loadProfileReferenceFile(event){const file=event.target.files?.[0];if(!file)return;const msg=document.getElementById('profileReferenceMessage');if(!document.getElementById('profileReferenceTitle').value)document.getElementById('profileReferenceTitle').value=file.name.replace(/\.[^.]+$/,'').slice(0,120);const textLike=/^text\//.test(file.type)||/\.(txt|md|csv|json|html|rtf)$/i.test(file.name);if(textLike){if(file.size>250000){msg.textContent='Arquivo textual muito grande. Use até 250 KB ou cole somente o trecho de referência.';return;}try{const text=await file.text();const max=Number(state.profile?.limits?.maximumReferenceCharacters)||8000;document.getElementById('profileReferenceContent').value=text.slice(0,max);document.getElementById('profileReferenceCounter').textContent=`${Math.min(text.length,max).toLocaleString('pt-BR')}/${max.toLocaleString('pt-BR')} caracteres`;msg.textContent=text.length>max?'O conteúdo foi limitado ao trecho inicial para manter o perfil leve.':'Arquivo lido. Revise antes de salvar.';}catch{msg.textContent='Não foi possível ler o arquivo como texto.';}}else{msg.textContent='O arquivo foi identificado. Para manter o sistema leve, o binário não vai para o D1; adicione link e descrição/transcrição para treinar a linguagem.';}}
+async function changeProfilePassword(event){event.preventDefault();const msg=document.getElementById('changePasswordMessage');const current=document.getElementById('currentPassword').value,next=document.getElementById('newPassword').value,confirm=document.getElementById('newPasswordConfirm').value;if(next!==confirm){msg.textContent='As novas senhas não coincidem.';return;}msg.textContent='Atualizando senha…';try{state.profile=await api('/api/profile/password',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:current,newPassword:next})});event.currentTarget.reset();msg.textContent='Senha atualizada com sucesso.';renderProfile();}catch(error){msg.textContent=error.message;}}
+
+function updateCarouselProfileStatus() {
   const profile = state.profile?.writingProfile;
   const loggedIn = Boolean(state.profile?.authenticated);
   document.getElementById("carouselProfileStatus").textContent = profile ? profile.tone || "Perfil personalizado" : "Padrão jornalístico";
@@ -1362,7 +1377,42 @@ async function startApplication() {
 }
 
 runButton.addEventListener("click", () => executeRound(false));
-document.getElementById("searchInput").addEventListener("input", (event) => { state.query = event.target.value; render(); });
+
+const searchInput = document.getElementById("searchInput");
+let searchUserActivated = false;
+
+function clearUnexpectedSearchAutofill() {
+  if (searchUserActivated || !searchInput) return;
+  searchInput.value = "";
+  state.query = "";
+}
+
+function activateSearchInput() {
+  if (!searchInput) return;
+  if (!searchUserActivated) {
+    searchUserActivated = true;
+    searchInput.readOnly = false;
+    searchInput.value = "";
+    state.query = "";
+  }
+}
+
+["pointerdown", "keydown", "focus"].forEach((eventName) => {
+  searchInput?.addEventListener(eventName, activateSearchInput, { once: true });
+});
+
+[0, 50, 250, 1000].forEach((delay) => setTimeout(clearUnexpectedSearchAutofill, delay));
+
+searchInput?.addEventListener("input", (event) => {
+  if (!searchUserActivated) {
+    event.target.value = "";
+    state.query = "";
+    render();
+    return;
+  }
+  state.query = event.target.value;
+  render();
+});
 document.getElementById("periodFilter").addEventListener("click", (event) => {
   if (!event.target.matches("button")) return;
   state.period = Number(event.target.dataset.value);
@@ -1476,6 +1526,7 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("online", () => syncLatestRound({ reason: "online" }));
 window.addEventListener("pageshow", (event) => {
+  clearUnexpectedSearchAutofill();
   if (event.persisted && state.profile?.authenticated) syncLatestRound({ reason: "pageshow" });
 });
 window.addEventListener("ronda:session-expired",(event)=>{
@@ -1483,4 +1534,10 @@ window.addEventListener("ronda:session-expired",(event)=>{
   const message=document.getElementById("loginMessage"); if(message) message.textContent=event.detail?.message||"Sua sessão terminou. Entre novamente.";
 });
 
-startApplication();
+startApplication().catch((error) => {
+  console.error("RONDA ONE frontend boot failed", error);
+  try {
+    setStatus("error", "Interface não inicializada", error?.message || "Erro de inicialização.");
+    renderSourceHealth(`Erro de interface: ${error?.message || "falha desconhecida"}`, true);
+  } catch {}
+});

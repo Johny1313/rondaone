@@ -1,10 +1,12 @@
 RONDA ONE CLOUD
-Versão: 0.8.5.2
+Versão: 0.8.5.3
+Produto: Frontend Recovery + UI Source Sync + Full 39 Sources
 
-- UI força a última ronda válida no login/reconexão
-- pipeline Workers Paid completo para 39 fontes
-- concorrência de fontes 8 / budget 120
-- runtime Free de 1 fonte por ciclo removido
-- nextCheckAt legado limitado automaticamente
-- tradução pendente não derruba saúde da fonte
-- Admin Login Hotfix 0.8.5.1 preservado
+CORREÇÃO CRÍTICA
+- removidos escapes \n literais que quebravam public/ronda/app.js
+- botões e navegação voltam a executar
+- última ronda volta a renderizar
+- busca começa sempre vazia
+- proteção contra autofill de e-mail no search
+- public/ronda/app.js agora é obrigatório no npm run check
+- erro futuro de boot passa a aparecer na própria interface
