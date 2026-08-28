@@ -1,0 +1,42 @@
+RONDA ONE CLOUD — ATUALIZAÇÃO v0.9.0 FAST NEWS ENGINE
+
+OBJETIVO
+Melhorar a descoberta de notícias recentes, principalmente no filtro de 5 minutos,
+sem transformar a coleta em um processo pesado ou dependente de navegador.
+
+PRINCIPAIS MUDANÇAS
+1. Fast Lane a cada 1 minuto para 11 fontes prioritárias.
+2. Ronda editorial completa continua a cada 3 minutos.
+3. Coleta híbrida: RSS oficial + scraping HTML leve + fallback Google News + cache.
+4. Scraping direto sem Playwright/Chromium: fetch + JSON-LD/cards HTML.
+5. firstSeenAt/discoveredAt/lastSeenAt para separar publicação de detecção.
+6. Filtro curto (<=60 min) usa primeiro a hora de detecção no Ronda.
+7. Interface mostra "Publicado" e "Detectado há".
+8. Diagnóstico por fonte recuperado do estado persistido quando uma tentativa falha cedo.
+9. Hotfix de lock da v0.8.8.1 reincorporado: lease de 90 s e duplicatas não viram falha terminal.
+10. Lock da ronda com lease de 3 min para impedir concorrência sem congelar o sistema.
+11. Correções da Mesa v0.8.9 preservadas.
+
+FONTES FAST LANE
+G1, CNN Brasil, Folha, Estadão, O Globo, Poder360, Agência Brasil,
+ge, Metrópoles, InfoMoney e UOL Splash.
+
+DEPLOY
+1. npm install
+2. npm run check
+3. npm run test:regression
+4. npm run verify:090
+5. npx wrangler deploy
+
+IMPORTANTE
+- O cron do Cloudflare passa de */3 para * * * * * (1 minuto).
+- A própria aplicação decide: minuto múltiplo de 3 = ronda completa; demais = Fast Lane.
+- Não há migração D1 obrigatória para esta versão: firstSeenAt/discoveredAt ficam no snapshot JSON existente.
+- Depois do deploy, faça Ctrl+F5 uma vez no /ronda e no /design.
+- O scraper foi desenhado como complemento/fallback. Mudanças de HTML de um portal não devem derrubar a ronda inteira.
+
+VALIDAÇÃO DA ENTREGA
+- npm run check: OK
+- suíte de regressão v0.8.0 → v0.9.0: OK
+- teste específico Fast News Engine: OK
+- verificação estrutural v0.9.0: OK

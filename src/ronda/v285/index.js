@@ -1,6 +1,6 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
 import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
-import { collectRound, FEEDS, summarizePortalStatuses } from "./collector.js";
+import { collectRound, FAST_LANE_FEEDS, FEEDS, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
   createIntelligentJob,
@@ -126,10 +126,11 @@ import {
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { enqueueEditorialEnrichmentJobs, syncEditorialEvents } from "../editorial-events.js";
 
-const VERSION = "2.8.5";
+const VERSION = "2.9.0";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
-const INTELLIGENT_JOB_LOCK_TTL_MS = 12 * 60 * 1000;
+const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
+const EDITORIAL_ROUND_LOCK_TTL_MS = 3 * 60 * 1000;
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -168,7 +169,7 @@ function structuredLog(event, fields = {}) {
   console.log(JSON.stringify({ event, version: VERSION, at: new Date().toISOString(), ...fields }));
 }
 
-function freshActiveRun(run, { queuedMaxAgeMs = 2 * 60 * 1000, runningMaxAgeMs = 10 * 60 * 1000 } = {}) {
+function freshActiveRun(run, { queuedMaxAgeMs = 2 * 60 * 1000, runningMaxAgeMs = 5 * 60 * 1000 } = {}) {
   if (!run || !["queued", "running"].includes(run.status)) return null;
   const reference = run.status === "queued"
     ? run.queuedAt
@@ -209,6 +210,25 @@ function roundDiagnosticPayload(payload = {}) {
     attemptedAt: payload?.attemptedAt || payload?.collectedAt || null,
     detail: payload?.detail || null,
   };
+}
+
+function sourceStateDiagnosticsAsStatuses(entries = []) {
+  return (Array.isArray(entries) ? entries : []).map((source) => ({
+    id: source?.sourceId || source?.id || null,
+    name: source?.name || "Fonte",
+    region: source?.region || "Brasil",
+    ok: !["failed", "blocked", "not-found", "timeout", "rate-limited"].includes(String(source?.status || source?.errorCode || "").toLowerCase()),
+    count: Number(source?.itemCount ?? source?.count) || 0,
+    cached: source?.route === "cache",
+    degraded: source?.status === "degraded",
+    route: source?.route || source?.status || null,
+    httpStatus: source?.httpStatus == null ? null : Number(source.httpStatus),
+    errorCode: source?.errorCode || null,
+    error: source?.errorDetail || null,
+    lastAttemptAt: source?.lastAttemptAt || null,
+    lastSuccessAt: source?.lastSuccessAt || null,
+    nextCheckAt: source?.nextCheckAt || null,
+  })).filter((source) => source.id);
 }
 
 function terminalRoundFailurePayload(error, { startedAt } = {}) {
@@ -775,21 +795,46 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
     const lockBusy = error?.code === "JOB_LOCK_BUSY";
     structuredLog("intelligent_queue_error", { jobId, attempts, lockBusy, detail });
 
-    if (retryableProcessingError(error) && attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
-      if (!lockBusy) {
-        const refreshed = await updateIntelligentJob(requireDatabase(env), {
-          jobId,
-          status: "queued",
-          progress: Math.max(2, Math.min(90, 7 * attempts)),
-          message: `Falha temporária. Nova tentativa ${attempts + 1}/${INTELLIGENT_QUEUE_MAX_ATTEMPTS} agendada.`,
-          error: null,
-        }).catch(() => null);
-        if (["succeeded", "failed"].includes(refreshed?.status)) {
-          message?.ack?.();
-          return;
-        }
+    if (lockBusy) {
+      const current = await getIntelligentJob(requireDatabase(env), jobId).catch(() => null);
+      if (!current || ["succeeded", "failed"].includes(current.status)) {
+        message?.ack?.();
+        return;
       }
-      const delaySeconds = lockBusy ? 8 : Math.min(60, 10 * (2 ** Math.max(0, attempts - 1)));
+
+      await touchCarouselReliabilityAttempt(requireDatabase(env), {
+        jobId,
+        queueAttempts: attempts,
+      }).catch(() => null);
+
+      if (attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
+        message.retry({ delaySeconds: 18 });
+        return;
+      }
+
+      structuredLog("intelligent_queue_duplicate_released", {
+        jobId,
+        attempts,
+        status: current.status,
+        progress: current.progress,
+      });
+      message?.ack?.();
+      return;
+    }
+
+    if (retryableProcessingError(error) && attempts < INTELLIGENT_QUEUE_MAX_ATTEMPTS && message?.retry) {
+      const refreshed = await updateIntelligentJob(requireDatabase(env), {
+        jobId,
+        status: "queued",
+        progress: Math.max(2, Math.min(90, 7 * attempts)),
+        message: `Falha temporária. Nova tentativa ${attempts + 1}/${INTELLIGENT_QUEUE_MAX_ATTEMPTS} agendada.`,
+        error: null,
+      }).catch(() => null);
+      if (["succeeded", "failed"].includes(refreshed?.status)) {
+        message?.ack?.();
+        return;
+      }
+      const delaySeconds = Math.min(60, 10 * (2 ** Math.max(0, attempts - 1)));
       message.retry({ delaySeconds });
       return;
     }
@@ -888,6 +933,7 @@ async function processIntelligentQueueBatch(batch, env) {
 async function processRoundQueueMessage(message, env, body = {}) {
   const runId = String(body.runId || "").trim();
   const triggerType = body.triggerType === "manual" ? "manual" : "scheduled";
+  const mode = body.mode === "fast" ? "fast" : "full";
   const queuedAt = String(body.queuedAt || body.startedAt || new Date().toISOString());
   const startedAt = new Date().toISOString();
   if (!runId) {
@@ -897,8 +943,8 @@ async function processRoundQueueMessage(message, env, body = {}) {
   try {
     const db = requireDatabase(env);
     await markRunStarted(db, { id: runId, triggerType, queuedAt, startedAt });
-    await performRound(env, triggerType, { runId, startedAt, runStarted: true, deferFailureSave: true });
-    structuredLog("round_queue_completed", { runId, triggerType });
+    await performRound(env, triggerType, { runId, startedAt, runStarted: true, deferFailureSave: true, mode });
+    structuredLog("round_queue_completed", { runId, triggerType, mode });
     message?.ack?.();
   } catch (error) {
     const attempts = Number(message?.attempts || 1);
@@ -906,6 +952,7 @@ async function processRoundQueueMessage(message, env, body = {}) {
     structuredLog("round_queue_error", {
       runId,
       triggerType,
+      mode,
       attempts,
       retryable,
       detail: error instanceof Error ? error.message : String(error),
@@ -921,6 +968,7 @@ async function processRoundQueueMessage(message, env, body = {}) {
     structuredLog("round_failed_final", {
       runId,
       triggerType,
+      mode,
       attempts,
       detail: failedPayload.detail,
       portalsTotal: Number(failedDiagnostics.total) || 0,
@@ -958,12 +1006,14 @@ async function performRound(env, triggerType, options = {}) {
   // Limpeza preventiva do armazenamento principal antes de novas gravações.
   await preflightCoreStorage(db).catch(() => null);
   await ensureSchema(db);
-  const lock = options.lock || await acquireLock(db, "editorial-round", 12 * 60 * 1000);
+  const lock = options.lock || await acquireLock(db, "editorial-round", EDITORIAL_ROUND_LOCK_TTL_MS);
   if (!lock) throw new HttpError(409, "Já existe uma ronda em andamento.");
 
   const runId = options.runId || crypto.randomUUID();
   const startedAt = options.startedAt || new Date().toISOString();
-  structuredLog("round_started", { runId, triggerType });
+  const mode = options.mode === "fast" ? "fast" : "full";
+  const roundFeeds = mode === "fast" ? FAST_LANE_FEEDS : FEEDS;
+  structuredLog("round_started", { runId, triggerType, mode });
   try {
     if (!options.runStarted) await markRunStarted(db, { id: runId, triggerType, queuedAt: startedAt, startedAt });
     else await touchRun(db, runId, startedAt).catch(() => null);
@@ -973,13 +1023,15 @@ async function performRound(env, triggerType, options = {}) {
       const [monitoringTerms, previousRound, sourceStates] = await Promise.all([
         listMonitoringTerms(db, { activeOnly: true }),
         getLatestRound(db).catch(() => null),
-        getSourceStates(db, FEEDS.map((feed) => feed.id)).catch(() => new Map()),
+        getSourceStates(db, roundFeeds.map((feed) => feed.id)).catch(() => new Map()),
       ]);
       payload = await collectRound({
-        feeds: FEEDS,
+        feeds: roundFeeds,
         monitoringTerms,
         previousRound,
         sourceStates,
+        mode,
+        forceRefresh: mode === "fast",
       });
       collectedPayload = payload;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -995,51 +1047,63 @@ async function performRound(env, triggerType, options = {}) {
         });
       }
 
-      await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
+      await renewLock(db, lock, EDITORIAL_ROUND_LOCK_TTL_MS).catch(() => null);
       payload.configuration = {
         monitoringTerms: monitoringTerms.map((term) => ({ id: term.id, term: term.term })),
         browserRequired: false,
         execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue" : "cloudflare-trigger",
+        mode,
+        fastLane: mode === "fast",
         catalogFixed: true,
       };
       await touchRun(db, runId).catch(() => null);
-      try {
-        payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
-      } catch (error) {
-        structuredLog("round_translation_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
-        payload = portugueseOnlyFallback(payload);
+      if (mode === "full") {
+        try {
+          payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
+        } catch (error) {
+          structuredLog("round_translation_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+          payload = portugueseOnlyFallback(payload);
+        }
       }
       payload = withEditorias(payload);
-      payload.schemaVersion = 6;
+      payload.schemaVersion = 7;
       payload.catalog = { version: CATALOG_VERSION, portals: FEEDS.length };
 
-      // v0.8.0 — EVENTO EDITORIAL.
-      // A coleta já terminou neste ponto. O enriquecimento pesado é enviado para
-      // uma fila separada e nunca impede a próxima ronda.
-      try {
-        const editorialSync = await syncEditorialEvents(db, payload.topics || [], {
-          monitoringTerms,
-          runId,
-          at: payload.collectedAt || new Date(),
-        });
-        const queueResult = await enqueueEditorialEnrichmentJobs(env, db, editorialSync.enrichmentCandidates || []);
+      // A Fast Lane só descobre e normaliza conteúdo. A ronda completa mantém
+      // o enriquecimento editorial pesado a cada 3 minutos.
+      if (mode === "fast") {
         payload.editorialEvents = {
-          ...(editorialSync.summary || {}),
-          enrichmentQueued: queueResult.queued || 0,
-          enrichmentQueueReady: Boolean(queueResult.available),
-          mode: "event-centric-incremental",
-        };
-      } catch (error) {
-        payload.editorialEvents = {
-          ok: false,
-          mode: "event-centric-incremental",
+          ok: true,
+          mode: "fast-lane-deferred",
           enrichmentQueued: 0,
-          error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+          enrichmentQueueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
         };
-        structuredLog("editorial_event_sync_failed", {
-          runId,
-          detail: payload.editorialEvents.error,
-        });
+      } else {
+        try {
+          const editorialSync = await syncEditorialEvents(db, payload.topics || [], {
+            monitoringTerms,
+            runId,
+            at: payload.collectedAt || new Date(),
+          });
+          const queueResult = await enqueueEditorialEnrichmentJobs(env, db, editorialSync.enrichmentCandidates || []);
+          payload.editorialEvents = {
+            ...(editorialSync.summary || {}),
+            enrichmentQueued: queueResult.queued || 0,
+            enrichmentQueueReady: Boolean(queueResult.available),
+            mode: "event-centric-incremental",
+          };
+        } catch (error) {
+          payload.editorialEvents = {
+            ok: false,
+            mode: "event-centric-incremental",
+            enrichmentQueued: 0,
+            error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+          };
+          structuredLog("editorial_event_sync_failed", {
+            runId,
+            detail: payload.editorialEvents.error,
+          });
+        }
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
@@ -1068,19 +1132,32 @@ async function performRound(env, triggerType, options = {}) {
         const base = collectedPayload && typeof collectedPayload === "object" && !Array.isArray(collectedPayload)
           ? collectedPayload
           : {};
+        const persistedSourceDiagnostics = sourceStateDiagnosticsAsStatuses(
+          await listSourceDiagnostics(db).catch(() => [])
+        );
+        const failureSources = Array.isArray(base.sources) && base.sources.length
+          ? base.sources
+          : persistedSourceDiagnostics;
+        const diagnosticBase = {
+          ...base,
+          sources: failureSources,
+          collectedAt: base.collectedAt || new Date().toISOString(),
+          detail,
+        };
         payload = {
           ...base,
           ok: false,
           collectionStatus: "failed",
           degraded: true,
-          schemaVersion: 6,
-          collectedAt: base.collectedAt || new Date().toISOString(),
+          schemaVersion: 7,
+          mode,
+          collectedAt: diagnosticBase.collectedAt,
           windowHours: 24,
           durationMs: Number(base.durationMs) || Date.now() - Date.parse(startedAt),
           error: base.error || "A coleta foi interrompida por um erro interno.",
           detail,
-          sources: Array.isArray(base.sources) ? base.sources : [],
-          diagnostics: roundDiagnosticPayload(base),
+          sources: failureSources,
+          diagnostics: roundDiagnosticPayload(diagnosticBase),
           totals: base.totals || { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
           items: [],
           topics: [],
@@ -1091,19 +1168,21 @@ async function performRound(env, triggerType, options = {}) {
             statuses: [],
             totals: { terms: 0, items: 0, sources: 0 },
           },
-          operational: base.operational || {},
+          operational: { ...(base.operational || {}), diagnosticRecovery: persistedSourceDiagnostics.length > 0 },
         };
       }
     }
-    await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
+    await renewLock(db, lock, EDITORIAL_ROUND_LOCK_TTL_MS).catch(() => null);
     if (!payload.ok && options.deferFailureSave) {
       const failure = new HttpError(503, payload.error, payload.detail || null);
       failure.roundPayload = payload;
       throw failure;
     }
-    await syncNewsroomStories(db, payload.topics || [], { runId, at: payload.collectedAt || new Date().toISOString() }).catch((error) => {
-      structuredLog("newsroom_sync_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
-    });
+    if (mode === "full") {
+      await syncNewsroomStories(db, payload.topics || [], { runId, at: payload.collectedAt || new Date().toISOString() }).catch((error) => {
+        structuredLog("newsroom_sync_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+      });
+    }
     await saveRun(db, { id: runId, triggerType, startedAt, payload });
     await runDatabaseMaintenance(db).catch((error) => {
       structuredLog("database_maintenance_failed", { detail: error instanceof Error ? error.message : String(error) });
@@ -1112,6 +1191,7 @@ async function performRound(env, triggerType, options = {}) {
     structuredLog("round_completed", {
       runId,
       triggerType,
+      mode,
       ok: Boolean(payload.ok),
       durationMs: payload.durationMs,
       items: Number(payload?.totals?.items) || 0,
@@ -1495,7 +1575,7 @@ async function handleApi(request, env, url, ctx) {
       topics: latestSuccess?.topics || 0,
       sources: latestSuccess?.sources || 0,
       schedulerHealthy: latestSuccess?.completedAt
-        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 12 * 60 * 1000
+        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 6 * 60 * 1000
         : false,
     };
     return conditionalJson(request, payload, `${latest?.id || "none"}-${latest?.status || "idle"}-${latestSuccess?.id || "none"}`);
@@ -1517,8 +1597,9 @@ async function handleApi(request, env, url, ctx) {
       service: "ronda-editorial-webapp",
       version: VERSION,
       database: dbOk ? "connected" : "error",
-      scheduleMinutes: 3,
-      schedulerHealthy: ageMs <= 12 * 60 * 1000,
+      scheduleMinutes: 1,
+      fullRoundMinutes: 3,
+      schedulerHealthy: ageMs <= 6 * 60 * 1000,
       lastSuccessAt,
       lastRunId: latest?.id ?? null,
       manualAuthRequired: Boolean(env.MANUAL_ROUND_TOKEN),
@@ -1526,8 +1607,9 @@ async function handleApi(request, env, url, ctx) {
       backgroundMonitoring: {
         active: true,
         browserRequired: false,
-        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue-paid-full" : "cloudflare-cron-full",
-        scheduleMinutes: 3,
+        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue-fast-lane" : "cloudflare-cron-fast-lane",
+        scheduleMinutes: 1,
+        fullRoundMinutes: 3,
         monitoringTerms: monitoringTerms.length,
         dedicatedResults: null,
         catalogPortals: FEEDS.length,
@@ -1535,15 +1617,18 @@ async function handleApi(request, env, url, ctx) {
         catalogWorld: FEEDS.filter((feed) => feed.region === "Mundo").length,
       },
       portalCollection: {
-        strategy: "official-feed-dedicated-domain-fallback-persistent-cache",
+        strategy: "rss-direct-html-scrape-domain-fallback-persistent-cache",
         sharedFallbackQueries: true,
         dedicatedDomainFallback: true,
         sourceDomainMatching: true,
         lastKnownGoodCache: true,
         cacheWindowHours: 72,
         maxConcurrency: 8,
-        staggeredIntervalsMinutes: [3, 5],
-        statusModes: ["direct", "fallback", "not-modified", "cache", "no-new", "blocked", "rate-limited", "timeout", "failed"],
+        staggeredIntervalsMinutes: [1, 3, 5],
+        discoveryClock: "firstSeenAt",
+        directHtmlScraping: true,
+        fastLaneSources: FAST_LANE_FEEDS.length,
+        statusModes: ["direct", "scrape", "direct+scrape", "fallback", "not-modified", "cache", "no-new", "blocked", "rate-limited", "timeout", "failed"],
       },
       editorialClassification: {
         specializedCategories: [
@@ -2115,22 +2200,24 @@ export default {
     const roundTask = async () => {
       const runId = crypto.randomUUID();
       const queuedAt = new Date().toISOString();
+      const minute = new Date(queuedAt).getUTCMinutes();
+      const mode = minute % 3 === 0 ? "full" : "fast";
       const db = requireDatabase(env);
       await expireStaleRuns(db).catch(() => null);
       const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
       if (activeRun) {
-        structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt });
+        structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt, mode });
         return;
       }
       await queueRun(db, { id: runId, triggerType: "scheduled", queuedAt });
       if (env.ROUND_JOBS_QUEUE?.send) {
-        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt });
-        structuredLog("round_enqueued", { runId, triggerType: "scheduled" });
+        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt, mode });
+        structuredLog("round_enqueued", { runId, triggerType: "scheduled", mode });
         return;
       }
       const startedAt = new Date().toISOString();
       await markRunStarted(db, { id: runId, triggerType: "scheduled", queuedAt, startedAt });
-      await performRound(env, "scheduled", { runId, startedAt, runStarted: true });
+      await performRound(env, "scheduled", { runId, startedAt, runStarted: true, mode });
     };
 
     ctx.waitUntil(roundTask().catch((error) => {

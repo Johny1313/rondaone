@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 const read=p=>fs.readFileSync(new URL(`../${p}`,import.meta.url),"utf8");
-const worker=read("src/ronda/v285/index.js"),app=read("public/ronda/app.js"),design=read("public/design/index.html"),mesa=read("public/ronda/editorial-mesa.js"),css=read("public/ronda/editorial-mesa.css"),platform=read("src/index.js");
+const worker=read("src/ronda/v285/index.js"),app=read("public/ronda/app.js"),design=read("public/design/index.html"),mesa=read("public/ronda/editorial-mesa.js"),filters=read("public/ronda/editorial-mesa-filters.js"),css=read("public/ronda/editorial-mesa.css"),platform=read("src/index.js");
 assert.match(worker,/INTELLIGENT_JOB_LOCK_TTL_MS = 90 \* 1000/);
 assert.match(worker,/intelligent_queue_duplicate_released/);
 assert.doesNotMatch(worker,/const delaySeconds = lockBusy \? 8/);
@@ -10,7 +10,7 @@ assert.ok(start>0&&end>start);
 assert.doesNotMatch(worker.slice(start,end),/status:\s*"failed"/);
 assert.match(app,/queuedStalled/);assert.match(app,/runningStalled/);assert.match(app,/Outro consumidor já está processando este carrossel/);
 assert.match(design,/A matéria já está sendo processada pela fila/);assert.match(design,/runningStalled/);
-assert.match(mesa,/function eventMatchesFilter/);assert.match(mesa,/traction>=75/);assert.match(mesa,/2\*60\*60\*1000/);assert.match(mesa,/function updateFilterCounts/);assert.match(mesa,/aria-pressed/);
+assert.match(filters,/function matches/);assert.match(filters,/>=75/);assert.match(filters,/latestLimit=20/);assert.match(filters,/function filterLinked/);assert.match(mesa,/updateFilterButtons/);assert.match(mesa,/aria-pressed/);
 assert.match(css,/\.event-filter b\{/);
 assert.match(platform,/lockCoordinationV0881/);assert.match(platform,/lockBusyIsFailure:false/);assert.match(platform,/mesaFacetFilters:true/);
 console.log("RONDA ONE v0.8.8.1 Lock + Mesa Hotfix: OK");

@@ -39,10 +39,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.9',
+      version:'0.9.0',
       modules:{
         ronda:true,
-        editorialVersion:'2.8.5',
+        editorialVersion:'2.9.0',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:false,
@@ -57,7 +57,7 @@ export default {
       billingMode:'workers-paid-carousel-first',
       stabilityMode:'queue-first',
       carouselMode:'direct-article-source-evidence',
-      discoveryMode:'official-feed-plus-dedicated-domain-fallback',
+      discoveryMode:'rss-plus-direct-html-scraping-plus-domain-fallback',
       registeredSourceSearch:true,
       editorialEvents:true,
       editorialPipeline:'collect-normalize-deduplicate-cluster-event-read-enrich',
@@ -104,6 +104,15 @@ export default {
         regionFiltering:true,
         linkedPanelsFiltered:true
       },
+      lockCoordinationV0881:{
+        lockBusyIsFailure:false,
+        renewableLockLeaseSeconds:90,
+        duplicateQueueConsumerSafe:true,
+        rescueCanRetry:true,
+        runningIdleRescueSeconds:45,
+        mesaFacetFilters:true,
+        mesaFilterCounts:true
+      },
       directArticleComposerV088:{
         enabled:true,
         entryPoint:'forma-design',
@@ -134,10 +143,24 @@ export default {
         hardTimeoutMinutes:8,
         duplicateProcessingProtected:true
       },
+      fastNewsEngineV090:{
+        enabled:true,
+        cronMinutes:1,
+        fullRoundMinutes:3,
+        discoveryClock:'firstSeenAt',
+        routes:['rss','html-scrape','google-domain-fallback','persistent-cache'],
+        fastLaneSources:11,
+        htmlScraping:'json-ld-plus-article-cards',
+        browserRequired:false,
+        heavyEditorialProcessingDeferred:true,
+        sourceDiagnosticsRecovery:true,
+        renewableRoundLockMinutes:3
+      },
       sourceRecovery:{
-        cronMinutes:3,
+        cronMinutes:1,
+        fullRoundMinutes:3,
         healthyMaxRefreshMinutes:5,
-        highFrequencyRefreshMinutes:3,
+        highFrequencyRefreshMinutes:1,
         failedMaxSilenceMinutes:10,
         lastGoodRouteFirst:true,
         noNewIsHealthy:true,
@@ -166,7 +189,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-089-mesa-filter-recovery'
+        assetCacheBust:'2.9.0-090-fast-news-engine'
       },
       navigation:{
         ronda:'/ronda',

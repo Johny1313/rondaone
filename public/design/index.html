@@ -549,7 +549,7 @@
     <div class="modal-actions"><button class="secondary-btn" id="clearIntegrationKeys">Limpar Remove.bg</button><button class="primary-btn" id="saveIntegrationKeys">Salvar Remove.bg</button></div></div></div>
 
   <div class="workspace-resize-badge hidden" id="workspaceResizeBadge">318 px</div>
-  <script src="/design/smart-template-engine.js?v=088-direct-article-template"></script>
+  <script src="/design/smart-template-engine.js?v=090-fast-news-engine"></script>
   <script>
 (() => {
   const $ = s => document.querySelector(s);
@@ -1195,7 +1195,7 @@
     return data;
   }
   async function waitDirectArticleJob(jobId,pollAfterMs=1500){
-    const startedAt=Date.now(),deadline=startedAt+8*60*1000;let rescued=false,errors=0;
+    const startedAt=Date.now(),deadline=startedAt+8*60*1000;let rescueAttempts=0,nextRescueAt=startedAt+12000,errors=0;
     directArticleState.lastJobId=jobId;
     while(Date.now()<deadline){
       await new Promise(resolve=>setTimeout(resolve,Math.max(1200,Number(pollAfterMs)||1500)));
@@ -1210,16 +1210,29 @@
       const job=response?.job||{};
       setDirectArticleStatus(job.message||'Processando matéria…','',Math.max(2,Number(job.progress)||2));
       if(job.status==='succeeded'&&response?.data?.slides?.length)return response.data;
-      if(job.status==='failed')throw new Error(job.error||job.message||'A geração foi encerrada.');
+      if(job.status==='failed'){
+        const detail=String(job.error||job.message||'A geração foi encerrada.');
+        if(/já está sendo processada por outro consumidor|JOB_LOCK_BUSY/i.test(detail)){
+          throw Object.assign(new Error('Este job foi encerrado por uma versão anterior durante um conflito de consumidor. Gere novamente: o hotfix atual não transforma mais lock ocupado em falha.'),{code:'LEGACY_LOCK_BUSY_FAILURE'});
+        }
+        throw new Error(detail);
+      }
 
-      const age=Number(job.ageMs)||Date.now()-startedAt,idle=Number(job.idleMs)||0;
-      if(!rescued&&job.status==='queued'&&age>=12000&&idle>=8000){
-        rescued=true;setDirectArticleStatus('Fila lenta. Ativando recuperação automática do mesmo job…','',Math.max(3,Number(job.progress)||3));
+      const now=Date.now(),age=Number(job.ageMs)||now-startedAt,idle=Number(job.idleMs)||0;
+      const queuedStalled=job.status==='queued'&&age>=12000&&idle>=8000;
+      const runningStalled=job.status==='running'&&age>=60000&&idle>=45000;
+      if(rescueAttempts<3&&now>=nextRescueAt&&(queuedStalled||runningStalled)){
+        rescueAttempts+=1;nextRescueAt=now+30000;
+        setDirectArticleStatus('Verificando a execução ativa antes de assumir o job…','',Math.max(3,Number(job.progress)||3));
         try{
           const rescue=await directArticleApi(`/api/intelligent-jobs/${encodeURIComponent(jobId)}/rescue`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
           if(rescue?.status==='succeeded'&&rescue?.data?.slides?.length)return rescue.data;
+          if(rescue?.lockBusy){
+            setDirectArticleStatus('A matéria já está sendo processada pela fila. Acompanhando o mesmo job, sem duplicar a geração…','',Math.max(4,Number(rescue?.job?.progress??job.progress)||4));
+          }
         }catch(error){
           if(error.status===409)throw error;
+          setDirectArticleStatus('Recuperação em espera. O job principal continua sendo acompanhado…','',Math.max(4,Number(job.progress)||4));
         }
       }
     }

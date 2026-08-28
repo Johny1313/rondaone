@@ -133,14 +133,25 @@ function itemMatchesSource(item) {
   return matchesType && matchesPortal && matchesRegion;
 }
 
+function itemRadarTime(item) {
+  // Em janelas de tempo curto importa quando a redação descobriu a notícia,
+  // não apenas quando o portal declarou a publicação no RSS.
+  if (state.period <= 60) return item.firstSeenAt || item.discoveredAt || item.publishedAt;
+  return item.publishedAt || item.firstSeenAt || item.discoveredAt;
+}
+
 function itemWithinPeriod(item) {
-  const age = (Date.now() - Date.parse(item.publishedAt)) / 60_000;
+  const age = (Date.now() - Date.parse(itemRadarTime(item))) / 60_000;
   return Number.isFinite(age) && age >= -5 && age <= state.period;
 }
 
 function sourceMarkup(item, primary = false) {
   const platform = item.platform || (item.kind === "portal" ? "Portal" : "Rede");
-  return `<div class="${primary ? "primary-source" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><span class="source-name-label">${escapeHtml(item.sourceName)}</span><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
+  const discoveryTime = item.firstSeenAt || item.discoveredAt || null;
+  const detection = discoveryTime && Number.isFinite(Date.parse(discoveryTime))
+    ? `<span title="Primeira detecção pelo Ronda">Detectado ${escapeHtml(relativeTime(discoveryTime))}</span>`
+    : "";
+  return `<div class="${primary ? "primary-source" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><span class="source-name-label">${escapeHtml(item.sourceName)}</span><span>Publicado ${escapeHtml(formatDate(item.publishedAt))}</span>${detection}</div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
 }
 
 function sourceInitials(name) {
@@ -152,10 +163,12 @@ function sourceRegion(source) {
 }
 
 function sourceRouteLabel(source, compact = false) {
-  if (source?.route === "not-modified") return compact ? "304" : "sem alteração no feed";
-  if (source?.cached || source?.route === "cache") return compact ? "cache" : source?.deferred ? "cache programado" : "cache recente";
-  if (source?.fallback || source?.route === "fallback") return compact ? "alt" : "rota alternativa";
-  if (source?.route === "no-new") return compact ? "sem novas" : "sem novas publicações";
+  const route = String(source?.route || "");
+  if (route === "not-modified") return compact ? "304" : "sem alteração no feed";
+  if (source?.cached || route === "cache") return compact ? "cache" : source?.deferred ? "cache programado" : "cache recente";
+  if (route.includes("scrape")) return compact ? "web" : route.includes("direct") ? "feed + scraping direto" : "scraping direto";
+  if (source?.fallback || route.includes("fallback")) return compact ? "alt" : "rota alternativa";
+  if (route === "no-new") return compact ? "sem novas" : "sem novas publicações";
   if (source?.ok && Number(source?.count) > 0) return compact ? "dir" : "coleta direta";
   return "";
 }
@@ -469,15 +482,15 @@ function render() {
   }
 
   grid.innerHTML = visible.map((topic) => {
-    const items = [...topic.items].sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
+    const items = [...topic.items].sort((left, right) => Date.parse(itemRadarTime(right)) - Date.parse(itemRadarTime(left)));
     const primary = items.find((item) => item.kind === "portal") || items[0];
     const additional = items.filter((item) => item.id !== primary.id);
     const sources = [...new Set(items.map((item) => item.sourceName))];
-    const latest = items[0].publishedAt;
+    const latest = itemRadarTime(items[0]);
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<span class="source-badge">${escapeHtml(source)}</span>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Leitura de 1 matéria selecionada com fallback da mesma fonte</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<span class="source-badge">${escapeHtml(source)}</span>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>${state.period <= 60 ? "Última detecção" : "Última postagem"}</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Leitura de 1 matéria selecionada com fallback da mesma fonte</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -998,7 +1011,8 @@ function setCarouselJobProgress(job = {}) {
 async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
   const startedAt = Date.now();
   const deadline = startedAt + 8 * 60_000;
-  let rescueAttempted = false;
+  let rescueAttempts = 0;
+  let nextRescueAt = startedAt + 12_000;
   let transientErrors = 0;
 
   const pollDelay = () => {
@@ -1009,16 +1023,21 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
   };
 
   async function tryRescue(job) {
-    if (rescueAttempted) return null;
-    const ageMs = Number(job?.ageMs) || (Date.now() - startedAt);
+    const now = Date.now();
+    if (rescueAttempts >= 3 || now < nextRescueAt) return null;
+
+    const ageMs = Number(job?.ageMs) || (now - startedAt);
     const idleMs = Number(job?.idleMs) || 0;
+    const queuedStalled = job?.status === "queued" && ageMs >= 12_000 && idleMs >= 8_000;
+    const runningStalled = job?.status === "running" && ageMs >= 60_000 && idleMs >= 45_000;
+    if (!queuedStalled && !runningStalled) return null;
 
-    if (job?.status !== "queued" || ageMs < 12_000 || idleMs < 8_000) return null;
+    rescueAttempts += 1;
+    nextRescueAt = now + 30_000;
 
-    rescueAttempted = true;
-    setCarouselLoading(true, "A fila está demorando. Ativando recuperação automática do carrossel…", {
+    setCarouselLoading(true, "Verificando a execução ativa antes de assumir o carrossel…", {
       progress: Math.max(3, Number(job.progress) || 3),
-      title: "Recuperando processamento",
+      title: "Recuperação segura",
     });
 
     try {
@@ -1028,6 +1047,12 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
         body: "{}",
       });
       if (rescued?.status === "succeeded" && rescued?.data?.slides?.length) return rescued.data;
+      if (rescued?.lockBusy) {
+        setCarouselLoading(true, "Outro consumidor já está processando este carrossel. Apenas acompanhando o mesmo job…", {
+          progress: Math.max(4, Number(rescued?.job?.progress ?? job.progress) || 4),
+          title: "Processamento ativo",
+        });
+      }
       return null;
     } catch (error) {
       if (error.status === 409) throw error;

@@ -1,3 +1,36 @@
+# RONDA ONE Cloud v0.9.0 — Fast News Engine
+
+A v0.9.0 muda a descoberta de notícias recentes sem colocar um browser pesado no caminho crítico. O sistema passa a ter uma **Fast Lane a cada 1 minuto** para fontes prioritárias e mantém a **ronda editorial completa a cada 3 minutos**.
+
+## Destaques da v0.9.0
+
+- coleta híbrida por fonte: **RSS oficial + scraping HTML leve + Google News fallback + cache**;
+- scraping com `fetch()` e parser de **JSON-LD NewsArticle / cards HTML**, sem Playwright/Chromium;
+- `firstSeenAt`, `discoveredAt` e `lastSeenAt` para registrar quando uma matéria entrou no radar;
+- filtros curtos, incluindo **5 min**, passam a priorizar o tempo de detecção, sem perder o horário real de publicação;
+- cards mostram **Publicado** e **Detectado há**;
+- 11 fontes na Fast Lane: G1, CNN Brasil, Folha, Estadão, O Globo, Poder360, Agência Brasil, ge, Metrópoles, InfoMoney e UOL Splash;
+- diagnóstico por fonte recuperável mesmo quando uma tentativa falha antes de concluir o snapshot;
+- hotfix de lock da v0.8.8.1 reincorporado: lease de 90 s e `JOB_LOCK_BUSY` não terminal;
+- lock de ronda com lease de 3 min;
+- filtros da Mesa v0.8.9 preservados.
+
+### Agendamento
+
+```text
+cron Cloudflare: a cada 1 minuto
+  ├─ minuto múltiplo de 3 → ronda completa
+  └─ demais minutos       → Fast Lane
+```
+
+A Fast Lane atualiza descoberta e snapshot rapidamente; processamento editorial pesado fica para a ronda completa. Isso reduz latência sem multiplicar leitura de matéria/IA a cada minuto.
+
+### Atualização
+
+Veja `ATUALIZAR-PARA-090.txt`. Não há migração D1 obrigatória nesta versão.
+
+---
+
 ## v0.8.5.2 — UI + Source Sync
 
 - Ronda em produção usa o pipeline **Workers Paid completo**, não o runtime Free de uma fonte por ciclo.

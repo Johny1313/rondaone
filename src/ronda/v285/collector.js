@@ -1,9 +1,16 @@
 import { buildTopics, clusterItems, titleTokens } from "./clustering.js";
 import { parseFeed, plainText, stableHash } from "./parser.js";
+import { parseNewsHtml } from "./scraper.js";
 
 const HIGH_FREQUENCY_SOURCES = new Set([
   "g1", "cnn-brasil", "folha", "estadao", "o-globo", "poder360",
-  "agencia-brasil", "ge", "metropoles", "bbc", "guardian", "cnn",
+  "agencia-brasil", "ge", "metropoles", "infomoney", "uol-splash",
+  "bbc", "guardian", "cnn",
+]);
+
+export const FAST_LANE_SOURCE_IDS = Object.freeze([
+  "g1", "cnn-brasil", "folha", "estadao", "o-globo", "poder360",
+  "agencia-brasil", "ge", "metropoles", "infomoney", "uol-splash",
 ]);
 
 const MEDIUM_FREQUENCY_SOURCES = new Set([
@@ -14,7 +21,7 @@ const MEDIUM_FREQUENCY_SOURCES = new Set([
 ]);
 
 function sourceRefreshMinutes(id) {
-  if (HIGH_FREQUENCY_SOURCES.has(id)) return 3;
+  if (HIGH_FREQUENCY_SOURCES.has(id)) return 1;
   if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 5;
   return 5;
 }
@@ -81,22 +88,24 @@ function googleNewsTermSource(term) {
 }
 
 
-function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 320, emptyIsHealthy = false, refreshMinutes = null } = {}) {
+function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, scrapeUrls = [], sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 320, emptyIsHealthy = false, refreshMinutes = null } = {}) {
   const normalizedDomains = sourceDomains.map(normalizedSite).filter(Boolean);
   const dedicatedFallback = normalizedDomains[0]
     ? googleNewsSiteSource(normalizedDomains[0], region, "", 1)
     : null;
-  const urls = [...new Set([primaryUrl, dedicatedFallback, fallbackUrl].filter(Boolean))];
+  const normalizedScrapeUrls = [...new Set((Array.isArray(scrapeUrls) ? scrapeUrls : []).filter(Boolean))];
+  const urls = [...new Set([primaryUrl, ...normalizedScrapeUrls, dedicatedFallback, fallbackUrl].filter(Boolean))];
   return Object.freeze({
     id,
     name,
     region,
     canonicalSource: true,
     directUrl: primaryUrl || null,
+    scrapeUrls: Object.freeze(normalizedScrapeUrls),
     limit: limit || (region === "Mundo" ? 15 : 24),
     scanLimit,
     emptyIsHealthy: Boolean(emptyIsHealthy),
-    refreshMinutes: Math.max(3, Number(refreshMinutes) || sourceRefreshMinutes(id)),
+    refreshMinutes: Math.max(1, Number(refreshMinutes) || sourceRefreshMinutes(id)),
     sourceAliases: Object.freeze(sourceAliases),
     sourceDomains: Object.freeze(normalizedDomains),
     editorialHints: Object.freeze(editorialHints),
@@ -141,26 +150,26 @@ const NATELINHA_SEARCH = googleNewsSiteSource("natelinha.uol.com.br", "Brasil");
 
 export const FEEDS = Object.freeze([
   // Brasil — portais gerais. O segundo endereço é um fallback agregado e compartilhado.
-  portalFeed("g1", "G1", "Brasil", { primaryUrl: "https://g1.globo.com/rss/g1/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["G1"], sourceDomains: ["g1.globo.com"] }),
-  portalFeed("cnn-brasil", "CNN Brasil", "Brasil", { primaryUrl: "https://www.cnnbrasil.com.br/feed/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["CNN Brasil"], sourceDomains: ["cnnbrasil.com.br"] }),
-  portalFeed("folha", "Folha de S.Paulo", "Brasil", { primaryUrl: "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Folha de S.Paulo", "Folha"], sourceDomains: ["folha.uol.com.br"] }),
-  portalFeed("estadao", "Estadão", "Brasil", { fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Estadão", "O Estado de S. Paulo"], sourceDomains: ["estadao.com.br"] }),
-  portalFeed("o-globo", "O Globo", "Brasil", { primaryUrl: "https://oglobo.globo.com/rss.xml", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["O Globo"], sourceDomains: ["oglobo.globo.com"] }),
+  portalFeed("g1", "G1", "Brasil", { primaryUrl: "https://g1.globo.com/rss/g1/", scrapeUrls: ["https://g1.globo.com/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["G1"], sourceDomains: ["g1.globo.com"] }),
+  portalFeed("cnn-brasil", "CNN Brasil", "Brasil", { primaryUrl: "https://www.cnnbrasil.com.br/feed/", scrapeUrls: ["https://www.cnnbrasil.com.br/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["CNN Brasil"], sourceDomains: ["cnnbrasil.com.br"] }),
+  portalFeed("folha", "Folha de S.Paulo", "Brasil", { primaryUrl: "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", scrapeUrls: ["https://www.folha.uol.com.br/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Folha de S.Paulo", "Folha"], sourceDomains: ["folha.uol.com.br"] }),
+  portalFeed("estadao", "Estadão", "Brasil", { scrapeUrls: ["https://www.estadao.com.br/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Estadão", "O Estado de S. Paulo"], sourceDomains: ["estadao.com.br"] }),
+  portalFeed("o-globo", "O Globo", "Brasil", { primaryUrl: "https://oglobo.globo.com/rss.xml", scrapeUrls: ["https://oglobo.globo.com/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["O Globo"], sourceDomains: ["oglobo.globo.com"] }),
   portalFeed("veja", "Veja", "Brasil", { primaryUrl: "https://veja.abril.com.br/feed/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Veja"], sourceDomains: ["veja.abril.com.br"] }),
-  portalFeed("poder360", "Poder360", "Brasil", { primaryUrl: "https://www.poder360.com.br/feed/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Poder360"], sourceDomains: ["poder360.com.br"] }),
-  portalFeed("agencia-brasil", "Agência Brasil", "Brasil", { primaryUrl: "https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Agência Brasil"], sourceDomains: ["agenciabrasil.ebc.com.br"] }),
+  portalFeed("poder360", "Poder360", "Brasil", { primaryUrl: "https://www.poder360.com.br/feed/", scrapeUrls: ["https://www.poder360.com.br/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Poder360"], sourceDomains: ["poder360.com.br"] }),
+  portalFeed("agencia-brasil", "Agência Brasil", "Brasil", { primaryUrl: "https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml", scrapeUrls: ["https://agenciabrasil.ebc.com.br/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Agência Brasil"], sourceDomains: ["agenciabrasil.ebc.com.br"] }),
   portalFeed("nexo", "Nexo Jornal", "Brasil", { fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Nexo Jornal", "Nexo"], sourceDomains: ["nexojornal.com.br"] }),
-  portalFeed("infomoney", "InfoMoney", "Brasil", { primaryUrl: "https://www.infomoney.com.br/feed/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["InfoMoney"], sourceDomains: ["infomoney.com.br"] }),
+  portalFeed("infomoney", "InfoMoney", "Brasil", { primaryUrl: "https://www.infomoney.com.br/feed/", scrapeUrls: ["https://www.infomoney.com.br/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["InfoMoney"], sourceDomains: ["infomoney.com.br"] }),
   portalFeed("money-times", "Money Times", "Brasil", { primaryUrl: "https://www.moneytimes.com.br/feed/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Money Times"], sourceDomains: ["moneytimes.com.br"] }),
-  portalFeed("ge", "ge", "Brasil", { primaryUrl: "https://ge.globo.com/rss/ge/", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["ge", "Globo Esporte"], sourceDomains: ["ge.globo.com"] }),
+  portalFeed("ge", "ge", "Brasil", { primaryUrl: "https://ge.globo.com/rss/ge/", scrapeUrls: ["https://ge.globo.com/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["ge", "Globo Esporte"], sourceDomains: ["ge.globo.com"] }),
   portalFeed("canaltech", "Canaltech", "Brasil", { primaryUrl: "https://feeds2.feedburner.com/canaltechbr", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Canaltech"], sourceDomains: ["canaltech.com.br"] }),
   portalFeed("tecmundo", "TecMundo", "Brasil", { primaryUrl: "https://www.tecmundo.com.br/rss", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["TecMundo"], sourceDomains: ["tecmundo.com.br"] }),
   portalFeed("o-liberal", "O Liberal", "Brasil", { primaryUrl: "https://www.oliberal.com/rss", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["O Liberal"], sourceDomains: ["oliberal.com"] }),
-  portalFeed("metropoles", "Metrópoles", "Brasil", { primaryUrl: "https://www.metropoles.com/feed", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Metrópoles", "Metropoles"], sourceDomains: ["metropoles.com"] }),
+  portalFeed("metropoles", "Metrópoles", "Brasil", { primaryUrl: "https://www.metropoles.com/feed", scrapeUrls: ["https://www.metropoles.com/"], fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Metrópoles", "Metropoles"], sourceDomains: ["metropoles.com"] }),
   portalFeed("campo-grande-news", "Campo Grande News", "Brasil", { primaryUrl: "https://www.campograndenews.com.br/rss", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Campo Grande News"], sourceDomains: ["campograndenews.com.br"] }),
 
   // Brasil — entretenimento, celebridades e realities.
-  sharedGooglePortalFeed("uol-splash", "UOL Splash", SPLASH_SEARCH, ["UOL", "UOL Splash", "Splash"], ["uol.com.br"], ["Fofoca e Celebridades", "Reality Shows", "Entretenimento"]),
+  portalFeed("uol-splash", "UOL Splash", "Brasil", { scrapeUrls: ["https://www.uol.com.br/splash/"], fallbackUrl: SPLASH_SEARCH, sourceAliases: ["UOL", "UOL Splash", "Splash"], sourceDomains: ["uol.com.br"], editorialHints: ["Fofoca e Celebridades", "Reality Shows", "Entretenimento"], scanLimit: 500 }),
   sharedGooglePortalFeed("leo-dias", "LeoDias", ENTERTAINMENT_PORTALS_SEARCH, ["LeoDias", "Portal LeoDias", "Leo Dias"], ["portalleodias.com"], ["Fofoca e Celebridades"]),
   sharedGooglePortalFeed("quem", "Quem", ENTERTAINMENT_PORTALS_SEARCH, ["Quem", "Revista Quem"], ["revistaquem.globo.com"], ["Fofoca e Celebridades"]),
   sharedGooglePortalFeed("caras-brasil", "Caras Brasil", ENTERTAINMENT_PORTALS_SEARCH, ["Caras Brasil", "CARAS Brasil", "Caras"], ["caras.com.br"], ["Fofoca e Celebridades"]),
@@ -351,7 +360,25 @@ function orderedFeedUrls(feed, sourceState) {
   const urls = Array.isArray(feed?.urls) ? [...feed.urls] : [];
   const lastGood = String(sourceState?.lastUrl || "");
   if (!lastGood || !urls.includes(lastGood)) return urls;
-  return [lastGood, ...urls.filter((url) => url !== lastGood)];
+
+  const scrapeUrls = Array.isArray(feed?.scrapeUrls) ? feed.scrapeUrls : [];
+  // Mantém a recuperação histórica para fontes sem scraper.
+  if (!scrapeUrls.length) return [lastGood, ...urls.filter((url) => url !== lastGood)];
+
+  // Com Fast News Engine, evita que um fallback agregado saudável impeça
+  // a consulta do feed oficial + página HTML direta.
+  const discovery = urls.filter((url) => url === feed?.directUrl || scrapeUrls.includes(url));
+  const fallback = urls.filter((url) => !discovery.includes(url));
+  if (discovery.includes(lastGood)) {
+    return [lastGood, ...discovery.filter((url) => url !== lastGood), ...fallback];
+  }
+  return [...discovery, lastGood, ...fallback.filter((url) => url !== lastGood)];
+}
+
+function routeLabel(routeSet) {
+  const active = ["direct", "scrape", "fallback"].filter((route) => routeSet.has(route));
+  if (active.length) return active.join("+");
+  return routeSet.has("cache") ? "cache" : "no-new";
 }
 
 export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null, sourceState = null) {
@@ -366,14 +393,25 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
   const routes = [];
   const desiredMinimum = feed.region === "Mundo" ? 5 : 8;
   const itemLimit = Number(feed.limit) || (feed.region === "Mundo" ? 15 : 24);
+  const scrapeUrls = new Set(Array.isArray(feed?.scrapeUrls) ? feed.scrapeUrls : []);
+  let scrapeAttempted = false;
+  let directAttempted = false;
 
   const orderedUrls = orderedFeedUrls(feed, sourceState);
 
   for (let index = 0; index < orderedUrls.length; index += 1) {
     const url = orderedUrls[index];
+    const scrape = scrapeUrls.has(url);
+    if (scrape) scrapeAttempted = true;
+    if (Boolean(feed.directUrl) && String(url) === String(feed.directUrl)) directAttempted = true;
     try {
       reserveExternalRequest(requestBudget, url);
-      const response = await fetchWithTimeout(url, fetcher, { validator: validators[url] });
+      const response = await fetchWithTimeout(url, fetcher, {
+        validator: validators[url],
+        accept: scrape
+          ? "text/html,application/xhtml+xml;q=0.9,*/*;q=0.7"
+          : "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.7",
+      });
       totalResponseMs += Number(RESPONSE_TIMINGS.get(response)) || 0;
       const direct = Boolean(feed.directUrl) && String(url) === String(feed.directUrl);
       successfulResponses += 1;
@@ -385,20 +423,31 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
           routes.push("cache");
         }
         lastUrl = url;
-        if (mergedItems.length >= desiredMinimum) break;
+        const discoveryRoutesSatisfied = !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
+        if (mergedItems.length >= desiredMinimum && discoveryRoutesSatisfied) break;
         continue;
       }
+
       validators[url] = validatorSnapshot(response);
-      const xml = await decodeFeedResponse(response);
+      const body = await decodeFeedResponse(response);
       const parseConfiguration = direct ? { ...feed, sourceAliases: [], sourceDomains: [] } : feed;
-      const items = parseFeed(xml, parseConfiguration, effectiveCutoff, itemLimit);
+      const items = scrape
+        ? parseNewsHtml(body, feed, url, effectiveCutoff, itemLimit)
+        : parseFeed(body, parseConfiguration, effectiveCutoff, itemLimit);
 
       if (!items.length) {
-        errors.push({ code: "no-new", httpStatus: response.status, retryable: false, detail: "Sem conteúdo válido nesta rota nas últimas 24 horas" });
+        errors.push({
+          code: "no-new",
+          httpStatus: response.status,
+          retryable: false,
+          detail: scrape
+            ? "Página HTML acessível, mas sem cards datados válidos nas últimas 24 horas"
+            : "Sem conteúdo válido nesta rota nas últimas 24 horas",
+        });
         continue;
       }
 
-      const route = direct ? "direct" : "fallback";
+      const route = scrape ? "scrape" : direct ? "direct" : "fallback";
       mergedItems = uniqueItems([
         ...mergedItems,
         ...items.map((item) => ({ ...item, collectionRoute: route }))
@@ -406,7 +455,10 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       routes.push(route);
       lastUrl = url;
 
-      if (mergedItems.length >= desiredMinimum) break;
+      // Em fontes com scraper, uma resposta RSS cheia não encerra a descoberta:
+      // ao menos uma página HTML é consultada para reduzir a latência de publicação.
+      const discoveryRoutesSatisfied = !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
+      if (mergedItems.length >= desiredMinimum && discoveryRoutesSatisfied) break;
     } catch (error) {
       errors.push(errorDiagnostic(error));
     }
@@ -414,13 +466,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
 
   if (mergedItems.length) {
     const routeSet = new Set(routes);
-    const route = routeSet.has("direct") && routeSet.has("fallback")
-      ? "direct+fallback"
-      : routeSet.has("direct")
-        ? "direct"
-        : routeSet.has("fallback")
-          ? "fallback"
-          : "cache";
+    const route = routeLabel(routeSet);
 
     return {
       items: mergedItems,
@@ -761,12 +807,34 @@ function snapshotItems(feed, currentItems, previousState, collectedAt) {
     .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt)), Math.max(20, (Number(feed.limit) || 15) * 3));
 }
 
+export function applyDiscoveryMetadata(items, previousState, collectedAt = new Date()) {
+  const seenAt = new Date(collectedAt).toISOString();
+  const previousByKey = new Map((Array.isArray(previousState?.items) ? previousState.items : [])
+    .map((item) => [item?.url || item?.id, item])
+    .filter(([key]) => Boolean(key)));
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const key = item?.url || item?.id;
+    const previous = key ? previousByKey.get(key) : null;
+    const seededFirstSeen = previous?.firstSeenAt
+      || previous?.discoveredAt
+      || (previous ? previous?.publishedAt : null)
+      || seenAt;
+    return {
+      ...item,
+      firstSeenAt: seededFirstSeen,
+      discoveredAt: seededFirstSeen,
+      lastSeenAt: seenAt,
+      updatedAt: item?.updatedAt || previous?.updatedAt || null,
+    };
+  });
+}
+
 function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState, collectedAt) {
   const attemptedAt = collectedAt.toISOString();
   const healthy = Boolean(rawResult?.status?.ok);
   const failureCount = healthy ? 0 : (Number(previousState?.failureCount) || 0) + 1;
   const nextMinutes = healthy
-    ? Math.max(3, Number(feed.refreshMinutes) || 5)
+    ? Math.max(1, Number(feed.refreshMinutes) || 5)
     : Math.min(15, retryBackoffMinutes(rawResult?.status?.errorCode, failureCount));
   const nextCheckAt = new Date(collectedAt.getTime() + nextMinutes * 60 * 1000).toISOString();
   const items = snapshotItems(feed, resilientResult?.items, previousState, collectedAt);
@@ -857,9 +925,12 @@ export async function collectRound({
   monitoringTerms = [],
   previousRound = null,
   sourceStates = new Map(),
+  mode = "full",
+  forceRefresh = false,
 } = {}) {
   const startedAt = Date.now();
   const collectedAt = new Date(now);
+  const fastMode = mode === "fast";
   const cutoff = new Date(collectedAt.getTime() - 24 * 60 * 60 * 1000);
   const requestBudget = { remaining: PORTAL_SUBREQUEST_LIMIT, used: 0, seenUrls: new Set() };
   const portalFetcher = sharedResponseFetcher(fetcher);
@@ -868,16 +939,16 @@ export async function collectRound({
 
   feeds.forEach((feed, index) => {
     const state = sourceStateFor(sourceStates, feed.id);
-    if (sourceIsDue(state, collectedAt, feed)) due.push({ feed, index, state });
+    if (forceRefresh || sourceIsDue(state, collectedAt, feed)) due.push({ feed, index, state });
     else portalResults[index] = deferredSourceResult(feed, state, cutoff);
   });
 
-  const dueResults = await runPool(due, 8, async ({ feed, state }) => (
+  const dueResults = await runPool(due, fastMode ? 6 : 8, async ({ feed, state }) => (
     collectFeed(feed, cutoff, portalFetcher, requestBudget, state)
   ));
   due.forEach((entry, index) => { portalResults[entry.index] = dueResults[index]; });
 
-  const resilientPortalResults = portalResults.map((result, index) => {
+  let resilientPortalResults = portalResults.map((result, index) => {
     const feed = feeds[index];
     const state = sourceStateFor(sourceStates, feed.id);
     if (result.status.ok) return { ...result, status: enrichStatus(result.status, state, feed) };
@@ -902,6 +973,13 @@ export async function collectRound({
     };
   });
 
+  // O relógio do radar passa a registrar quando o Ronda viu cada URL pela primeira vez.
+  // Itens já existentes são semeados pela data publicada para evitar um falso pico após deploy.
+  resilientPortalResults = resilientPortalResults.map((result, index) => ({
+    ...result,
+    items: applyDiscoveryMetadata(result.items, sourceStateFor(sourceStates, feeds[index].id), collectedAt),
+  }));
+
   const sourceStateUpdates = due.map((entry, index) => {
     const raw = dueResults[index];
     const resilient = resilientPortalResults[entry.index];
@@ -910,33 +988,109 @@ export async function collectRound({
 
   const portalItems = uniqueItems(resilientPortalResults.flatMap((result) => result.items), 900);
   const portalStatuses = resilientPortalResults.map((result) => result.status);
-  const portalDiagnostics = summarizePortalStatuses(portalStatuses);
+  const previousFreshItems = (Array.isArray(previousRound?.items) ? previousRound.items : [])
+    .filter((item) => {
+      const timestamp = Date.parse(item?.publishedAt);
+      return Number.isFinite(timestamp) && timestamp >= cutoff.getTime();
+    });
 
-  const dedicatedMonitoring = await collectDedicatedMonitoring(monitoringTerms, cutoff, fetcher);
+  const fastNames = new Set(feeds.map((feed) => feed.name));
+  const previousOutsideFastLane = fastMode
+    ? previousFreshItems.filter((item) => !fastNames.has(item?.collectorName) && !fastNames.has(item?.sourceName))
+    : [];
 
-  if (!portalItems.length) {
+  const dedicatedMonitoring = fastMode
+    ? (previousRound?.dedicatedMonitoring || { enabled:false, terms:[], items:[], statuses:[], totals:{ terms:0, items:0, sources:0 } })
+    : await collectDedicatedMonitoring(monitoringTerms, cutoff, fetcher);
+
+  const previousSources = fastMode && Array.isArray(previousRound?.sources) ? previousRound.sources : [];
+  const currentIds = new Set(feeds.map((feed) => feed.id));
+  const preservedSources = fastMode
+    ? previousSources.filter((source) => source?.id && !currentIds.has(source.id))
+    : [];
+  const mergedPortalStatuses = fastMode
+    ? [...portalStatuses, ...preservedSources.filter((source) => source?.region !== "Rede")]
+    : portalStatuses;
+  const portalDiagnostics = summarizePortalStatuses(mergedPortalStatuses);
+
+  if (!portalItems.length && !(fastMode && previousFreshItems.length)) {
     return {
       ok: false,
       collectionStatus: "failed",
       degraded: true,
+      mode,
       collectedAt: collectedAt.toISOString(),
       windowHours: 24,
       durationMs: Date.now() - startedAt,
       error: "Nenhuma fonte respondeu com conteúdo válido nas últimas 24 horas.",
-      sources: portalStatuses,
+      sources: mergedPortalStatuses,
       diagnostics: { portals: portalDiagnostics },
-      totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: dedicatedMonitoring.items.length },
+      totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: dedicatedMonitoring.items?.length || 0 },
       items: [],
       topics: [],
       dedicatedMonitoring,
       sourceStateUpdates,
       operational: {
-        portalConcurrency: 8,
-        sourceRecovery: "0.8.1-last-good-route-first",
-        healthyMaxRefreshMinutes: 5,
+        mode,
+        portalConcurrency: fastMode ? 6 : 8,
+        sourceRecovery: "0.9.0-rss-scrape-fallback-cache",
+        healthyMaxRefreshMinutes: fastMode ? 1 : 5,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
         portalsDeferred: feeds.length - due.length,
+        externalPortalRequests: requestBudget.used,
+        externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
+      },
+    };
+  }
+
+  if (fastMode) {
+    const allItems = uniqueItems([...portalItems, ...previousOutsideFastLane], 1000);
+    const topics = buildTopics(allItems, collectedAt, 80);
+    const sourceCount = new Set(allItems.map((item) => item.sourceName).filter(Boolean)).size;
+    const socialItems = allItems.filter((item) => item.kind === "social").length;
+    const newItems = portalItems.filter((item) => {
+      const age = collectedAt.getTime() - Date.parse(item?.firstSeenAt || item?.discoveredAt || item?.publishedAt || "");
+      return Number.isFinite(age) && age >= -5 * 60 * 1000 && age <= 70 * 1000;
+    }).length;
+    const collectionStatus = portalItems.length ? (portalDiagnostics.complete ? "complete" : "partial") : "partial";
+    return {
+      ok: true,
+      collectionStatus,
+      degraded: collectionStatus === "partial",
+      mode: "fast",
+      fastLane: {
+        enabled: true,
+        sourceIds: feeds.map((feed) => feed.id),
+        newItems,
+        checkedAt: collectedAt.toISOString(),
+        discoveryClock: "firstSeenAt",
+      },
+      collectedAt: collectedAt.toISOString(),
+      windowHours: 24,
+      durationMs: Date.now() - startedAt,
+      sources: [...portalStatuses, ...preservedSources],
+      diagnostics: { portals: portalDiagnostics },
+      totals: {
+        items: allItems.length,
+        topics: topics.length,
+        sources: sourceCount,
+        socialItems,
+        dedicatedItems: dedicatedMonitoring.items?.length || 0,
+      },
+      items: allItems,
+      topics,
+      dedicatedMonitoring,
+      sourceStateUpdates,
+      operational: {
+        mode: "fast",
+        fastLane: true,
+        portalConcurrency: 6,
+        sourceRecovery: "0.9.0-rss-scrape-fallback-cache",
+        healthyMaxRefreshMinutes: 1,
+        failedMaxSilenceMinutes: 10,
+        portalsDue: due.length,
+        portalsDeferred: 0,
         externalPortalRequests: requestBudget.used,
         externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
       },
@@ -955,6 +1109,7 @@ export async function collectRound({
     ok: true,
     collectionStatus,
     degraded: collectionStatus === "partial",
+    mode: "full",
     collectedAt: collectedAt.toISOString(),
     windowHours: 24,
     durationMs: Date.now() - startedAt,
@@ -972,8 +1127,9 @@ export async function collectRound({
     dedicatedMonitoring,
     sourceStateUpdates,
     operational: {
+      mode: "full",
       portalConcurrency: 8,
-      sourceRecovery: "0.8.1-last-good-route-first",
+      sourceRecovery: "0.9.0-rss-scrape-fallback-cache",
       healthyMaxRefreshMinutes: 5,
       failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,
@@ -985,3 +1141,5 @@ export async function collectRound({
     },
   };
 }
+
+export const FAST_LANE_FEEDS = Object.freeze(FEEDS.filter((feed) => FAST_LANE_SOURCE_IDS.includes(feed.id)));
