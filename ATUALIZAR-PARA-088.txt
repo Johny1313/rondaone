@@ -1,0 +1,31 @@
+RONDA ONE v0.8.8 — DIRECT ARTICLE TEMPLATE
+
+Novo no FORMA DESIGN:
+1. Abra Templates
+2. Cole a URL da matéria em "Matéria → carrossel"
+3. Escolha o template
+4. Escolha 3–10 slides
+5. Clique "Gerar no template"
+
+Pipeline:
+URL
+→ leitura direta do portal
+→ evidências
+→ carrossel
+→ imagem da matéria
+→ fallback Banco Free se necessário
+→ RondaContentModel
+→ template selecionado
+→ Auto Fit
+→ FORMA editável
+
+Novo endpoint:
+POST /api/design/article-carousel
+
+Deploy:
+npm install
+npm run check
+npm run verify:088
+npm run test:088
+npm run test:regression
+npm run deploy

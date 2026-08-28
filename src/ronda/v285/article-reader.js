@@ -1894,8 +1894,8 @@ export async function buildIntelligentCarousel(topic, {
     const selected = item === selectedItem || (selectedItem?.id && item?.id === selectedItem.id) || item?.url === selectedItem?.url;
     const url = selected && /^https?:\/\//i.test(String(selectedResolvedUrl || "")) ? selectedResolvedUrl : item.url;
     return {
-      title: compact(item.title || "Notícia sem título", 180),
-      sourceName: item.sourceName || item.collectorName || "Fonte não informada",
+      title: compact(selected ? (selectedRecord?.title || item.title || "Notícia sem título") : (item.title || "Notícia sem título"), 180),
+      sourceName: selected ? (selectedRecord?.sourceName || item.sourceName || item.collectorName || "Fonte não informada") : (item.sourceName || item.collectorName || "Fonte não informada"),
       publishedAt: item.publishedAt || null,
       url,
       ...(url !== item.url ? { originalUrl: item.url } : {}),

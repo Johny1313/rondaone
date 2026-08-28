@@ -1,24 +1,28 @@
 RONDA ONE CLOUD
-Versão: 0.8.7
-Produto: Reliability 90 + Smart Templates + Carousel Recovery
+Versão: 0.8.8
+Produto: Direct Article Composer + Smart Templates + Reliability 90
 
-SLO CARROSSEL
-- alvo >= 90% de sucesso terminal
-- leitura operacional: 9 sucessos nas últimas 10 conclusões
-- amostra válida a partir de 10 conclusões
-- tentativas, sucessos, falhas, recuperações e estágios de falha registrados
-- falhas: reading / queue / ai / database / network / processing
+FORMA DESIGN — MATÉRIA → CARROSSEL
+- campo para colar URL direta da matéria
+- quantidade de slides 3–10
+- seleção do template antes da geração
+- usa exatamente o mesmo pipeline editorial da RONDA
+- Queue + Rescue + Reliability Ledger
+- leitura direta do portal obrigatória
+- imagem da matéria quando liberada para uso automático
+- fallback não generativo pelo Banco Free/Wikimedia Commons
+- conteúdo entra diretamente no template selecionado
+- Auto Fit e semantic slots continuam ativos
+- releitura opcional ignorando cache
 
-ACESSO
-- cookie expirado é removido do navegador automaticamente
-- acesso invalido faz logout/limpeza antes do redirect
-- BFCache e retorno online revalidam sessão
-- login/access assets sem cache
-- revisão de assets de acesso atualizada para 087
+SEM IA DE IMAGEM
+- não existe fallback generativo de imagem neste fluxo
+- prioridade visual: publisher -> Wikimedia Commons -> sem imagem automática
 
 PRESERVADO
-- Smart Templates 0.8.6
-- Carousel Recovery 0.8.5.5
-- Email-only Auth
+- Reliability 90 v0.8.7
+- Smart Templates v0.8.6
+- Carousel Recovery v0.8.5.5
+- Access Recovery
 - 39 fontes
-- limite 10 usuários
+- 10 usuários

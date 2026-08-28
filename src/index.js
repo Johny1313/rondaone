@@ -39,7 +39,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.8.7',
+      version:'0.8.8',
       modules:{
         ronda:true,
         editorialVersion:'2.8.5',
@@ -94,6 +94,17 @@ export default {
         detach:true,
         multiLayout:true
       },
+      directArticleComposerV088:{
+        enabled:true,
+        entryPoint:'forma-design',
+        directUrl:true,
+        sameEditorialPipeline:true,
+        queueAndRescue:true,
+        smartTemplateAfterGeneration:true,
+        publisherImageFirst:true,
+        freeBankFallback:true,
+        generativeImageFallback:false
+      },
       reliabilityV087:{
         accessCacheRecovery:true,
         staleCookieAutoClear:true,
@@ -145,7 +156,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.8.5-087-reliability-90'
+        assetCacheBust:'2.8.5-088-direct-article-template'
       },
       navigation:{
         ronda:'/ronda',

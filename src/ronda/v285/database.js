@@ -58,6 +58,7 @@ const SCHEMA_STATEMENTS = [
     message TEXT,
     error TEXT,
     payload_json TEXT,
+    request_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
@@ -436,6 +437,15 @@ async function ensureRunStateColumns(db) {
 }
 
 
+
+async function ensureIntelligentJobRequestColumn(db) {
+  const result = await db.prepare("PRAGMA table_info(intelligent_jobs)").all();
+  const columns = new Set((result?.results || []).map((row) => String(row?.name || "")));
+  if (!columns.has("request_json")) {
+    await db.prepare("ALTER TABLE intelligent_jobs ADD COLUMN request_json TEXT").run();
+  }
+}
+
 async function ensureCarouselReliabilitySchema(db) {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS carousel_reliability (
@@ -470,6 +480,7 @@ export async function ensureSchema(db) {
       for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
     }
     await ensureRunStateColumns(db);
+    await ensureIntelligentJobRequestColumn(db);
     await ensureCarouselReliabilitySchema(db);
     if (version !== DATABASE_SCHEMA_VERSION) {
       const now = new Date().toISOString();
@@ -979,8 +990,12 @@ export async function saveIntelligentCarousel(db, { cacheKey, runId, topicId, pa
 function parseIntelligentJob(row) {
   if (!row) return null;
   let payload = null;
+  let request = null;
   if (row.payload_json) {
     try { payload = JSON.parse(row.payload_json); } catch {}
+  }
+  if (row.request_json) {
+    try { request = JSON.parse(row.request_json); } catch {}
   }
   const updatedAt = row.updated_at || row.created_at;
   const active = row.status === "queued" || row.status === "running";
@@ -1001,6 +1016,7 @@ function parseIntelligentJob(row) {
     message: row.message || "",
     error: row.error || null,
     payload,
+    request,
     createdAt: row.created_at,
     updatedAt,
     expiresAt: row.expires_at,
@@ -1025,6 +1041,7 @@ export async function createIntelligentJob(db, {
   staleMs = 5 * 60 * 1000,
   ttlMinutes = 120,
   replaceCompleted = false,
+  requestPayload = null,
 } = {}) {
   await ensureSchema(db);
   const existingRow = await db
@@ -1049,8 +1066,8 @@ export async function createIntelligentJob(db, {
   await db.prepare(`
     INSERT INTO intelligent_jobs (
       cache_key, job_id, run_id, topic_id, status, progress, message, error,
-      payload_json, created_at, updated_at, expires_at
-    ) VALUES (?, ?, ?, ?, 'queued', 1, ?, NULL, NULL, ?, ?, ?)
+      payload_json, request_json, created_at, updated_at, expires_at
+    ) VALUES (?, ?, ?, ?, 'queued', 1, ?, NULL, NULL, ?, ?, ?, ?)
     ON CONFLICT(cache_key) DO UPDATE SET
       job_id = excluded.job_id,
       run_id = excluded.run_id,
@@ -1060,10 +1077,15 @@ export async function createIntelligentJob(db, {
       message = excluded.message,
       error = NULL,
       payload_json = NULL,
+      request_json = excluded.request_json,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at,
       expires_at = excluded.expires_at
-  `).bind(cacheKey, jobId, runId, topicId, "Leitura adicionada à fila.", now, now, expiresAt).run();
+  `).bind(
+    cacheKey, jobId, runId, topicId, "Leitura adicionada à fila.",
+    requestPayload ? JSON.stringify(requestPayload) : null,
+    now, now, expiresAt
+  ).run();
   return {
     created: true,
     job: {
@@ -1074,6 +1096,7 @@ export async function createIntelligentJob(db, {
       status: "queued",
       progress: 1,
       message: "Leitura adicionada à fila.",
+      request: requestPayload || null,
       error: null,
       payload: null,
       createdAt: now,

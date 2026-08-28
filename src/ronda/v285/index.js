@@ -1,5 +1,5 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
-import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
+import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
 import { collectRound, FEEDS, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
@@ -648,7 +648,9 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       cacheKey: job.cacheKey,
       runId: job.runId,
       topicId: job.topicId,
-      topicTitle: topic.title,
+      topicTitle: data?.reading?.selectedSource?.title || topic.title,
+      articleVisuals: data?.reading?.selectedSource?.images || null,
+      directArticleUrl: job?.request?.mode === "direct-article-url" ? (job.request.articleUrl || null) : null,
       requestedSlideCount: slideCount,
       profileApplied: Boolean(profileRecord),
       adaptiveMemoryCount: adaptiveMemory.count,
@@ -720,6 +722,11 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
 
 
 async function resolveTopicForIntelligentJob(env, job) {
+  const directTopic = job?.request?.topic;
+  if (job?.request?.mode === "direct-article-url" && directTopic?.id && Array.isArray(directTopic?.items)) {
+    return directTopic;
+  }
+
   const db = requireDatabase(env);
   let payload;
   if (job.runId && job.runId !== "latest") {
@@ -1789,6 +1796,139 @@ async function handleApi(request, env, url, ctx) {
       job: publicIntelligentJob(job),
       ...(job.status === "succeeded" && job.payload ? { data: job.payload } : {}),
     });
+  }
+
+  if (url.pathname === "/api/design/article-carousel" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    const db = requireDatabase(env);
+
+    let articleUrl;
+    try { articleUrl = validateArticleUrl(body?.url); }
+    catch (error) { throw new HttpError(400, error.message || "Informe um link válido de matéria."); }
+
+    let slideCount;
+    try { slideCount = validateSlideCount(body?.slideCount ?? user?.defaultSlideCount ?? DEFAULT_SLIDE_COUNT); }
+    catch (error) { throw new HttpError(400, error.message); }
+
+    const writingProfile = await getWritingProfile(db, user.id).catch(() => null);
+    const learningStats = await getCarouselLearningStats(db, user.id).catch(() => ({ count:0, updatedAt:null }));
+    const styleKey = `${user.id}:${writingProfile?.updatedAt || "default"}:${learningStats.updatedAt || "no-learning"}:${learningStats.count}`;
+
+    let hostname = "portal";
+    try { hostname = new URL(articleUrl).hostname.replace(/^www\./i, ""); } catch {}
+    const fingerprint = (await sha256Hex(articleUrl)).slice(0, 24);
+    const topicId = `direct-${fingerprint}`;
+    const runId = "direct-url";
+    const sourceName = hostname || "Portal da matéria";
+    const topic = {
+      id: topicId,
+      title: `Matéria direta · ${sourceName}`,
+      editoria: String(body?.editoria || "Notícias").slice(0, 80),
+      priority: "Produção direta",
+      score: 100,
+      sourceCount: 1,
+      itemCount: 1,
+      sourceNames: [sourceName],
+      items: [{
+        id: `direct-item-${fingerprint}`,
+        kind: "portal",
+        url: articleUrl,
+        title: `Matéria publicada em ${sourceName}`,
+        description: "",
+        content: "",
+        sourceName,
+        collectorName: sourceName,
+        publisherHomepageUrl: `https://${hostname}`,
+        collectionRoute: "direct-url",
+        publishedAt: new Date().toISOString(),
+      }],
+    };
+
+    const cacheKey = intelligentCarouselCacheKey(runId, topic, { slideCount, styleKey });
+    if (!body?.force) {
+      const cached = await getIntelligentCarousel(db, cacheKey);
+      if (cached?.slides?.length) return json({ ok:true, cached:true, status:"succeeded", data:cached });
+    }
+
+    const queued = await createIntelligentJob(db, {
+      cacheKey,
+      runId,
+      topicId,
+      replaceCompleted: Boolean(body?.force),
+      requestPayload: {
+        mode: "direct-article-url",
+        articleUrl,
+        topic,
+        createdByUserId: user.id,
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    if (queued.job.status === "succeeded" && queued.job.payload?.slides?.length) {
+      return json({ ok:true, cached:true, status:"succeeded", data:queued.job.payload });
+    }
+
+    if (queued.created) {
+      await startCarouselReliabilityAttempt(db, {
+        jobId:queued.job.jobId, cacheKey, userId:user.id, runId, topicId, slideCount,
+      }).catch(() => null);
+      await recordUsageMetric(db, "carousels_attempted", { value:1, samples:1 }).catch(() => null);
+
+      if (env.INTELLIGENT_JOBS_QUEUE?.send) {
+        try {
+          await env.INTELLIGENT_JOBS_QUEUE.send({
+            type:"intelligent",
+            mode:"direct-article-url",
+            jobId:queued.job.jobId,
+            runId,
+            topicId,
+            slideCount,
+            userId:user.id,
+            writingProfile,
+            styleKey,
+          });
+          queued.job = await updateIntelligentJob(db, {
+            jobId:queued.job.jobId,
+            status:"queued",
+            progress:2,
+            message:"Link recebido. A matéria será lida diretamente e diagramada no FORMA ao concluir.",
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await updateIntelligentJob(db, {
+            jobId:queued.job.jobId,status:"failed",progress:100,
+            message:"Não foi possível enviar a matéria para a fila.",error:detail,
+          });
+          await finishCarouselReliabilityAttempt(db, {
+            jobId:queued.job.jobId,status:"failed",failureStage:"queue",
+            errorCode:"DIRECT_URL_QUEUE_SEND_FAILED",errorDetail:detail,
+          }).catch(() => null);
+          await recordUsageMetric(db,"carousels_failed",{value:1,samples:1}).catch(()=>null);
+          throw new HttpError(503,"Fila de carrossel indisponível.",detail);
+        }
+      } else {
+        const data = await processIntelligentCarouselJob(env, queued.job, topic, {
+          slideCount, writingProfile, styleKey, userId:user.id,
+        });
+        return json({ ok:true, cached:false, status:"succeeded", data });
+      }
+    }
+
+    return json({
+      ok:true,
+      queued:true,
+      status:queued.job.status,
+      job:publicIntelligentJob(queued.job),
+      pollAfterMs:1500,
+      directArticle:true,
+      articleUrl,
+      configuration:{
+        slideCount,
+        profileApplied:Boolean(writingProfile),
+        adaptiveMemoryCount:learningStats.count,
+      },
+    },202);
   }
 
   const intelligentCarouselRoute = /^\/api\/topics\/([a-z0-9-]{6,100})\/intelligent-carousel$/i.exec(url.pathname);

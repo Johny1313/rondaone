@@ -99,6 +99,25 @@
 @media(max-width:520px){.topbar .size-chip,.topbar #customSizeBtn,.topbar #integrationBtn,.topbar #saveTemplateBtn{display:none}.brand-sub{display:none}.leftbar{grid-template-columns:54px minmax(0,1fr)}.tool-tab{height:52px}.tool-panel{padding:12px}.ai-select-grid,.ai-inline-grid,.ai-config-grid,.field-grid.two{grid-template-columns:1fr}.ai-actions-row{grid-template-columns:1fr 1fr}.ai-actions-row button:last-child{grid-column:1/-1}.stage-shell{height:64vh;min-height:520px}.rightbar{padding-bottom:40px}.panel-heading-row{align-items:flex-start}.ai-status-top{align-items:flex-start;flex-direction:column}}
 
   </style>
+
+<style>
+.direct-article-card{border:1px solid #d5d1c8;background:#fff;border-radius:13px;padding:12px;margin:0 0 12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.direct-article-card .direct-title{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:9px}
+.direct-article-card .direct-title strong{font-size:11px}
+.direct-article-card .direct-title span{font-size:8px;color:var(--muted);line-height:1.35;text-align:right}
+.direct-article-card label{display:block;font-size:8px;font-weight:850;color:var(--muted);margin:8px 0 4px}
+.direct-article-card input,.direct-article-card select{width:100%;border:1px solid var(--line);border-radius:8px;background:#fff;padding:8px 9px;font-size:9px;outline:none}
+.direct-article-card input:focus,.direct-article-card select:focus{border-color:#8f87ef}
+.direct-article-grid{display:grid;grid-template-columns:minmax(0,1fr) 74px;gap:6px}
+.direct-article-actions{display:grid;grid-template-columns:1fr auto;gap:6px;margin-top:9px}
+.direct-article-actions .primary-btn{height:38px}
+.direct-article-actions .mini-btn{height:38px;padding:0 9px}
+.direct-article-status{display:none;margin-top:9px;padding:8px 9px;border-radius:9px;background:#f0eee9;font-size:8px;line-height:1.45;color:#625e56}
+.direct-article-status.show{display:block}.direct-article-status.ok{background:#eaf5e7;color:#37683f}.direct-article-status.error{background:#fff0ec;color:#a24231}
+.direct-article-progress{height:4px;border-radius:999px;background:#dfdcd5;overflow:hidden;margin-top:7px}.direct-article-progress>i{display:block;height:100%;width:0;background:#6559e8;transition:width .25s ease}
+.direct-article-check{display:flex!important;align-items:center;gap:6px;margin-top:8px!important;color:var(--ink)!important}.direct-article-check input{width:auto!important;margin:0!important}
+</style>
+
 </head>
 <body>
   <div class="app-shell">
@@ -174,6 +193,18 @@
             <div class="panel-heading-row">
               <div><h2>Templates</h2><p>Reutilize composições salvas.</p></div>
               <button class="mini-btn" id="newDesignBtn">Novo</button>
+            </div>
+            <div class="direct-article-card" id="directArticleCard">
+              <div class="direct-title"><strong>Matéria → carrossel</strong><span>Leia o link, gere o conteúdo e aplique direto no template.</span></div>
+              <label for="directArticleUrl">Link da matéria</label>
+              <input id="directArticleUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://portal.com.br/noticia..." />
+              <div class="direct-article-grid">
+                <div><label for="directArticleTemplate">Template</label><select id="directArticleTemplate"><option value="">Layout padrão da RONDA</option></select></div>
+                <div><label for="directArticleSlides">Slides</label><select id="directArticleSlides"><option>3</option><option>4</option><option>5</option><option>6</option><option selected>7</option><option>8</option><option>9</option><option>10</option></select></div>
+              </div>
+              <label class="direct-article-check"><input id="directArticleForce" type="checkbox"> Releitura completa · ignorar carrossel em cache</label>
+              <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Gerar no template</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div>
+              <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div>
             </div>
             <div class="smart-template-status" id="smartTemplateStatus"><strong>Template inteligente</strong><span id="smartTemplateStatusText">Importe um carrossel da RONDA para aplicar o conteúdo automaticamente.</span><div class="smart-template-actions"><button class="mini-btn" id="reapplySmartTemplate" disabled>Reaplicar</button><button class="mini-btn" id="detachSmartTemplate" disabled>Desvincular</button></div></div>
             <div class="template-grid" id="templateGrid"></div>
@@ -518,7 +549,7 @@
     <div class="modal-actions"><button class="secondary-btn" id="clearIntegrationKeys">Limpar Remove.bg</button><button class="primary-btn" id="saveIntegrationKeys">Salvar Remove.bg</button></div></div></div>
 
   <div class="workspace-resize-badge hidden" id="workspaceResizeBadge">318 px</div>
-  <script src="/design/smart-template-engine.js?v=086-smart-templates"></script>
+  <script src="/design/smart-template-engine.js?v=088-direct-article-template"></script>
   <script>
 (() => {
   const $ = s => document.querySelector(s);
@@ -1136,6 +1167,161 @@
     try{localStorage.setItem(LS_TEMPLATES,JSON.stringify(templates.slice(0,30)));closeModal('templateModal');renderTemplates();showToast(`Template inteligente salvo · ${compiled.slotCount} campos detectados`);}catch{showToast('Template grande demais para o armazenamento local');}
   };
   function getTemplates(){try{const current=JSON.parse(localStorage.getItem(LS_TEMPLATES)||'[]');if(current.length)return current;return JSON.parse(localStorage.getItem('rondaDesign.templates.v1')||'[]');}catch{return[];}}
+  const directArticleState={busy:false,lastJobId:null};
+  function setDirectArticleStatus(text,mode='',progress=null){
+    const box=$('#directArticleStatus'),label=$('#directArticleStatusText'),bar=$('#directArticleProgress');
+    if(!box||!label||!bar)return;
+    label.textContent=text||'';
+    box.classList.toggle('show',Boolean(text));
+    box.classList.toggle('ok',mode==='ok');
+    box.classList.toggle('error',mode==='error');
+    if(progress!=null)bar.style.width=`${Math.max(0,Math.min(100,Number(progress)||0))}%`;
+  }
+  function renderDirectArticleTemplates(){
+    const select=$('#directArticleTemplate');if(!select)return;
+    const previous=select.value,templates=getTemplates().map(normalizeTemplateRecord).filter(Boolean);
+    select.innerHTML='<option value="">Layout padrão da RONDA</option>';
+    templates.forEach(t=>{const o=document.createElement('option');o.value=String(t.id||'');o.textContent=`${t.name} · ${t.project?.artboards?.length||1} layout(s)`;select.appendChild(o);});
+    if(previous&&templates.some(t=>String(t.id)===previous))select.value=previous;
+    else if(templates.length)select.value=String(templates[0].id||'');
+  }
+  async function directArticleApi(url,options={}){
+    const response=await fetch(url,{cache:'no-store',credentials:'same-origin',...options});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok){
+      const error=new Error(data.detail?`${data.error||'Erro'} · ${data.detail}`:(data.error||`HTTP ${response.status}`));
+      error.status=response.status;throw error;
+    }
+    return data;
+  }
+  async function waitDirectArticleJob(jobId,pollAfterMs=1500){
+    const startedAt=Date.now(),deadline=startedAt+8*60*1000;let rescued=false,errors=0;
+    directArticleState.lastJobId=jobId;
+    while(Date.now()<deadline){
+      await new Promise(resolve=>setTimeout(resolve,Math.max(1200,Number(pollAfterMs)||1500)));
+      let response;
+      try{
+        response=await directArticleApi(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?design=1&t=${Date.now()}`);
+        errors=0;
+      }catch(error){
+        errors+=1;setDirectArticleStatus('Conexão oscilou. O job continua salvo no Cloudflare; reconectando…','',8);
+        await new Promise(resolve=>setTimeout(resolve,Math.min(6000,900+errors*600)));continue;
+      }
+      const job=response?.job||{};
+      setDirectArticleStatus(job.message||'Processando matéria…','',Math.max(2,Number(job.progress)||2));
+      if(job.status==='succeeded'&&response?.data?.slides?.length)return response.data;
+      if(job.status==='failed')throw new Error(job.error||job.message||'A geração foi encerrada.');
+
+      const age=Number(job.ageMs)||Date.now()-startedAt,idle=Number(job.idleMs)||0;
+      if(!rescued&&job.status==='queued'&&age>=12000&&idle>=8000){
+        rescued=true;setDirectArticleStatus('Fila lenta. Ativando recuperação automática do mesmo job…','',Math.max(3,Number(job.progress)||3));
+        try{
+          const rescue=await directArticleApi(`/api/intelligent-jobs/${encodeURIComponent(jobId)}/rescue`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+          if(rescue?.status==='succeeded'&&rescue?.data?.slides?.length)return rescue.data;
+        }catch(error){
+          if(error.status===409)throw error;
+        }
+      }
+    }
+    throw new Error('A matéria não concluiu em 8 minutos. O job foi preservado para diagnóstico.');
+  }
+  function publisherVisualsFromCarousel(data){
+    const visuals=data?.articleVisuals||data?.reading?.selectedSource?.images||null;
+    if(!visuals)return null;
+    const allowedPrimary=visuals?.primary?.autoUseAllowed?visuals.primary:null;
+    const allowedAlternatives=(visuals?.alternatives||[]).filter(x=>x?.autoUseAllowed);
+    if(!allowedPrimary&&!allowedAlternatives.length)return null;
+    return {primary:allowedPrimary||allowedAlternatives[0],alternatives:allowedPrimary?allowedAlternatives:allowedAlternatives.slice(1),source:'publisher'};
+  }
+  async function freeVisualsForDirectArticle(title){
+    const query=String(title||'').replace(/\s+/g,' ').trim().slice(0,110);
+    if(query.length<2)return null;
+    try{
+      const out=await directArticleApi(`/api/free-images?q=${encodeURIComponent(query)}&limit=6`);
+      const items=(out.results||[]).filter(x=>x?.autoUseAllowed&&(x.proxyUrl||x.url));
+      if(!items.length)return null;
+      const normalize=x=>({
+        url:x.proxyUrl||x.url,
+        originalUrl:x.originalUrl||x.url,
+        sourceName:x.source||'Wikimedia Commons',
+        credit:x.attribution||x.credit||x.author||'Wikimedia Commons',
+        articleUrl:x.pageUrl||'',
+        autoUseAllowed:true,
+        origin:'free-bank',
+        license:x.license||''
+      });
+      return {primary:normalize(items[0]),alternatives:items.slice(1).map(normalize),source:'free-bank'};
+    }catch{return null;}
+  }
+  async function buildDirectArticleProject(data,articleUrl){
+    const selected=data?.reading?.selectedSource||{};
+    const title=selected.title||data?.topicTitle||data?.slides?.[0]?.title||'Carrossel da matéria';
+    let articleVisuals=publisherVisualsFromCarousel(data);
+    let visualMode='publisher';
+    if(!articleVisuals){
+      articleVisuals=await freeVisualsForDirectArticle(title);
+      visualMode=articleVisuals?'free-bank':'none';
+    }
+    return {
+      contractVersion:'ronda-one-direct-article-v1',
+      source:'forma-direct-article',
+      sourceVersion:'0.8.8',
+      title,
+      editoria:'Notícias',
+      slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
+      questions:data?.questions||{},
+      entities:data?.entities||{},
+      facts:data?.facts||[],
+      reading:data?.reading||{},
+      verificationLinks:data?.verificationLinks?.length?data.verificationLinks:[{title,sourceName:selected.sourceName||'Fonte da matéria',url:articleUrl}],
+      disclaimer:data?.disclaimer||'Confirme o contexto no link original antes de publicar.',
+      articleVisuals:articleVisuals||{primary:null,alternatives:[]},
+      directArticle:{url:articleUrl,visualMode,generatedAt:new Date().toISOString(),jobId:directArticleState.lastJobId||null},
+      editorialGate:data?.editorialGate||null,
+      validation:data?.validation||null
+    };
+  }
+  async function generateDirectArticleCarousel(){
+    if(directArticleState.busy)return;
+    const input=$('#directArticleUrl'),button=$('#directArticleGenerate'),articleUrl=String(input?.value||'').trim();
+    if(!/^https?:\/\//i.test(articleUrl)){setDirectArticleStatus('Cole um link completo começando com http:// ou https://.','error',0);input?.focus();return;}
+    directArticleState.busy=true;button.disabled=true;const original=button.textContent;button.textContent='Lendo matéria…';
+    setDirectArticleStatus('Enviando a matéria para o mesmo pipeline editorial da RONDA…','',2);
+    try{
+      const response=await directArticleApi('/api/design/article-carousel',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url:articleUrl,slideCount:Number($('#directArticleSlides').value)||7,force:Boolean($('#directArticleForce').checked)})
+      });
+      let data=response?.data||null;
+      if(!data?.slides?.length&&response?.job?.jobId)data=await waitDirectArticleJob(response.job.jobId,response.pollAfterMs);
+      if(!data?.slides?.length)throw new Error('O pipeline terminou sem slides válidos.');
+
+      setDirectArticleStatus('Conteúdo concluído. Selecionando imagem editorial…','',92);
+      const project=await buildDirectArticleProject(data,articleUrl);
+      if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas do carrossel.');
+
+      const templateId=$('#directArticleTemplate').value;
+      if(templateId){
+        const template=getTemplates().find(t=>String(t.id)===String(templateId));
+        if(template){
+          setDirectArticleStatus('Aplicando conteúdo ao template selecionado…','',97);
+          if(!applySmartTemplate(template))throw new Error('O conteúdo foi gerado, mas o template selecionado não pôde ser aplicado.');
+        }
+      }
+      const visualMode=project.directArticle?.visualMode;
+      const visualLabel=visualMode==='publisher'?'imagem da matéria':visualMode==='free-bank'?'imagem do Banco Free':'sem imagem automática liberada';
+      setDirectArticleStatus(`Carrossel concluído · ${project.slides.length} slides · ${visualLabel}${templateId?' · template aplicado':''}.`,'ok',100);
+      showToast(`Matéria → carrossel concluído · ${project.slides.length} slides`,3200);
+    }catch(error){
+      setDirectArticleStatus(error.message||'Não foi possível gerar o carrossel.','error',100);
+      showToast(error.message||'Falha ao gerar a partir da matéria',4000);
+    }finally{
+      directArticleState.busy=false;button.disabled=false;button.textContent=original;
+    }
+  }
+  $('#directArticleGenerate').onclick=generateDirectArticleCarousel;
+  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;setDirectArticleStatus('', '', 0);};
+  $('#directArticleUrl').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();generateDirectArticleCarousel();}});
   function renderSmartTemplateStatus(){
     const text=$('#smartTemplateStatusText'),reapply=$('#reapplySmartTemplate'),detach=$('#detachSmartTemplate');if(!text)return;
     if(!state.rondaContentModel?.slides?.length){text.textContent='Importe um carrossel da RONDA para aplicar o conteúdo automaticamente.';text.classList.remove('template-warning');reapply.disabled=true;detach.disabled=true;return;}
@@ -1160,7 +1346,7 @@
   $('#reapplySmartTemplate').onclick=reapplySmartTemplate;$('#detachSmartTemplate').onclick=detachSmartTemplate;
   function miniShapeStyle(m,e,sx,sy){if(e.type==='circle')m.style.borderRadius='50%';if(['rect','square','roundRect'].includes(e.type))m.style.borderRadius=Math.min(12,(e.radii?.[0]||0)*sx)+'px';if(e.type==='triangle')m.style.clipPath='polygon(50% 0,100% 100%,0 100%)';if(e.type==='star')m.style.clipPath=starPolygonCss(e.starPoints||5,e.starInner??44);}
   function renderTemplates(){
-    renderSmartTemplateStatus();const templates=getTemplates(),grid=$('#templateGrid'),empty=$('#templateEmpty');grid.innerHTML='';empty.style.display=templates.length?'none':'flex';
+    renderDirectArticleTemplates();renderSmartTemplateStatus();const templates=getTemplates(),grid=$('#templateGrid'),empty=$('#templateEmpty');grid.innerHTML='';empty.style.display=templates.length?'none':'flex';
     templates.forEach(raw=>{const t=normalizeTemplateRecord(raw);if(!t)return;const d=migrateSnapshot(t.project.artboards[0]),card=document.createElement('button');card.className='template-card'+(t.smart?' smart-template':'');const preview=document.createElement('div');preview.className='template-preview';preview.style.background=backgroundCss(d);if(t.smart){const badge=document.createElement('span');badge.className='template-smart-badge';badge.textContent='INTELIGENTE';preview.appendChild(badge);}
       (d.elements||[]).slice(0,18).forEach(e=>{const isImg=e.type==='image'||(e.type==='mask'&&e.src),m=document.createElement(isImg?'img':'div'),sx=100/d.width,sy=100/d.height;m.className='mini-el';m.style.left=(e.x*sx)+'%';m.style.top=(e.y*sy)+'%';m.style.width=(e.w*sx)+'%';m.style.height=(e.h*sy)+'%';m.style.opacity=(e.opacity??100)/100;m.style.transform=`rotate(${e.rotation||0}deg)`;if(e.type==='text'){m.textContent=e.text;m.style.fontSize=Math.max(2,e.fontSize*sy)+'px';m.style.fontWeight=e.fontWeight;m.style.fontFamily=familyCss(e.fontFamily);m.style.color=e.textColor;m.style.overflow='hidden';}else if(e.type==='image'){m.src=e.src;m.style.objectFit=e.objectFit||'cover';}else if(e.type==='mask'){if(e.src){m.src=e.src;m.style.objectFit='cover';}else m.style.background='#ddd';if(e.maskShape==='circle')m.style.borderRadius='50%';if(e.maskShape==='square')m.style.borderRadius=Math.min(10,(e.radii?.[0]||0)*sx)+'px';if(e.maskShape==='triangle')m.style.clipPath='polygon(50% 0,100% 100%,0 100%)';}else{ensureShapePaint(e);m.style.background=shapeFillCss(e);if(e.strokeWidth){if(['triangle','star'].includes(e.type))m.style.filter=shapeStrokeFilter(Math.max(1,e.strokeWidth*sx),e.strokeColor);else m.style.border=`${Math.max(1,e.strokeWidth*sx)}px solid ${e.strokeColor}`;}miniShapeStyle(m,e,sx,sy);}preview.appendChild(m);});
       const meta=document.createElement('div');meta.className='template-meta';meta.innerHTML=`<strong>${escapeHtml(t.name)}</strong><span>${escapeHtml(t.category||'Outro')} · ${t.project.artboards.length} layout(s) · ${t.slotCount||0} campos</span>`;card.append(preview,meta);card.onclick=()=>{if(state.rondaContentModel?.slides?.length){applySmartTemplate(t);return;}if(confirm(`Abrir o template “${t.name}”?`)){const project=t.project;state.artboards=clone(project.artboards);state.activeArtboardId=project.activeArtboardId&&state.artboards.some(b=>b.id===project.activeArtboardId)?project.activeArtboardId:state.artboards[0].id;state.docTitle=t.name;state.rondaContentModel=null;state.templateBinding=null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;fitZoom();renderAll();showToast('Template aberto');}};grid.appendChild(card);
