@@ -1,6 +1,6 @@
-# RONDA ONE Cloud v0.9.7.1 — Fast Carousel + Source Credits + Scraping Optimization
+# RONDA ONE Cloud v0.9.7.2.1 — Mandatory Slide Count
 
-A v0.9.7.1 é cumulativa: mantém a **v0.9.6 — Unified FORMA Production Engine** e a **v0.9.7 — Scraping + Evidence Engine**, acrescentando fast paths de geração, transparência da fonte lida, créditos de imagem e controle de exclusão de templates.
+A v0.9.7.2.1 é cumulativa e mantém toda a base da v0.9.7.2: mantém o Production Engine, scraping, Evidence Pack, fast paths e créditos da v0.9.7.1, mas simplifica a produção para **uma fonte principal + um único backup**, normalização editorial em **português do Brasil** e geração **Content First**, na qual o template só é aplicado depois que o conteúdo está pronto.
 
 A divisão operacional passa a ser explícita:
 
@@ -13,6 +13,30 @@ FORMA DESIGN
 ```
 
 A RONDA não é mais o ponto principal de geração. Nos cards, a ação passa a ser **Produzir no FORMA →**. Pautas da RONDA, eventos da Mesa, links externos e texto próprio entram no mesmo Production Engine.
+
+
+## v0.9.7.2.1 — Mandatory Slide Count
+
+Antes de uma produção nova começar, o FORMA pergunta obrigatoriamente **quantos slides terá o carrossel**. A confirmação acontece antes de scraping, leitura, Evidence Pack ou Multi-AI.
+
+- presets rápidos: 3, 5, 7 e 10 slides;
+- quantidade personalizada entre 3 e 15;
+- vale para pauta da RONDA/Mesa, link externo e qualquer chamada nova ao Production Engine;
+- o backend também rejeita `POST /api/production/jobs` sem `slideCount`, evitando que outro cliente pule a etapa;
+- cancelar a escolha não cria job e não dispara leitura/IA;
+- trocar template ou editar um carrossel já pronto não pergunta novamente, pois não inicia nova geração.
+
+
+## v0.9.7.2 — Single Source + Content First
+
+- o conteúdo do carrossel é gerado primeiro em um layout editorial neutro;
+- templates não participam da leitura nem da Multi-AI e podem ser aplicados/trocados depois sem nova geração;
+- pautas escolhem uma fonte principal por score e usam somente uma fonte backup se a principal falhar;
+- não há leitura paralela de vários publishers para a mesma produção;
+- matérias em inglês ou espanhol são normalizadas para pt-BR antes da criação do Evidence Pack quando Workers AI está disponível;
+- a IA de redação recebe regra estrutural de saída em pt-BR;
+- o FORMA mostra fonte principal/backup, URL efetivamente lida e tempos de leitura, tradução, IA e total;
+- carrossel pronto continua independente de falhas ou exclusão de templates.
 
 ## v0.9.7.1 — geração mais ágil e auditável
 

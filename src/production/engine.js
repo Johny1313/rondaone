@@ -6,9 +6,10 @@ import {
   validateArticleUrl,
 } from "../ronda/v285/article-reader.js";
 import { stableHash, plainText } from "../ronda/v285/parser.js";
+import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.1";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.2";
 const JOB_TTL_HOURS = 48;
 const EVIDENCE_TTL_DAYS = 7;
 const MAX_RESULT_JSON = 900_000;
@@ -21,6 +22,77 @@ function parseJson(value,fallback=null){ try{return JSON.parse(String(value||"")
 function clipJson(value,limit,label){const text=safeJson(value,{});if(text.length>limit)throw new Error(`${label} excedeu o limite seguro de armazenamento.`);return text;}
 function queueForRead(env){return env?.ARTICLE_READ_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null;}
 function queueForCarousel(env){return env?.CAROUSEL_AI_QUEUE || env?.CAROUSEL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null;}
+
+function detectProductionLanguage(value, sourceName=""){
+  const text=plainText(value).slice(0,4200);
+  if(!text)return "pt";
+  const source=String(sourceName||"").toLocaleLowerCase("pt-BR");
+  if(/el pa[ií]s|infobae|espa[nñ]a|argentina|m[eé]xico/.test(source))return "es";
+  const lower=text.toLocaleLowerCase("pt-BR");
+  const portuguese=(lower.match(/\b(não|uma|das|dos|pela|pelo|pelas|pelos|após|são|foi|foram|brasileiro|brasileira|disse|afirmou|segundo|também)\b/g)||[]).length + (lower.match(/[ãõç]/g)||[]).length*2;
+  const spanish=(lower.match(/\b(el|la|los|las|del|una|unos|unas|gobierno|según|también|dijo|afirmó|desde|hacia|sin|pero|este|esta|estos|estas)\b/g)||[]).length;
+  const english=(lower.match(/\b(the|and|that|with|from|this|government|said|will|after|before|according|between|about|have|has|was|were|are|is)\b/g)||[]).length;
+  if(portuguese>=3&&portuguese>=spanish*1.1&&portuguese>=english*1.1)return "pt";
+  if(spanish>=3&&spanish>english*1.15)return "es";
+  if(english>=3)return "en";
+  return isLikelyPortuguese(text)?"pt":"en";
+}
+
+function splitTranslationText(value,limit=1700){
+  const text=plainText(value);if(!text)return [];
+  const paragraphs=text.split(/\n{2,}/).map(x=>x.trim()).filter(Boolean);const chunks=[];let current="";
+  const push=()=>{if(current.trim())chunks.push(current.trim());current="";};
+  for(const paragraph of paragraphs.length?paragraphs:[text]){
+    const sentences=paragraph.match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[paragraph];
+    for(const sentenceRaw of sentences){const sentence=sentenceRaw.trim();if(!sentence)continue;if((current+" "+sentence).trim().length>limit&&current)push();if(sentence.length>limit){for(let i=0;i<sentence.length;i+=limit){if(current)push();chunks.push(sentence.slice(i,i+limit));}}else current=(current?`${current} `:"")+sentence;}
+    if(current&&current.length>limit*.72)push();
+  }
+  push();return chunks;
+}
+
+async function translateArticleRecordToPtBr(env,record){
+  const content=plainText(record?.content);const detected=detectProductionLanguage(`${record?.title||""}\n${record?.subtitle||""}\n${content.slice(0,3200)}`,record?.sourceName);
+  if(detected==="pt")return {...record,sourceLanguage:"pt",targetLanguage:"pt-BR",translationStatus:"not-needed",translationDurationMs:0};
+  if(!env?.AI?.run)return {...record,sourceLanguage:detected,targetLanguage:"pt-BR",translationStatus:"deferred-to-carousel-ai",translationDurationMs:0};
+  const started=Date.now();
+  try{
+    const [title,subtitle]=await Promise.all([
+      record?.title?translateText(env.AI,record.title,detected,{attempts:2}):Promise.resolve(null),
+      record?.subtitle?translateText(env.AI,record.subtitle,detected,{attempts:2}):Promise.resolve(null),
+    ]);
+    const chunks=splitTranslationText(content,1700);const translated=[];
+    for(let start=0;start<chunks.length;start+=3){
+      const batch=chunks.slice(start,start+3);
+      const out=await Promise.all(batch.map(chunk=>translateText(env.AI,chunk,detected,{attempts:2}).catch(()=>null)));
+      translated.push(...out.map((item,index)=>item||batch[index]));
+    }
+    const translatedContent=plainText(translated.join("\n\n"));
+    const finalTitle=title||record.title;const finalSubtitle=subtitle||record.subtitle;
+    const contentReady=Boolean(translatedContent)&&detectProductionLanguage(translatedContent.slice(0,4200),"")==="pt";
+    const titleReady=!finalTitle||detectProductionLanguage(finalTitle,"")==="pt";
+    const subtitleReady=!finalSubtitle||detectProductionLanguage(finalSubtitle,"")==="pt";
+    const complete=contentReady&&titleReady&&subtitleReady;
+    return {...record,title:finalTitle,subtitle:finalSubtitle,content:translatedContent||content,wordCount:(translatedContent||content).split(/\s+/).filter(Boolean).length,sourceLanguage:detected,targetLanguage:"pt-BR",translationStatus:complete?"translated":"partial-fallback",translationDurationMs:Date.now()-started,originalText:content.slice(0,20000),originalTitle:record?.title||null};
+  }catch(error){return {...record,sourceLanguage:detected,targetLanguage:"pt-BR",translationStatus:"deferred-to-carousel-ai",translationError:String(error?.message||error).slice(0,220),translationDurationMs:Date.now()-started};}
+}
+
+
+function evidencePtBrReady(evidence){const translation=evidence?.translation||{};return translation.sourceLanguage==="pt"||["translated","not-needed"].includes(String(translation.status||""));}
+
+async function ensureEvidencePackPtBr(env,evidence){
+  if(!evidence?.articleText)return evidence;
+  const translation=evidence.translation||{};
+  const alreadyPt=translation.targetLanguage==="pt-BR"&&["translated","not-needed"].includes(String(translation.status||""));
+  if(alreadyPt)return evidence;
+  const record={ok:true,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl,sourceName:evidence.sourceName,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,content:evidence.articleText,wordCount:evidence.wordCount,extractionMethod:evidence?.reading?.method,adapter:evidence?.reading?.adapter,readMode:evidence?.reading?.mode,images:evidence.images,readingQuality:evidence?.reading?.quality,degraded:evidence?.reading?.degraded,sourceSelection:evidence.sourceSelection||evidence?.reading?.sourceSelection||null};
+  const translated=await translateArticleRecordToPtBr(env,record);
+  const rebuilt=buildEvidencePack(translated,{sourceType:evidence.sourceType||"url",sourceRef:evidence.sourceRef||evidence.url||null,topicId:evidence.topicId||null});
+  rebuilt.sourceSelection=evidence.sourceSelection||translated.sourceSelection||null;
+  rebuilt.reading={...rebuilt.reading,sourceSelection:rebuilt.sourceSelection,attempts:evidence?.reading?.attempts||rebuilt.reading.attempts};
+  rebuilt.translation={sourceLanguage:translated.sourceLanguage||"pt",targetLanguage:"pt-BR",status:translated.translationStatus||"not-needed",durationMs:Number(translated.translationDurationMs)||0,error:translated.translationError||null};
+  rebuilt.createdAt=evidence.createdAt||rebuilt.createdAt;
+  return rebuilt;
+}
 
 export async function ensureProductionSchema(db){
   if(!db)throw new Error("Binding D1 'DB' não configurado.");
@@ -214,25 +286,35 @@ export async function processProductionRead(env,jobId,{force=false}={}){
   if(job.status==="ready"&&job.result)return job;
   await updateJob(db,jobId,{status:"running",stage:"reading",progress:10,error:null});await event(db,jobId,"reading","running","Leitura iniciada");
   try{
-    if(!force){const cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)});if(cached?.articleText&&Number(cached?.reading?.quality)>=55){await saveEvidencePackage(db,cached);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:46,evidenceId:cached.id,fallbackLevel:1});await event(db,jobId,"evidence","completed_fallback","Evidence Pack recuperado do cache",{quality:cached?.reading?.quality});return job;}}
+    if(!force){let cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)});if(cached?.articleText&&Number(cached?.reading?.quality)>=55){cached=await ensureEvidencePackPtBr(env,cached);if(!evidencePtBrReady(cached))throw new Error("A matéria está em outro idioma e a tradução para português do Brasil não pôde ser concluída.");await saveEvidencePackage(db,cached);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:46,evidenceId:cached.id,fallbackLevel:1});await event(db,jobId,"evidence","completed_fallback","Evidence Pack recuperado do cache e normalizado para PT-BR",{quality:cached?.reading?.quality,translation:cached?.translation?.status||"not-needed"});return job;}}
     let evidenceResult;
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
-      const record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||12_000,allowCollectedFastPath:!force});
+      let record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||12_000,allowCollectedFastPath:!force});
       if(!record.ok)throw new Error(record.error||"A matéria externa não forneceu leitura útil.");
+      record=await translateArticleRecordToPtBr(env,record);
       evidenceResult={ok:true,evidence:buildEvidencePack(record,{sourceType:"url",sourceRef:job.sourceRef})};
+      evidenceResult.evidence.translation={sourceLanguage:record.sourceLanguage||"pt",targetLanguage:"pt-BR",status:record.translationStatus||"not-needed",durationMs:Number(record.translationDurationMs)||0,error:record.translationError||null};
+      if(!evidencePtBrReady(evidenceResult.evidence))throw new Error("A tradução da matéria para português do Brasil não pôde ser concluída.");
     }else if(job.sourceType==="topic"||job.sourceType==="event"){
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
       evidenceResult=await scrapeTopicToEvidence(topic,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||12_000,allowCollectedFastPath:!force});
-      if(!evidenceResult.ok)throw new Error(evidenceResult.error||"Nenhuma fonte da pauta foi lida.");
-      evidenceResult.evidence={...evidenceResult.evidence,sourceType:job.sourceType,sourceRef:job.sourceRef,topicId:job.sourceRef};
+      if(!evidenceResult.ok)throw new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil.");
+      const translatedRecord=await translateArticleRecordToPtBr(env,evidenceResult.record);
+      const translatedPack=buildEvidencePack(translatedRecord,{sourceType:job.sourceType,sourceRef:job.sourceRef,topicId:job.sourceRef});
+      translatedPack.sourceSelection=evidenceResult.selection||evidenceResult.evidence?.sourceSelection||translatedRecord.sourceSelection||null;
+      translatedPack.reading={...translatedPack.reading,sourceSelection:translatedPack.sourceSelection};
+      translatedPack.translation={sourceLanguage:translatedRecord.sourceLanguage||"pt",targetLanguage:"pt-BR",status:translatedRecord.translationStatus||"not-needed",durationMs:Number(translatedRecord.translationDurationMs)||0,error:translatedRecord.translationError||null};
+      evidenceResult={...evidenceResult,record:translatedRecord,evidence:translatedPack};
+      if(!evidencePtBrReady(translatedPack))throw new Error("A tradução da fonte selecionada para português do Brasil não pôde ser concluída.");
     }else{
       const text=plainText(job.input?.text);if(text.length<120)throw new Error("Texto próprio insuficiente para produção.");
       const record={ok:true,url:null,canonicalUrl:null,sourceName:"Texto próprio",title:plainText(job.input?.title)||"Conteúdo próprio",subtitle:"",author:null,publishedAt:null,content:text,wordCount:text.split(/\s+/).filter(Boolean).length,extractionMethod:"user-text",adapter:null,readMode:"full",images:null,readingQuality:100,degraded:false,attempts:[]};
       evidenceResult={ok:true,evidence:buildEvidencePack(record,{sourceType:"text",sourceRef:job.sourceRef||job.id})};
+      evidenceResult.evidence.translation={sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed",durationMs:0};
     }
     const evidence=await saveEvidencePackage(db,evidenceResult.evidence);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:48,evidenceId:evidence.id,fallbackLevel:evidence?.reading?.degraded?1:0});
-    await event(db,jobId,"evidence","completed",`Evidence Pack criado · ${evidence.wordCount} palavras`,{quality:evidence?.reading?.quality,method:evidence?.reading?.method});
+    await event(db,jobId,"evidence","completed",`Evidence Pack criado · ${evidence.wordCount} palavras · PT-BR`,{quality:evidence?.reading?.quality,method:evidence?.reading?.method,sourceRole:evidence?.sourceSelection?.selectedRole||"direct",translation:evidence?.translation?.status||"not-needed"});
     return job;
   }catch(error){await updateJob(db,jobId,{status:"failed",stage:"reading",progress:100,error:error?.message||String(error)});await event(db,jobId,"reading","failed",error?.message||String(error));throw error;}
 }
@@ -246,7 +328,7 @@ function evidenceSyntheticHtml(evidence){
 
 export async function processProductionGenerate(env,jobId){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
-  const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;if(!evidence?.articleText)throw new Error("Evidence Pack não encontrado para a produção.");
+  const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;if(!evidence?.articleText)throw new Error("Evidence Pack não encontrado para a produção.");if(!evidencePtBrReady(evidence))throw new Error("A produção foi bloqueada porque o conteúdo ainda não está normalizado em português do Brasil.");
   await updateJob(db,jobId,{status:"running",stage:"generating",progress:58,error:null});await event(db,jobId,"generating","running","Multi-AI iniciada",{quality:evidence?.reading?.quality});
   try{
     const sourceUrl=evidence.canonicalUrl||evidence.url||"https://example.com/ronda-evidence";
@@ -256,7 +338,8 @@ export async function processProductionGenerate(env,jobId){
     const models=[env.ARTICLE_ANALYSIS_MODEL||ARTICLE_ANALYSIS_MODEL,env.ARTICLE_SECONDARY_MODEL||ARTICLE_SECONDARY_MODEL,...(String(env.CAROUSEL_TERTIARY_AI||"")==="1"?[env.ARTICLE_TERTIARY_MODEL||ARTICLE_TERTIARY_MODEL]:[])];
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildIntelligentCarousel(topic,{ai:env.AI,model:models[0],models,multiAiMode:"failover",fetcher:syntheticFetcher,liveReading:true,slideCount,styleKey:job.input?.styleKey||"production",writingStyle:job.input?.writingProfile||null,articleTimeoutMs:6_000});
-    const finalResult={...result,editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.1",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,wordCount:evidence.wordCount,reading:evidence.reading,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.2",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score});return job;
   }catch(error){await updateJob(db,jobId,{status:"failed",stage:"generating",progress:100,error:error?.message||String(error)});await event(db,jobId,"generating","failed",error?.message||String(error));throw error;}
 }
@@ -264,11 +347,12 @@ export async function processProductionGenerate(env,jobId){
 export async function startProductionPipeline(env,jobId,{force=false,ctx=null}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(!force){
-    const cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)}).catch(()=>null);
+    let cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)}).catch(()=>null);
     if(cached?.articleText&&Number(cached?.reading?.quality)>=55){
+      cached=await ensureEvidencePackPtBr(env,cached);
       await saveEvidencePackage(db,cached).catch(()=>null);
       job=await updateJob(db,jobId,{status:"queued",stage:"generating",progress:52,evidenceId:cached.id,fallbackLevel:1,error:null});
-      await event(db,jobId,"evidence","completed_fallback","Fast path: Evidence Pack recente reutilizado; leitura pulada",{quality:cached?.reading?.quality,readUrl:cached?.resolvedUrl||cached?.canonicalUrl||cached?.url||null}).catch(()=>null);
+      await event(db,jobId,"evidence","completed_fallback","Fast path: Evidence Pack recente reutilizado; leitura pulada; PT-BR garantido",{quality:cached?.reading?.quality,readUrl:cached?.resolvedUrl||cached?.canonicalUrl||cached?.url||null,translation:cached?.translation?.status||"not-needed"}).catch(()=>null);
       const carouselQueue=queueForCarousel(env);
       if(carouselQueue?.send){
         try{await carouselQueue.send({type:"production-generate",jobId});await event(db,jobId,"generating","queued","Fast path enviado direto para CAROUSEL_AI_QUEUE").catch(()=>null);return job;}

@@ -196,15 +196,15 @@
               <button class="mini-btn" id="newDesignBtn">Novo</button>
             </div>
             <div class="direct-article-card" id="directArticleCard">
-              <div class="direct-title"><strong>Produção FORMA</strong><span>Um único fluxo para pautas da RONDA, links externos, evidências, Multi-AI e template.</span></div>
+              <div class="direct-title"><strong>Produção FORMA</strong><span>Gere primeiro o conteúdo neutro em PT-BR. Escolha ou troque o template somente depois que o carrossel estiver pronto.</span></div>
               <label for="directArticleUrl">Link da matéria</label>
               <input id="directArticleUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://portal.com.br/noticia..." />
               <div class="direct-article-grid">
-                <div><label for="directArticleTemplate">Template</label><select id="directArticleTemplate"><option value="">Layout padrão da RONDA</option></select></div>
-                <div><label for="directArticleSlides">Slides</label><select id="directArticleSlides"><option>3</option><option>4</option><option>5</option><option>6</option><option selected>7</option><option>8</option><option>9</option><option>10</option></select></div>
+                <div><label for="directArticleTemplate">Template visual · depois de gerar</label><select id="directArticleTemplate"><option value="">Escolha depois do conteúdo</option></select></div>
+                <div><label for="directArticleSlides">Pré-seleção de slides</label><select id="directArticleSlides"><option>3</option><option>4</option><option>5</option><option>6</option><option selected>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option><option>13</option><option>14</option><option>15</option></select></div>
               </div>
               <label class="direct-article-check"><input id="directArticleForce" type="checkbox"> Releitura completa · ignorar carrossel em cache</label>
-              <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Analisar e produzir</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div>
+              <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Gerar conteúdo</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div><button class="mini-btn" id="directArticleApplyTemplate" type="button" disabled style="width:100%;margin-top:6px">Aplicar template ao carrossel pronto</button>
               <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div><div id="productionStages" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px;font-size:8px"><span data-prod-stage="source">1 Fonte</span><span data-prod-stage="reading">2 Leitura</span><span data-prod-stage="evidence">3 Evidências</span><span data-prod-stage="generating">4 Multi-AI</span><span data-prod-stage="quality">5 Qualidade</span><span data-prod-stage="ready">6 FORMA</span></div>
               <div class="production-source-summary hidden" id="productionSourceSummary"><strong>Matéria efetivamente lida</strong><a id="productionSourceLink" href="#" target="_blank" rel="noopener noreferrer"></a><span id="productionSourceMeta"></span><div class="production-image-credits" id="productionImageCredits"></div></div>
             </div>
@@ -546,6 +546,7 @@
 
   <div class="toast" id="toast"></div>
 
+  <div class="modal-backdrop hidden" id="slideCountModal" data-required-choice-modal="1"><div class="modal"><button class="modal-x" id="slideCountCancelX" type="button" aria-label="Cancelar">×</button><h2>Quantos slides terá este carrossel?</h2><p>O Production Engine só começa depois desta confirmação. A quantidade escolhida orienta a leitura, a redação da Multi-AI e o Quality Gate.</p><div id="slideCountPresets" style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:12px 0"><button class="secondary-btn" type="button" data-slide-choice="3">3</button><button class="secondary-btn" type="button" data-slide-choice="5">5</button><button class="primary-btn" type="button" data-slide-choice="7">7</button><button class="secondary-btn" type="button" data-slide-choice="10">10</button></div><label>Quantidade personalizada · 3 a 15 slides<input id="slideCountCustom" type="number" min="3" max="15" step="1" value="7" inputmode="numeric" /></label><div class="helper-card"><strong>Decisão editorial obrigatória</strong><span>Nenhuma matéria será lida e nenhuma IA será acionada antes de você confirmar a quantidade.</span></div><div class="modal-actions"><button class="secondary-btn" id="slideCountCancel" type="button">Cancelar</button><button class="primary-btn" id="slideCountConfirm" type="button">Gerar com 7 slides</button></div></div></div>
   <div class="modal-backdrop hidden" id="templateModal"><div class="modal"><button class="modal-x" data-close-modal="templateModal">×</button><h2>Salvar como template</h2><p>O template salva todas as pranchetas e detecta automaticamente Título, Texto, Imagem, Fonte, CTA e outros campos semânticos.</p><label>Nome do template<input id="templateName" placeholder="Ex.: Post Breaking News" /></label><label>Categoria<select id="templateCategory"><option>Social</option><option>Broadcast</option><option>Notícia</option><option>Esporte</option><option>Institucional</option><option>Outro</option></select></label><div class="modal-actions"><button class="secondary-btn" data-close-modal="templateModal">Cancelar</button><button class="primary-btn" id="confirmTemplate">Salvar template</button></div></div></div>
 
   <div class="modal-backdrop hidden" id="customSizeModal"><div class="modal"><button class="modal-x" data-close-modal="customSizeModal">×</button><h2>Área de trabalho personalizada</h2><p>Defina qualquer dimensão em pixels.</p><div class="field-grid two modal-fields"><label>Largura (px)<input id="customWidth" type="number" min="64" max="8192" value="1920" /></label><label>Altura (px)<input id="customHeight" type="number" min="64" max="8192" value="1080" /></label></div><label class="check-row"><input id="saveCustomPreset" type="checkbox" /> Salvar como preset</label><label id="customPresetNameWrap" class="hidden">Nome do preset<input id="customPresetName" placeholder="Ex.: Telão estúdio" /></label><div class="modal-actions"><button class="secondary-btn" id="swapCustomSize">↔ Inverter</button><button class="primary-btn" id="applyCustomSize">Criar área</button></div></div></div>
@@ -704,6 +705,18 @@
   function showToast(msg,ms=1900){toast.textContent=msg;toast.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>toast.classList.remove('show'),ms);}
   function openModal(id){$('#'+id).classList.remove('hidden');}
   function closeModal(id){$('#'+id).classList.add('hidden');}
+  const CAROUSEL_SLIDE_MIN=3,CAROUSEL_SLIDE_MAX=15;
+  let slideCountChoiceResolve=null,slideCountChoiceValue=7;
+  function normalizeCarouselSlideChoice(value){const n=Number(value);return Number.isInteger(n)&&n>=CAROUSEL_SLIDE_MIN&&n<=CAROUSEL_SLIDE_MAX?n:null;}
+  function paintSlideCountChoice(value){const normalized=normalizeCarouselSlideChoice(value)||7;slideCountChoiceValue=normalized;const custom=$('#slideCountCustom'),confirm=$('#slideCountConfirm');if(custom)custom.value=normalized;if(confirm)confirm.textContent=`Gerar com ${normalized} slides`;document.querySelectorAll('[data-slide-choice]').forEach(button=>{const active=Number(button.dataset.slideChoice)===normalized;button.classList.toggle('primary-btn',active);button.classList.toggle('secondary-btn',!active);});}
+  function finishSlideCountChoice(value){const normalized=normalizeCarouselSlideChoice(value);if(!normalized){showToast(`Escolha entre ${CAROUSEL_SLIDE_MIN} e ${CAROUSEL_SLIDE_MAX} slides`);$('#slideCountCustom')?.focus();return;}const select=$('#directArticleSlides');if(select)select.value=String(normalized);try{localStorage.setItem('rondaOne.lastCarouselSlideCount',String(normalized));}catch{}closeModal('slideCountModal');const resolve=slideCountChoiceResolve;slideCountChoiceResolve=null;if(resolve)resolve(normalized);}
+  function cancelSlideCountChoice(){closeModal('slideCountModal');const resolve=slideCountChoiceResolve;slideCountChoiceResolve=null;if(resolve)resolve(null);}
+  function requestCarouselSlideCount(){if(slideCountChoiceResolve)return Promise.reject(new Error('A escolha de slides já está aberta.'));let initial=null;try{initial=normalizeCarouselSlideChoice(localStorage.getItem('rondaOne.lastCarouselSlideCount'));}catch{}initial=initial||normalizeCarouselSlideChoice($('#directArticleSlides')?.value)||7;paintSlideCountChoice(initial);openModal('slideCountModal');setTimeout(()=>$('#slideCountCustom')?.focus(),40);return new Promise(resolve=>{slideCountChoiceResolve=resolve;});}
+  document.querySelectorAll('[data-slide-choice]').forEach(button=>button.addEventListener('click',()=>paintSlideCountChoice(button.dataset.slideChoice)));
+  $('#slideCountCustom')?.addEventListener('input',event=>{const value=normalizeCarouselSlideChoice(event.target.value);if(value)paintSlideCountChoice(value);});
+  $('#slideCountCustom')?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();finishSlideCountChoice(event.currentTarget.value);}});
+  $('#slideCountConfirm')?.addEventListener('click',()=>finishSlideCountChoice($('#slideCountCustom')?.value));
+  $('#slideCountCancel')?.addEventListener('click',cancelSlideCountChoice);$('#slideCountCancelX')?.addEventListener('click',cancelSlideCountChoice);
 
   function snapshot(){
     return {width:state.width,height:state.height,bg:state.bg,bgMode:state.bgMode,gradient:clone(state.gradient),elements:clone(state.elements),docTitle:state.docTitle};
@@ -1197,10 +1210,10 @@
   function renderDirectArticleTemplates(){
     const select=$('#directArticleTemplate');if(!select)return;
     const previous=select.value,templates=getTemplates().map(normalizeTemplateRecord).filter(Boolean);
-    select.innerHTML='<option value="">Layout padrão da RONDA</option>';
+    select.innerHTML='<option value="">Escolha depois do conteúdo</option>';
     templates.forEach(t=>{const o=document.createElement('option');o.value=String(t.id||'');o.textContent=`${t.name} · ${t.project?.artboards?.length||1} layout(s)`;select.appendChild(o);});
     if(previous&&templates.some(t=>String(t.id)===previous))select.value=previous;
-    else if(templates.length)select.value=String(templates[0].id||'');
+    else select.value='';
   }
 
   function clearProductionProvenance(){const box=$('#productionSourceSummary'),link=$('#productionSourceLink'),meta=$('#productionSourceMeta'),credits=$('#productionImageCredits');box?.classList.add('hidden');if(link){link.textContent='';link.removeAttribute('href');}if(meta)meta.textContent='';if(credits)credits.innerHTML='';}
@@ -1208,7 +1221,7 @@
     const evidence=data?.evidencePack||{};const production=data?.production||{};const readUrl=production.readUrl||evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||data?.reading?.selectedSource?.extractionUrl||data?.reading?.selectedSource?.url||data?.verificationLinks?.[0]?.url||'';
     if(!/^https?:\/\//i.test(String(readUrl||''))){clearProductionProvenance();return;}
     const box=$('#productionSourceSummary'),link=$('#productionSourceLink'),meta=$('#productionSourceMeta'),credits=$('#productionImageCredits');
-    link.href=readUrl;link.textContent=readUrl;const source=evidence.sourceName||production.sourceName||data?.reading?.selectedSource?.sourceName||'Fonte';const quality=Math.round(Number(evidence?.reading?.quality||production.readingQuality||0));const method=evidence?.reading?.method||'';const duration=Number(evidence?.reading?.durationMs||0);meta.textContent=`${source}${quality?` · leitura ${quality}/100`:''}${method?` · ${method}`:''}${duration?` · ${duration<1000?duration+' ms':(duration/1000).toFixed(1)+' s'}`:''}`;
+    link.href=readUrl;link.textContent=readUrl;const source=evidence.sourceName||production.sourceName||data?.reading?.selectedSource?.sourceName||'Fonte';const quality=Math.round(Number(evidence?.reading?.quality||production.readingQuality||0));const method=evidence?.reading?.method||'';const duration=Number(evidence?.reading?.durationMs||0);const sourceRole=evidence?.sourceSelection?.selectedRole||production.selectedSourceRole||'direct';const translation=evidence?.translation||{};const perf=production?.performance||{};const totalMs=Number(perf.totalMs)||0;const aiMs=Number(perf.aiMs)||0;const translationLabel=translation?.sourceLanguage&&translation.sourceLanguage!=='pt'?` · ${String(translation.sourceLanguage).toUpperCase()}→PT-BR ${translation.status==='translated'?'✓':'fallback'}`:' · PT-BR';const roleLabel=sourceRole==='primary'?'fonte principal':sourceRole==='backup'?'fonte backup':'fonte direta';meta.textContent=`${source} · ${roleLabel}${quality?` · leitura ${quality}/100`:''}${method?` · ${method}`:''}${duration?` · leitura ${duration<1000?duration+' ms':(duration/1000).toFixed(1)+' s'}`:''}${translationLabel}${aiMs?` · IA ${(aiMs/1000).toFixed(1)} s`:''}${totalMs?` · total ${(totalMs/1000).toFixed(1)} s`:''}`;
     const visuals=evidence?.images||data?.articleVisuals||data?.reading?.selectedSource?.images||{};const list=[visuals?.primary,...(visuals?.alternatives||[])].filter(Boolean);const unique=[];const seen=new Set();for(const image of list){const key=String(image.url||image.originalUrl||'');if(!key||seen.has(key))continue;seen.add(key);unique.push(image);if(unique.length>=5)break;}
     credits.innerHTML='';unique.forEach((image,index)=>{const row=document.createElement('div');row.className='production-image-credit';const photographer=String(image.photographer||'').trim();const credit=String(image.credit||'').trim();const origin=String(image.sourceName||source||'').trim();const parts=[];if(photographer)parts.push(`<b>Foto:</b> ${escapeHtml(photographer)}`);if(credit&&(!photographer||!credit.toLocaleLowerCase('pt-BR').includes(photographer.toLocaleLowerCase('pt-BR'))))parts.push(`<b>Crédito:</b> ${escapeHtml(credit)}`);if(origin)parts.push(`<b>Origem:</b> ${escapeHtml(origin)}`);row.innerHTML=`<b>${index===0?'Imagem principal':`Imagem ${index+1}`}</b>${parts.length?' · '+parts.join(' · '):' · crédito autoral não informado pelo portal'}`;credits.appendChild(row);});
     box.classList.remove('hidden');
@@ -1344,7 +1357,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.1',
+      sourceVersion:'0.9.7.2.1',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
@@ -1369,28 +1382,22 @@
     if(directArticleState.busy)return;
     const input=$('#directArticleUrl'),button=$('#directArticleGenerate'),articleUrl=String(input?.value||'').trim();
     if(!/^https?:\/\//i.test(articleUrl)){setDirectArticleStatus('Cole um link completo começando com http:// ou https://.','error',0);input?.focus();return;}
-    directArticleState.busy=true;directArticleState.lastReused=false;clearProductionProvenance();button.disabled=true;const original=button.textContent;button.textContent='Lendo matéria…';
-    setDirectArticleStatus('Criando produção no FORMA Production Engine…','',2);
+    const slideCount=await requestCarouselSlideCount();
+    if(!slideCount){setDirectArticleStatus('Geração cancelada antes da leitura. Escolha a quantidade de slides para começar.','',0);return;}
+    directArticleState.busy=true;directArticleState.lastReused=false;clearProductionProvenance();button.disabled=true;const original=button.textContent;button.textContent=`Gerando ${slideCount} slides…`;
+    setDirectArticleStatus(`Quantidade confirmada: ${slideCount} slides. Criando produção no FORMA Production Engine…`,'',2);
     try{
-      const data=await startFormaProduction({sourceType:'url',url:articleUrl,slideCount:Number($('#directArticleSlides').value)||7,force:Boolean($('#directArticleForce').checked),templateId:$('#directArticleTemplate').value||null});
+      const data=await startFormaProduction({sourceType:'url',url:articleUrl,slideCount,force:Boolean($('#directArticleForce').checked)});
       if(!data?.slides?.length)throw new Error('O Production Engine terminou sem slides válidos.');
 
       setDirectArticleStatus('Conteúdo concluído. Selecionando imagem editorial…','',92);
       const project=await buildDirectArticleProject(data,articleUrl);
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas do carrossel.');
 
-      const templateId=$('#directArticleTemplate').value;
-      if(templateId){
-        const template=getTemplates().find(t=>String(t.id)===String(templateId));
-        if(template){
-          setDirectArticleStatus('Aplicando conteúdo ao template selecionado…','',97);
-          if(!applySmartTemplate(template))throw new Error('O conteúdo foi gerado, mas o template selecionado não pôde ser aplicado.');
-        }
-      }
       const visualMode=project.directArticle?.visualMode;
       const visualLabel=visualMode==='publisher'?'imagem da matéria':visualMode==='free-bank'?'imagem do Banco Free':'sem imagem automática liberada';
-      renderProductionProvenance(data);
-      setDirectArticleStatus(`Carrossel concluído${directArticleState.lastReused?' · cache rápido':''} · ${project.slides.length} slides · ${visualLabel}${templateId?' · template aplicado':''}.`,'ok',100);
+      renderProductionProvenance(data);$('#directArticleApplyTemplate').disabled=false;
+      setDirectArticleStatus(`Conteúdo pronto${directArticleState.lastReused?' · cache rápido':''} · ${project.slides.length} slides · PT-BR · ${visualLabel}. Escolha um template para diagramar ou continue no layout neutro.`,'ok',100);
       showToast(`Produção FORMA concluída · ${project.slides.length} slides`,3200);
     }catch(error){
       setDirectArticleStatus(error.message||'Não foi possível gerar o carrossel.','error',100);
@@ -1400,7 +1407,8 @@
     }
   }
   $('#directArticleGenerate').onclick=generateDirectArticleCarousel;
-  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;setDirectArticleStatus('', '', 0);clearProductionProvenance();};
+  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;$('#directArticleTemplate').value='';$('#directArticleApplyTemplate').disabled=true;setDirectArticleStatus('', '', 0);clearProductionProvenance();};
+  $('#directArticleApplyTemplate').onclick=()=>{const templateId=$('#directArticleTemplate').value;if(!state.rondaContentModel?.slides?.length){showToast('Gere o conteúdo antes de aplicar um template');return;}if(!templateId){showToast('Escolha um template salvo');return;}const template=getTemplates().find(t=>String(t.id)===String(templateId));if(!template){showToast('Template não encontrado');return;}if(applySmartTemplate(template)){setDirectArticleStatus(`Template ${template.name} aplicado ao conteúdo já gerado · nenhuma nova chamada de IA.`,'ok',100);showToast('Template aplicado sem regenerar o carrossel');}};
   $('#directArticleUrl').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();generateDirectArticleCarousel();}});
   function renderSmartTemplateStatus(){
     const text=$('#smartTemplateStatusText'),reapply=$('#reapplySmartTemplate'),detach=$('#detachSmartTemplate');if(!text)return;
@@ -1457,7 +1465,7 @@
   function drawText(ctx,text,w,lineH,align){const paragraphs=String(text).split('\n'),lines=[];paragraphs.forEach((p,pi)=>{const words=p.split(/\s+/).filter(Boolean);if(!words.length){lines.push('');return;}let line='';for(const word of words){const test=line?line+' '+word:word;if(ctx.measureText(test).width>w&&line){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);if(pi<paragraphs.length-1&&p==='')lines.push('');});ctx.textAlign=align==='center'?'center':align==='right'?'right':'left';const x=align==='center'?w/2:align==='right'?w:0;lines.forEach((l,i)=>ctx.fillText(l,x,i*lineH));}
   $('#exportBtn').onclick=exportPNG;
 
-  $$('[data-close-modal]').forEach(b=>b.onclick=()=>closeModal(b.dataset.closeModal));$$('.modal-backdrop').forEach(m=>m.addEventListener('pointerdown',e=>{if(e.target===m)closeModal(m.id);}));
+  $$('[data-close-modal]').forEach(b=>b.onclick=()=>closeModal(b.dataset.closeModal));$$('.modal-backdrop').forEach(m=>m.addEventListener('pointerdown',e=>{if(e.target!==m)return;if(m.id==='slideCountModal')cancelSlideCountChoice();else closeModal(m.id);}));
   window.addEventListener('resize',()=>placeArtboard());
 
 
@@ -1591,22 +1599,25 @@
   function applyRondaProject(project,id=''){
     if(!project?.slides?.length)return false;
     const boards=buildRondaBoards(project);if(!boards.length)return false;
-    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1'};
+    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;const applyTemplateButton=$('#directArticleApplyTemplate');if(applyTemplateButton)applyTemplateButton.disabled=false;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1'};
     loadBoardToState(boards[0]);$('#docTitle').value=state.docTitle;state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>fitZoom());markDirty();setPlatformImportStatus('Importado da Ronda','ok');
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     if(!project?.articleVisuals?.primary && !project?.articleVisuals?.alternatives?.length){const q=document.getElementById('freeBankQuery');if(q&&!q.value)q.value=project.title||'';}return true;
   }
   async function importProductionTopicFromUrl(){
     const params=new URLSearchParams(location.search),topicId=params.get('productionTopic'),runId=params.get('runId');if(!topicId)return false;
-    document.querySelector('[data-panel="templates"]')?.click();setDirectArticleStatus('Pauta recebida da RONDA. Abrindo no Production Engine…','',2);setProductionStage('source');
+    document.querySelector('[data-panel="templates"]')?.click();setDirectArticleStatus('Pauta recebida da RONDA. Escolha quantos slides terá o carrossel antes de começar.','',0);setProductionStage('source');
     try{
-      const data=await startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount:Number($('#directArticleSlides').value)||7,templateId:$('#directArticleTemplate').value||null});
+      const slideCount=await requestCarouselSlideCount();
+      if(!slideCount){setDirectArticleStatus('Pauta aguardando quantidade de slides. Nenhuma leitura ou IA foi iniciada.','',0);return true;}
+      setDirectArticleStatus(`Quantidade confirmada: ${slideCount} slides. Iniciando leitura da fonte principal…`,'',2);
+      const data=await startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount});
       const articleUrl=data?.verificationLinks?.[0]?.url||data?.evidencePack?.canonicalUrl||'';
       const project=await buildDirectArticleProject(data,articleUrl);
       project.source='forma-production-topic';project.topicId=topicId;renderProductionProvenance(data);
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas da pauta.');
-      const templateId=$('#directArticleTemplate').value;if(templateId){const template=getTemplates().find(t=>String(t.id)===String(templateId));if(template)applySmartTemplate(template);}
-      setDirectArticleStatus(`Pauta produzida no FORMA · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
+      $('#directArticleApplyTemplate').disabled=false;
+      setDirectArticleStatus(`Pauta produzida no FORMA · conteúdo neutro PT-BR · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100. Escolha o template depois.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
     }catch(error){setDirectArticleStatus(error.message||'Não foi possível produzir a pauta.','error',100);showToast(error.message||'Falha na produção da pauta',4200);return false;}
   }
   async function importPlatformProjectFromUrl(){
@@ -1765,6 +1776,6 @@
 })();
 
   </script>
-<script src="/access-client.js?v=0971-fast-carousel" defer></script>
+<script src="/access-client.js?v=09721-slide-count-gate" defer></script>
 </body>
 </html>

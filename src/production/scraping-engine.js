@@ -149,7 +149,7 @@ async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.1",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.2",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -392,50 +392,74 @@ export function buildEvidencePack(record, { sourceType="url", sourceRef=null, to
   };
 }
 
-export async function scrapeTopicToEvidence(topic, options = {}) {
+export function sourceSelectionScore(item = {}) {
+  const url=String(item?.url||"");
+  const host=hostname(url);
+  const direct=host&&!/(news\.google|google\.com|googleusercontent\.com|bing\.com)/i.test(host);
+  const adapter=portalAdapterForUrl(url);
+  const words=wordCount(item?.content||"");
+  const route=String(item?.collectionRoute||item?.route||"").toLowerCase();
+  const sourceName=String(item?.sourceName||item?.collectorName||"").toLowerCase();
+  let score=0;const reasons=[];
+  if(direct){score+=34;reasons.push("publisher-direto");}
+  if(adapter){score+=24;reasons.push(`adapter:${adapter.id}`);}
+  if(words>=160){score+=24;reasons.push("texto-completo-em-cache");}
+  else if(words>=70){score+=12;reasons.push("conteudo-parcial-em-cache");}
+  if(/direct|html|article|publisher|scrap|full/.test(route)){score+=12;reasons.push("rota-de-leitura-confiavel");}
+  if(/ag[eê]ncia brasil|poder360|g1|cnn|metropoles|uol|infomoney|estadao|estadão|folha|globo|ge/.test(sourceName)){score+=4;reasons.push("fonte-prioritaria");}
+  if(/paywall|login|assinatura|subscriber/.test(`${route} ${String(item?.description||"")}`.toLowerCase())){score-=22;reasons.push("risco-paywall");}
+  return {score,reasons,directPublisher:Boolean(direct),adapter:adapter?.id||null,wordCount:words};
+}
+
+export function rankTopicSources(topic = {}) {
   const items=(Array.isArray(topic?.items)?topic.items:[]).filter((item)=>/^https?:\/\//i.test(String(item?.url||""))&&item?.kind!=="social");
-  const ordered=[...items].sort((a,b)=>{
-    const ad=hostname(a.url)&&!/(news\.google|google\.com)/i.test(hostname(a.url))?1:0;
-    const bd=hostname(b.url)&&!/(news\.google|google\.com)/i.test(hostname(b.url))?1:0;
-    const aWords=wordCount(a?.content||"");const bWords=wordCount(b?.content||"");
-    return bd-ad || Math.min(1,bWords/160)-Math.min(1,aWords/160) || Number(Boolean(b.content))-Number(Boolean(a.content));
-  });
-  let best=null;const attempts=[];
-  const consider=(item,record)=>{
-    attempts.push({url:item.url,sourceName:item.sourceName||item.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,method:record?.extractionMethod||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0});
-    if(record?.ok&&(!best||Number(record.readingQuality)>Number(best.readingQuality)||(Number(record.readingQuality)===Number(best.readingQuality)&&Number(record.wordCount)>Number(best.wordCount))))best=record;
+  return items.map((item,index)=>({item,index,...sourceSelectionScore(item)}))
+    .sort((a,b)=>b.score-a.score || b.wordCount-a.wordCount || a.index-b.index);
+}
+
+export async function scrapeTopicToEvidence(topic, options = {}) {
+  const ranked=rankTopicSources(topic);
+  const primary=ranked[0]||null;
+  const backup=ranked[1]||null;
+  const attempts=[];
+  if(!primary)return {ok:false,error:"A pauta não possui fonte de portal disponível para leitura.",attempts,selection:{policy:"single-primary-one-backup",primary:null,backup:null}};
+
+  const selection={
+    policy:"single-primary-one-backup",
+    primary:{url:primary.item.url,sourceName:primary.item.sourceName||primary.item.collectorName||"Fonte",score:primary.score,reasons:primary.reasons},
+    backup:backup?{url:backup.item.url,sourceName:backup.item.sourceName||backup.item.collectorName||"Fonte",score:backup.score,reasons:backup.reasons}:null,
+    selectedRole:null,
   };
 
-  // Fast path: a Ronda pode já ter extraído o corpo completo do mesmo publisher.
-  if (options.allowCollectedFastPath !== false) {
-    for (const item of ordered.slice(0,3)) {
+  const register=(role,item,record)=>{
+    const attempt={role,url:item?.url||null,sourceName:item?.sourceName||item?.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,wordCount:Number(record?.wordCount)||0,method:record?.extractionMethod||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0};
+    attempts.push(attempt);
+    if(record&&typeof record==="object")record.sourceSelection={...selection,selectedRole:role,attempts:[...attempts]};
+    return attempt;
+  };
+
+  const readCandidate=async(candidate,role)=>{
+    const item=candidate.item;
+    if(options.allowCollectedFastPath!==false){
       const warm=collectedArticleFastPath(item);
-      if(!warm)continue;
-      warm.readingQuality=readingQualityScore(warm);warm.durationMs=0;
-      consider(item,warm);
-      if(warm.readingQuality>=82){
-        return {ok:true,record:warm,evidence:buildEvidencePack(warm,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null}),attempts,fastPath:true};
-      }
+      if(warm){warm.readingQuality=readingQualityScore(warm);warm.durationMs=0;register(role,item,warm);if(warm.readingQuality>=55)return warm;}
     }
-  }
-
-  // Em vez de esperar até quatro portais em sequência, testa as duas melhores fontes
-  // em paralelo. A segunda onda só acontece quando nenhuma primeira leitura ficou boa.
-  const scrapeOne=async(item)=>{
-    try{return await scrapeArticle(item,{...options,allowCollectedFastPath:false});}
-    catch(error){return {ok:false,url:item.url,error:String(error?.message||error),readingQuality:0};}
+    let record;
+    try{record=await scrapeArticle(item,{...options,allowCollectedFastPath:false});}
+    catch(error){record={ok:false,url:item.url,error:String(error?.message||error),readingQuality:0,wordCount:0,durationMs:0};}
+    register(role,item,record);
+    return record?.ok&&Number(record.readingQuality)>=55?record:null;
   };
-  const firstWave=ordered.slice(0,2);
-  const firstResults=await Promise.all(firstWave.map(scrapeOne));
-  firstResults.forEach((record,index)=>consider(firstWave[index],record));
 
-  if((!best||Number(best.readingQuality)<85)&&ordered.length>2){
-    const secondWave=ordered.slice(2,4);
-    const secondResults=await Promise.all(secondWave.map(scrapeOne));
-    secondResults.forEach((record,index)=>consider(secondWave[index],record));
-  }
-
-  if(!best) return {ok:false,error:"Nenhuma das fontes do assunto forneceu leitura útil.",attempts};
-  return {ok:true,record:best,evidence:buildEvidencePack(best,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null}),attempts,fastPath:Boolean(best.cacheHit)};
+  // Política v0.9.7.2: uma única matéria é lida. Uma segunda fonte só é aberta
+  // se a principal realmente não produzir leitura útil; nunca fazemos leitura paralela de várias fontes.
+  let selected=await readCandidate(primary,"primary");
+  if(!selected&&backup)selected=await readCandidate(backup,"backup");
+  if(!selected)return {ok:false,error:"A fonte principal e a única fonte de backup não forneceram leitura útil.",attempts,selection};
+  selected.sourceSelection={...selection,selectedRole:selected.sourceSelection?.selectedRole||attempts.at(-1)?.role||"primary",attempts:[...attempts]};
+  const evidence=buildEvidencePack(selected,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null});
+  evidence.sourceSelection=selected.sourceSelection;
+  evidence.reading={...evidence.reading,sourceSelection:selected.sourceSelection};
+  return {ok:true,record:selected,evidence,attempts,selection:selected.sourceSelection,fastPath:Boolean(selected.cacheHit)};
 }
 

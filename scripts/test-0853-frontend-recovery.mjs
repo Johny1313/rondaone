@@ -6,7 +6,7 @@ const app=read("public/ronda/app.js");
 const html=read("public/ronda/index.html");
 const pkg=JSON.parse(read("package.json"));
 
-assert.match(pkg.version,/^0\.(?:8\.(?:5\.(?:3|[4-9]|\d{2,})|[6-9](?:\.\d+)?)|9\.\d+(?:\.\d+)?)$/);
+assert.match(pkg.version,/^0\.(?:8\.(?:5\.(?:3|[4-9]|\d{2,})|[6-9](?:\.\d+)?)|9\.\d+(?:\.\d+){1,2})$/);
 
 // O bug real da 0.8.5.2.
 assert.doesNotMatch(app,/activeProfileReferenceType='text';\\nfunction/);

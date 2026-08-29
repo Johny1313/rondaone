@@ -41,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.7.1',
+      version:'0.9.7.2.1',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.1',
+        editorialVersion:'2.9.7.2.1',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -188,7 +188,9 @@ export default {
       },
       formaProductionEngineV096:{enabled:true,entryPoint:'forma-design',singleProductionApi:'/api/production/jobs',sourceTypes:['topic','event','url','text'],evidencePack:true,articleReadSeparated:true,carouselAiSeparated:true,stages:['source','reading','evidence','generating','ready'],dedicatedArticleQueue:!!env.ARTICLE_READ_QUEUE,dedicatedCarouselQueue:!!env.CAROUSEL_AI_QUEUE,legacyCarouselEndpointsCompatible:true},
       scrapingEvidenceEngineV097:{enabled:true,adapters:['g1','cnn-brasil','folha','estadao','oglobo','poder360','agencia-brasil','metropoles','uol','infomoney'],genericExtraction:true,jsonLd:true,embeddedJson:true,ampFallback:true,collectedFallback:true,browserFallbackOptional:false,evidenceCacheDays:7},
-      fastCarouselSourceCreditsV0971:{enabled:true,reuseReadyResult:true,readyResultCacheMinutes:{url:30,topicOrEvent:5},evidenceFastPath:true,evidenceCacheMinutes:{url:60,topicOrEvent:10},normalizedUrlIdentity:true,parallelSourceReadWaves:true,sourceReadUrlVisible:true,imageOriginVisible:true,photographerCreditWhenAvailable:true,templateDelete:true,forceReread:true},
+      fastCarouselSourceCreditsV0971:{enabled:true,reuseReadyResult:true,readyResultCacheMinutes:{url:30,topicOrEvent:5},evidenceFastPath:true,evidenceCacheMinutes:{url:60,topicOrEvent:10},normalizedUrlIdentity:true,parallelSourceReadWaves:false,sourceReadUrlVisible:true,imageOriginVisible:true,photographerCreditWhenAvailable:true,templateDelete:true,forceReread:true},
+      singleSourceContentFirstV0972:{enabled:true,contentFirst:true,templateAfterGeneration:true,templateChangeWithoutAi:true,targetLanguage:'pt-BR',translateForeignEvidence:true,sourceSelection:'primary-plus-single-backup',parallelMultiPublisherReading:false,maximumPublisherReads:2,performanceTelemetry:true},
+      mandatorySlideCountV09721:{enabled:true,requiredBeforeProduction:true,minimum:3,maximum:15,presets:[3,5,7,10],appliesTo:['topic','event','url','text'],backendEnforced:true},
       roundStabilityV0951:{
         enabled:true,
         fastLaneSeparatedFromEditorialHistory:true,
@@ -248,7 +250,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.1-fast-carousel-credits'
+        assetCacheBust:'2.9.7.2.1-mandatory-slide-count'
       },
       navigation:{
         ronda:'/ronda',

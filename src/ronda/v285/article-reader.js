@@ -1677,7 +1677,7 @@ async function runAiCarouselFromEvidence(ai, model, topic, article, facts, slide
     messages: [
       {
         role: "system",
-        content: `Você é um redator jornalístico brasileiro. Os fatos já foram extraídos de UMA matéria publicada e são fornecidos como evidências. Você NÃO deve gerar fatos. Apenas redija exatamente ${slideCount} slides usando exclusivamente essas evidências. Cada slide informativo deve ter um ângulo factual diferente e um evidenceIds[0] diferente; não repita manchete, dado ou conclusão em slides distintos. Escreva frases completas e naturais; jamais devolva fragmentos de oração, tabelas coladas ou sequências de números sem contexto.`,
+        content: `Você é um redator jornalístico brasileiro. TODO texto entregue deve estar em português do Brasil (pt-BR), inclusive quando a matéria original estiver em outro idioma. Nomes próprios, marcas e nomes oficiais não devem ser traduzidos indevidamente. Os fatos já foram extraídos de UMA matéria publicada e são fornecidos como evidências. Você NÃO deve gerar fatos. Apenas redija exatamente ${slideCount} slides usando exclusivamente essas evidências. Cada slide informativo deve ter um ângulo factual diferente e um evidenceIds[0] diferente; não repita manchete, dado ou conclusão em slides distintos. Escreva frases completas e naturais; jamais devolva fragmentos de oração, tabelas coladas ou sequências de números sem contexto.`,
       },
       { role: "user", content: evidenceCarouselPrompt(topic, article, facts, slideCount, writingStyle) },
     ],
@@ -1696,7 +1696,7 @@ async function repairAiCarouselFromEvidence(ai, model, topic, article, facts, sl
   const styleText = writingStyle?.prompt || writingStyle?.instructions || "";
   const response = await withTimeout(ai.run(model, {
     messages: [
-      { role: "system", content: "Você revisa um carrossel jornalístico SEM acrescentar fatos. Corrija apenas clareza, gramática, frases incompletas, concatenações e progressão narrativa. Use exclusivamente as evidências fornecidas. Números, nomes e relações factuais não podem ser alterados nem criados." },
+      { role: "system", content: "Você revisa um carrossel jornalístico SEM acrescentar fatos. Todo texto final deve estar em português do Brasil (pt-BR). Corrija apenas clareza, gramática, frases incompletas, concatenações, idioma e progressão narrativa. Use exclusivamente as evidências fornecidas. Números, nomes e relações factuais não podem ser alterados nem criados." },
       { role: "user", content: [
         `ASSUNTO: ${compact(topic?.title || article.title, 180)}`,
         `PROBLEMAS DETECTADOS: ${issueText || "coerência e fluidez"}`,

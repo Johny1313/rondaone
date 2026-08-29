@@ -1,4 +1,24 @@
-# Changelog — RONDA ONE
+# Changelog
+
+## 0.9.7.2.1 — Mandatory Slide Count
+
+- Modal obrigatório pergunta a quantidade de slides antes de iniciar uma nova produção.
+- Presets 3/5/7/10 e valor personalizado entre 3 e 15.
+- Pauta enviada pela RONDA não começa automaticamente: aguarda a confirmação editorial.
+- Link externo também pede a quantidade antes de criar o job.
+- `POST /api/production/jobs` exige `slideCount` explicitamente; o default do perfil não inicia produção silenciosamente.
+- Cancelamento ocorre antes de scraping, leitura e Multi-AI.
+- Template continua sendo aplicado somente depois do carrossel pronto.
+
+## 0.9.7.2 — Single Source + Content First
+
+- Geração de conteúdo desacoplada de template: o carrossel nasce em layout neutro e o template é aplicado somente depois.
+- Aplicar ou trocar template não chama IA novamente.
+- Seleção de uma fonte principal por score, com apenas uma fonte backup em caso de falha real.
+- Removida leitura paralela de múltiplos publishers no Production Engine.
+- Normalização pt-BR de matérias estrangeiras antes do Evidence Pack quando a tradução está disponível; regra de saída pt-BR reforçada na Multi-AI.
+- Telemetria de leitura, tradução, IA, tempo total e papel da fonte exibida no FORMA.
+- Preservados cache rápido, URL efetivamente lida, créditos de imagem, Content Lock e exclusão de templates.
 
 ## 0.9.7.1 — Fast Carousel + Source Credits + Scraping Optimization
 
