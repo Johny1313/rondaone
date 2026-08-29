@@ -1,5 +1,20 @@
 # Changelog — RONDA ONE
 
+## 0.9.7.1 — Fast Carousel + Source Credits + Scraping Optimization
+
+- reutilização imediata de carrossel pronto quando entrada, estilo e quantidade de slides não mudaram;
+- fingerprint da pauta impede reutilização quando o conteúdo da RONDA evoluiu;
+- Evidence Pack recente pode pular `ARTICLE_READ_QUEUE` e seguir direto para `CAROUSEL_AI_QUEUE`;
+- URL de matéria normalizada remove parâmetros de tracking para aumentar acerto de cache;
+- scraping de pauta prioriza conteúdo já coletado e testa as melhores fontes em ondas concorrentes limitadas;
+- tempo de leitura reduzido sem remover fallback ou Quality Gate;
+- FORMA mostra o URL efetivamente lido para produzir o carrossel;
+- imagens recuperadas da matéria exibem origem, crédito e fotógrafo quando o portal fornece os metadados;
+- Smart Template Engine 1.2.1 preserva crédito de imagem no contrato semântico;
+- templates salvos podem ser apagados individualmente, mantendo intacta a composição já aberta;
+- `Releitura completa` continua disponível para ignorar cache quando a notícia tiver mudado;
+- nenhuma Queue nova além das já introduzidas na v0.9.7.
+
 ## 0.9.7 — Scraping + Evidence Engine
 
 - Evidence Pack persistente para pautas, eventos, links externos e texto próprio;

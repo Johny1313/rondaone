@@ -1,8 +1,8 @@
-# Deploy — RONDA ONE v0.9.7
+# Deploy — RONDA ONE v0.9.7.1
 
 ## 1. Perfil recomendado
 
-Para 39 fontes, scraping, fallbacks, Multi-AI e Queues dedicadas, use **Cloudflare Workers Paid**. A v0.9.7 aumenta a previsibilidade separando leitura de geração; não é recomendável voltar ao orçamento do Workers Free para a operação completa.
+Para 39 fontes, scraping, fallbacks, Multi-AI e Queues dedicadas, use **Cloudflare Workers Paid**. A v0.9.7.1 mantém a separação de leitura e geração e acrescenta fast paths seguros; não é recomendável voltar ao orçamento do Workers Free para a operação completa.
 
 ## 2. Bindings principais
 
@@ -84,8 +84,8 @@ Em GitHub + Cloudflare Workers Builds, substitua a árvore antiga pela árvore C
 Abra `/api/platform/status` e confirme:
 
 ```text
-version: 0.9.7
-editorialVersion: 2.9.7
+version: 0.9.7.1
+editorialVersion: 2.9.7.1
 formaProductionEngineV096.enabled: true
 scrapingEvidenceEngineV097.enabled: true
 modules.queues.articleReadDedicated: true
@@ -116,4 +116,14 @@ O retorno informa `stage`, `progress`, `evidence`, eventos e resultado. Use isso
 
 ## 10. Browser Rendering
 
-Não habilite browser/headless inicialmente. A v0.9.7 usa `fetch()` + parsers + adapters + AMP + conteúdo coletado. Browser rendering deve ser uma v0.9.7.1 somente se as métricas mostrarem portais importantes que dependem de JavaScript para liberar o texto público.
+Não habilite browser/headless inicialmente. A v0.9.7 usa `fetch()` + parsers + adapters + AMP + conteúdo coletado. Browser rendering continua opcional e deve ser habilitado somente se métricas mostrarem portais públicos importantes que realmente dependem de JavaScript para liberar o texto.
+
+
+## Fast path opcional
+
+Os defaults da v0.9.7.1 já são conservadores. Se houver uma necessidade editorial específica, os tempos podem ser ajustados por ambiente:
+
+- `EVIDENCE_FAST_CACHE_MINUTES` — sobrescreve a janela de reaproveitamento do Evidence Pack;
+- `PRODUCTION_RESULT_CACHE_MINUTES` — sobrescreve a janela de reaproveitamento de carrossel pronto.
+
+Não aumente esses valores sem considerar a velocidade de atualização das notícias. O botão **Releitura completa** ignora os fast paths para uma produção específica.

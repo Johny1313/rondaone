@@ -138,9 +138,9 @@ import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from
 import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
 import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
-import { createProductionJob, generateProductionImage, getProductionJob, listProductionJobs, productionBundle, retryProductionJob, startProductionPipeline } from "../../production/engine.js";
+import { createProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, listProductionJobs, productionBundle, retryProductionJob, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7";
+const VERSION = "2.9.7.1";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1433,9 +1433,15 @@ async function handleApi(request, env, url, ctx) {
     const writingProfile = await getWritingProfile(db,user.id).catch(()=>null);
     const learningStats = await getCarouselLearningStats(db,user.id).catch(()=>({count:0,updatedAt:null}));
     input = { ...input, slideCount, writingProfile, styleKey:`${user.id}:${writingProfile?.updatedAt||"default"}:${learningStats.updatedAt||"no-learning"}:${learningStats.count||0}`, requestedTemplateId:body?.templateId||null };
+    if (!body?.force) {
+      const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
+      if (reusable?.result?.slides?.length) {
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.1", job:reusable, pollAfterMs:0 },200);
+      }
+    }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
     job = await startProductionPipeline(env,job.id,{force:Boolean(body?.force),ctx});
-    return json({ ok:true, production:true, engineVersion:"0.9.7", job, pollAfterMs:1200 },202);
+    return json({ ok:true, production:true, reused:false, engineVersion:"0.9.7.1", job, pollAfterMs:900 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);

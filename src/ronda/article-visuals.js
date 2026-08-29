@@ -97,6 +97,25 @@ function personName(value) {
   return clean(list.map((item) => typeof item === 'string' ? item : item?.name).filter(Boolean).join(', '), 240);
 }
 
+function photographerFromCredit(value) {
+  const text = clean(value, 320);
+  if (!text) return '';
+  const explicit = /(?:foto(?:grafia)?|photo|photographer|fot[oó]grafo(?:a)?)\s*[:\-–—]\s*([^|·;]{2,180})/i.exec(text)?.[1]
+    || /(?:©)\s*([^|·;]{2,180})/i.exec(text)?.[1];
+  return clean(explicit || '', 180);
+}
+
+function creditLine({ photographer = '', credit = '', sourceName = '' } = {}) {
+  const person = clean(photographer, 180);
+  const rights = clean(credit, 300);
+  const source = clean(sourceName, 120);
+  const parts = [];
+  if (person) parts.push(`Foto: ${person}`);
+  if (rights && (!person || !rights.toLocaleLowerCase('pt-BR').includes(person.toLocaleLowerCase('pt-BR')))) parts.push(`Crédito: ${rights}`);
+  if (source) parts.push(`Origem: ${source}`);
+  return parts.join(' · ');
+}
+
 function imageObjectCandidate(image, baseUrl, sourceName, articleUrl) {
   if (!image) return null;
   if (typeof image === 'string') {
@@ -108,19 +127,24 @@ function imageObjectCandidate(image, baseUrl, sourceName, articleUrl) {
       caption: '',
       alt: '',
       credit: '',
+      photographer: '',
+      copyrightHolder: '',
       creditConfidence: 'low',
       sourceName,
       articleUrl,
+      creditLine: creditLine({ sourceName }),
     } : null;
   }
   if (typeof image !== 'object') return null;
   const url = resolveUrl(image.contentUrl || image.url || image.thumbnailUrl, baseUrl);
   if (!url) return null;
+  const photographer = personName(image.creator || image.author);
+  const copyrightHolder = personName(image.copyrightHolder);
   const explicitCredit = clean(
     image.creditText
     || image.copyrightNotice
-    || personName(image.copyrightHolder)
-    || personName(image.creator),
+    || copyrightHolder
+    || photographer,
     300,
   );
   return {
@@ -130,9 +154,12 @@ function imageObjectCandidate(image, baseUrl, sourceName, articleUrl) {
     caption: clean(image.caption || image.description, 500),
     alt: clean(image.name || image.alternateName, 300),
     credit: explicitCredit,
+    photographer,
+    copyrightHolder,
     creditConfidence: explicitCredit ? 'high' : 'low',
     sourceName,
     articleUrl,
+    creditLine: creditLine({ photographer, credit: explicitCredit, sourceName }),
   };
 }
 
@@ -161,15 +188,15 @@ function extractJsonLdImages(html, baseUrl, sourceName, articleUrl) {
 
 function creditFromCaption(caption, figureTag = '') {
   const text = clean(caption, 500);
-  if (!text) return { credit: '', confidence: 'low' };
+  if (!text) return { credit: '', photographer: '', confidence: 'low' };
   const explicit = /(?:foto|fotografia|imagem|cr[eé]dito|photo|image)\s*[:\-–—]\s*([^|]{2,220})/i.exec(text)?.[0]
     || /(?:©|copyright)\s*([^|]{2,220})/i.exec(text)?.[0]
     || /(?:AFP|Reuters|Associated Press|Ag[eê]ncia Brasil|Getty Images|Divulga[cç][aã]o)(?:\s*[/|·-]\s*[^|]{1,120})?/i.exec(text)?.[0];
-  if (explicit) return { credit: clean(explicit, 300), confidence: 'high' };
+  if (explicit) return { credit: clean(explicit, 300), photographer: photographerFromCredit(explicit), confidence: 'high' };
   if (/(?:credit|cr[eé]dito|copyright|photographer|fot[oó]grafo|foto-autor|image-credit)/i.test(figureTag)) {
-    return { credit: text, confidence: 'high' };
+    return { credit: text, photographer: photographerFromCredit(text), confidence: 'high' };
   }
-  return { credit: '', confidence: 'low' };
+  return { credit: '', photographer: '', confidence: 'low' };
 }
 
 function extractFigureImages(html, baseUrl, sourceName, articleUrl) {
@@ -183,7 +210,9 @@ function extractFigureImages(html, baseUrl, sourceName, articleUrl) {
     if (!url) continue;
     const captionHtml = /<figcaption\b[^>]*>([\s\S]*?)<\/figcaption\s*>/i.exec(figure)?.[1] || '';
     const caption = clean(captionHtml, 500);
-    const detected = creditFromCaption(caption, figure);
+    const inlineCredit = clean(attr(imageTag, 'data-credit') || attr(imageTag, 'data-author') || attr(imageTag, 'data-photographer'), 300);
+    const creditNode = /<(?:span|div|p)\b[^>]*(?:class|data-testid)=["'][^"']*(?:credit|credito|crédito|copyright|photographer|foto-autor|image-author)[^"']*["'][^>]*>([\s\S]*?)<\/(?:span|div|p)\s*>/i.exec(figure)?.[1] || '';
+    const detected = creditFromCaption(inlineCredit || clean(creditNode, 300) || caption, figure);
     output.push({
       url,
       origin: 'publisher',
@@ -191,9 +220,12 @@ function extractFigureImages(html, baseUrl, sourceName, articleUrl) {
       caption,
       alt: clean(attr(imageTag, 'alt'), 300),
       credit: detected.credit,
+      photographer: detected.photographer,
+      copyrightHolder: '',
       creditConfidence: detected.confidence,
       sourceName,
       articleUrl,
+      creditLine: creditLine({ photographer: detected.photographer, credit: detected.credit, sourceName }),
     });
   }
   return output;
@@ -217,9 +249,12 @@ function extractMetaImages(html, baseUrl, sourceName, articleUrl) {
       caption: '',
       alt: clean(metaContent(html, key.startsWith('og:') ? 'og:image:alt' : 'twitter:image:alt'), 300),
       credit: '',
+      photographer: '',
+      copyrightHolder: '',
       creditConfidence: 'low',
       sourceName,
       articleUrl,
+      creditLine: creditLine({ sourceName }),
     });
   }
   return output;
@@ -238,9 +273,13 @@ function candidateScore(candidate) {
 function normalizeCandidate(candidate) {
   const credit = clean(candidate.credit, 300);
   const confidence = credit ? (candidate.creditConfidence === 'high' ? 'high' : 'medium') : 'low';
+  const photographer = clean(candidate.photographer || photographerFromCredit(credit), 180);
   return {
     ...candidate,
     credit,
+    photographer,
+    copyrightHolder: clean(candidate.copyrightHolder, 200),
+    creditLine: creditLine({ photographer, credit, sourceName:candidate.sourceName }),
     creditConfidence: confidence,
     autoUseAllowed: Boolean(credit && ['high', 'medium'].includes(confidence)),
   };

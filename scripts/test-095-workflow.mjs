@@ -20,5 +20,5 @@ assert.match(adminJs,/Revisor/);
 assert.match(adminJs,/Publicador/);
 assert.match(design,/submitReviewBtn/);
 assert.match(platform,/workflowV095/);
-assert.match(platform,/version:'0\.9\.(?:5(?:\.1)?|6|7)'/);
+assert.match(platform,/version:'0\.9\.(?:5(?:\.1)?|6|7(?:\.1)?)'/);
 console.log('RONDA ONE v0.9.5 Workflow multiusuário: OK');

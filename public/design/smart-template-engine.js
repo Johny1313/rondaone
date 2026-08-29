@@ -1,7 +1,7 @@
 (function(root){
   'use strict';
 
-  const VERSION='1.2.0';
+  const VERSION='1.2.1';
   const SLOTS=['TITLE','SUBTITLE','BODY','ROLE','SOURCE','IMAGE','IMAGE_CREDIT','CTA','SLIDE_NUMBER','EDITORIA'];
   const clone=value=>JSON.parse(JSON.stringify(value));
   const norm=value=>String(value||'').trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
@@ -79,7 +79,11 @@
   function normalizeAsset(asset){
     if(!asset?.url)return null;
     const originalUrl=String(asset.url);
-    return {url:assetProxyUrl(originalUrl),originalUrl,credit:String(asset.credit||asset.sourceName||''),sourceName:String(asset.sourceName||''),articleUrl:String(asset.articleUrl||'')};
+    const photographer=String(asset.photographer||'').trim();
+    const credit=String(asset.credit||'').trim();
+    const sourceName=String(asset.sourceName||'').trim();
+    const creditLine=String(asset.creditLine||[photographer?`Foto: ${photographer}`:'',credit?`Crédito: ${credit}`:'',sourceName?`Origem: ${sourceName}`:''].filter(Boolean).join(' · '));
+    return {url:assetProxyUrl(originalUrl),originalUrl,credit:credit||sourceName,creditLine,photographer,sourceName,articleUrl:String(asset.articleUrl||'')};
   }
 
   function buildContentModel(project={}){
@@ -106,7 +110,7 @@
         source,
         editoria:String(project.editoria||''),
         image:asset?.url||'',
-        imageCredit:String(slide?.visual?.creditText||asset?.credit||''),
+        imageCredit:String(slide?.visual?.creditText||asset?.creditLine||asset?.credit||''),
         imageSource:String(asset?.sourceName||''),
       };
     });

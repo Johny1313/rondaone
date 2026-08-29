@@ -25,6 +25,17 @@ function absoluteUrl(value, base) {
   } catch { return null; }
 }
 
+export function normalizeArticleIdentity(value) {
+  try {
+    const url = new URL(validateArticleUrl(value));
+    url.hash = "";
+    const tracking = [...url.searchParams.keys()].filter((key) => /^(?:utm_|fbclid$|gclid$|dclid$|mc_cid$|mc_eid$|igshid$|ref_src$|ref_url$|srsltid$)/i.test(key));
+    tracking.forEach((key) => url.searchParams.delete(key));
+    url.searchParams.sort();
+    return url.toString();
+  } catch { return String(value || "").trim(); }
+}
+
 function decodeEntities(value) {
   return String(value || "")
     .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&quot;/gi, '"')
@@ -138,7 +149,7 @@ async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.1",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -176,6 +187,35 @@ function collectedFallback(item) {
   };
 }
 
+function collectedArticleFastPath(item) {
+  const content = plainText(item?.content || "");
+  const words = wordCount(content);
+  const route = String(item?.collectionRoute || item?.route || item?.readMode || item?.contentLevel || "").toLowerCase();
+  const trustedRoute = /(direct|html|article|publisher|scrap|full)/.test(route);
+  if (words < 160 || !trustedRoute) return null;
+  const url = normalizeArticleIdentity(item?.url || "");
+  return {
+    ok:true,
+    url,
+    canonicalUrl:url,
+    sourceName:item?.sourceName || item?.collectorName || hostname(url) || "Fonte",
+    title:plainText(item?.title) || "Notícia sem título",
+    subtitle:plainText(item?.description || item?.summary).slice(0,700),
+    author:plainText(item?.author || item?.byline) || null,
+    publishedAt:item?.publishedAt || null,
+    content:content.slice(0,MAX_ARTICLE_CHARS),
+    wordCount:words,
+    extractionMethod:"ronda-collected-article-fastpath",
+    adapter:portalAdapterForUrl(url)?.id || null,
+    contentLevel:"article",
+    readMode:"full-article-cache",
+    images:item?.articleVisuals || item?.images || null,
+    degraded:false,
+    cacheHit:true,
+    error:null,
+  };
+}
+
 function readingQualityScore(record) {
   if (!record?.ok) return 0;
   let score = 20;
@@ -192,13 +232,22 @@ function readingQualityScore(record) {
 
 export async function scrapeArticle(item, {
   fetcher = fetch,
-  timeoutMs = 14_000,
+  timeoutMs = 12_000,
   browserFetcher = null,
+  allowCollectedFastPath = true,
 } = {}) {
   const startedAt = Date.now();
-  const inputUrl = validateArticleUrl(item?.url);
+  const inputUrl = normalizeArticleIdentity(item?.url);
   const attempts = [];
   let best = null;
+
+  if (allowCollectedFastPath) {
+    const warm = collectedArticleFastPath(item);
+    if (warm) {
+      warm.readingQuality = readingQualityScore(warm);
+      return {...warm, attempts:[{method:warm.extractionMethod,ok:true,wordCount:warm.wordCount,fastPath:true}],durationMs:Date.now()-startedAt};
+    }
+  }
 
   const consider = (candidate) => {
     if (!candidate?.ok) return;
@@ -207,7 +256,7 @@ export async function scrapeArticle(item, {
   };
 
   try {
-    const fetched = await fetchHtml(inputUrl, fetcher, Math.min(8_000, timeoutMs));
+    const fetched = await fetchHtml(inputUrl, fetcher, Math.min(6_500, timeoutMs));
     const html = fetched.html;
     const finalUrl = fetched.finalUrl;
     const generic = extractArticleFromHtml(html, item);
@@ -216,7 +265,8 @@ export async function scrapeArticle(item, {
     const common = {
       ok:true,
       url: inputUrl,
-      canonicalUrl: canonicalUrl(html, finalUrl),
+      canonicalUrl: normalizeArticleIdentity(canonicalUrl(html, finalUrl)),
+      resolvedUrl: finalUrl,
       sourceName: item?.sourceName || item?.collectorName || hostname(finalUrl) || "Fonte",
       title: generic.title || metaContent(html,"og:title") || plainText(item?.title) || "Notícia sem título",
       subtitle: generic.description || metaContent(html,"og:description") || metaContent(html,"description") || plainText(item?.description),
@@ -325,6 +375,7 @@ export function buildEvidencePack(record, { sourceType="url", sourceRef=null, to
     sourceName:record?.sourceName||"Fonte",
     url:record?.url||null,
     canonicalUrl:record?.canonicalUrl||record?.url||null,
+    resolvedUrl:record?.resolvedUrl||record?.canonicalUrl||record?.url||null,
     title:record?.title||"Notícia sem título",
     subtitle:record?.subtitle||"",
     author:record?.author||null,
@@ -336,7 +387,7 @@ export function buildEvidencePack(record, { sourceType="url", sourceRef=null, to
     numbers:extractNumbers(content),
     dates:extractDates(content),
     images:record?.images||null,
-    reading:{method:record?.extractionMethod||record?.readMode||"unknown",adapter:record?.adapter||null,quality:Number(record?.readingQuality)||0,mode:record?.readMode||"unknown",degraded:Boolean(record?.degraded),attempts:record?.attempts||[],durationMs:Number(record?.durationMs)||0},
+    reading:{method:record?.extractionMethod||record?.readMode||"unknown",adapter:record?.adapter||null,quality:Number(record?.readingQuality)||0,mode:record?.readMode||"unknown",degraded:Boolean(record?.degraded),resolvedUrl:record?.resolvedUrl||record?.canonicalUrl||record?.url||null,attempts:record?.attempts||[],durationMs:Number(record?.durationMs)||0},
     createdAt:now,
   };
 }
@@ -346,16 +397,45 @@ export async function scrapeTopicToEvidence(topic, options = {}) {
   const ordered=[...items].sort((a,b)=>{
     const ad=hostname(a.url)&&!/(news\.google|google\.com)/i.test(hostname(a.url))?1:0;
     const bd=hostname(b.url)&&!/(news\.google|google\.com)/i.test(hostname(b.url))?1:0;
-    return bd-ad || Number(Boolean(b.content))-Number(Boolean(a.content));
+    const aWords=wordCount(a?.content||"");const bWords=wordCount(b?.content||"");
+    return bd-ad || Math.min(1,bWords/160)-Math.min(1,aWords/160) || Number(Boolean(b.content))-Number(Boolean(a.content));
   });
   let best=null;const attempts=[];
-  for(const item of ordered.slice(0,4)){
-    let record;
-    try{record=await scrapeArticle(item,options);}catch(error){record={ok:false,url:item.url,error:String(error?.message||error)}}
-    attempts.push({url:item.url,sourceName:item.sourceName||item.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,method:record?.extractionMethod||null,error:record?.error||null});
-    if(record?.ok&&(!best||record.readingQuality>best.readingQuality))best=record;
-    if(best?.readingQuality>=85)break;
+  const consider=(item,record)=>{
+    attempts.push({url:item.url,sourceName:item.sourceName||item.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,method:record?.extractionMethod||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0});
+    if(record?.ok&&(!best||Number(record.readingQuality)>Number(best.readingQuality)||(Number(record.readingQuality)===Number(best.readingQuality)&&Number(record.wordCount)>Number(best.wordCount))))best=record;
+  };
+
+  // Fast path: a Ronda pode já ter extraído o corpo completo do mesmo publisher.
+  if (options.allowCollectedFastPath !== false) {
+    for (const item of ordered.slice(0,3)) {
+      const warm=collectedArticleFastPath(item);
+      if(!warm)continue;
+      warm.readingQuality=readingQualityScore(warm);warm.durationMs=0;
+      consider(item,warm);
+      if(warm.readingQuality>=82){
+        return {ok:true,record:warm,evidence:buildEvidencePack(warm,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null}),attempts,fastPath:true};
+      }
+    }
   }
+
+  // Em vez de esperar até quatro portais em sequência, testa as duas melhores fontes
+  // em paralelo. A segunda onda só acontece quando nenhuma primeira leitura ficou boa.
+  const scrapeOne=async(item)=>{
+    try{return await scrapeArticle(item,{...options,allowCollectedFastPath:false});}
+    catch(error){return {ok:false,url:item.url,error:String(error?.message||error),readingQuality:0};}
+  };
+  const firstWave=ordered.slice(0,2);
+  const firstResults=await Promise.all(firstWave.map(scrapeOne));
+  firstResults.forEach((record,index)=>consider(firstWave[index],record));
+
+  if((!best||Number(best.readingQuality)<85)&&ordered.length>2){
+    const secondWave=ordered.slice(2,4);
+    const secondResults=await Promise.all(secondWave.map(scrapeOne));
+    secondResults.forEach((record,index)=>consider(secondWave[index],record));
+  }
+
   if(!best) return {ok:false,error:"Nenhuma das fontes do assunto forneceu leitura útil.",attempts};
-  return {ok:true,record:best,evidence:buildEvidencePack(best,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null}),attempts};
+  return {ok:true,record:best,evidence:buildEvidencePack(best,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null}),attempts,fastPath:Boolean(best.cacheHit)};
 }
+

@@ -5,7 +5,7 @@ const read=p=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8');
 const engineCode=read('public/design/smart-template-engine.js');
 const context={console,location:{origin:'https://ronda.test'}};context.globalThis=context;vm.createContext(context);vm.runInContext(engineCode,context);
 const E=context.RondaSmartTemplates;
-assert.equal(E.VERSION,'1.2.0');
+assert.match(E.VERSION,/^1\.2\./);
 const template={id:'t1',name:'T1',project:{artboards:[{id:'b1',name:'Content',templateRole:'content',width:1080,height:1080,elements:[
   {id:'title',type:'text',name:'Title',semanticSlot:'TITLE',x:0,y:0,w:900,h:200,fontSize:64,text:''},
   {id:'body',type:'text',name:'Body',semanticSlot:'BODY',x:0,y:220,w:900,h:400,fontSize:32,text:''}

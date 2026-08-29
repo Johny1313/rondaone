@@ -1,6 +1,6 @@
-# RONDA ONE Cloud v0.9.7 — Unified FORMA Production + Scraping Evidence Engine
+# RONDA ONE Cloud v0.9.7.1 — Fast Carousel + Source Credits + Scraping Optimization
 
-A v0.9.7 é cumulativa: inclui integralmente a **v0.9.6 — Unified FORMA Production Engine** e acrescenta a **v0.9.7 — Scraping + Evidence Engine**.
+A v0.9.7.1 é cumulativa: mantém a **v0.9.6 — Unified FORMA Production Engine** e a **v0.9.7 — Scraping + Evidence Engine**, acrescentando fast paths de geração, transparência da fonte lida, créditos de imagem e controle de exclusão de templates.
 
 A divisão operacional passa a ser explícita:
 
@@ -13,6 +13,56 @@ FORMA DESIGN
 ```
 
 A RONDA não é mais o ponto principal de geração. Nos cards, a ação passa a ser **Produzir no FORMA →**. Pautas da RONDA, eventos da Mesa, links externos e texto próprio entram no mesmo Production Engine.
+
+## v0.9.7.1 — geração mais ágil e auditável
+
+A produção agora tenta o caminho mais curto seguro antes de executar uma leitura externa completa:
+
+```text
+mesma entrada + mesmo estilo + resultado recente
+        ↓
+reutiliza carrossel pronto
+
+sem resultado pronto, mas Evidence Pack recente
+        ↓
+pula a leitura e vai direto para Multi-AI
+
+sem Evidence Pack
+        ↓
+scraping/leitura → evidências → Multi-AI
+```
+
+Para evitar conteúdo editorial obsoleto, pautas da RONDA usam fingerprint do conteúdo: mudança de fonte, título, atualização ou texto invalida o resultado reutilizável. Para URLs externas, o cache rápido é curto e o operador pode marcar **Releitura completa** para obrigar nova leitura.
+
+### Fonte realmente utilizada
+
+Ao concluir a geração, o FORMA mostra o link efetivamente usado na leitura, o portal, a qualidade e o método de extração. Isso facilita abrir a matéria original e conferir a apuração.
+
+### Crédito das imagens
+
+O Evidence Engine passa a preservar, quando disponíveis no HTML/JSON-LD da matéria:
+
+- fotógrafo/autor da foto;
+- crédito/agência/copyright;
+- portal de origem;
+- URL da matéria associada.
+
+O FORMA exibe essas informações junto das imagens recuperadas. Se o portal não publicar autoria, o sistema informa que o crédito autoral não foi fornecido, em vez de inventar um nome.
+
+### Templates
+
+Cada template salvo possui ação **Apagar template**. A exclusão remove o modelo da biblioteca local, mas não apaga nem altera a composição já aberta no FORMA.
+
+### Otimização do scraping
+
+- conteúdo completo já coletado pela RONDA pode ser reutilizado antes de novo `fetch()`;
+- URLs equivalentes com `utm_*`, `fbclid`, `gclid` e outros parâmetros de tracking compartilham a mesma identidade de leitura;
+- pautas com várias fontes testam as duas fontes mais promissoras em paralelo;
+- uma segunda onda só é aberta quando a primeira não alcança qualidade suficiente;
+- adapters, JSON-LD, parser genérico, AMP e fallback continuam disponíveis;
+- Quality Gate e Multi-AI não foram removidos para ganhar velocidade.
+
+Os tempos de cache rápido são conservadores por padrão: aproximadamente 30 min para resultado pronto de URL, 5 min para pauta/evento, 60 min para Evidence Pack de URL e 10 min para pauta/evento. Todos podem ser invalidados por releitura forçada.
 
 ## v0.9.6 — Unified FORMA Production Engine
 
@@ -210,7 +260,7 @@ A IA redige a partir das evidências já extraídas. O sistema não permite que 
 - cada versão preserva Quality Score e Confidence Score quando disponíveis;
 - **Content Lock** por campo semântico: título, corpo ou imagem editados manualmente podem ser travados;
 - reaplicar IA/template preserva os campos travados e atualiza somente os demais;
-- Smart Template Engine atualizado para **1.2.0**;
+- Smart Template Engine base atualizado para **1.2.0**; na v0.9.7.1 o motor passa a **1.2.1** com metadados de crédito de imagem;
 - envio para revisão diretamente do FORMA.
 
 ## v0.9.4.3 — Watchdog + Replay + Saúde + Custos

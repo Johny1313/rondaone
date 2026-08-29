@@ -8,7 +8,7 @@ assert.throws(()=>validateAssetUrl('http://127.0.0.1/a.png'));
 assert.throws(()=>validateAssetUrl('http://localhost/a.png'));
 const engineCode=read('public/design/smart-template-engine.js');
 const context={console,location:{origin:'https://ronda.test'}};context.globalThis=context;vm.createContext(context);vm.runInContext(engineCode,context);
-const E=context.RondaSmartTemplates;assert.equal(E.VERSION,'1.2.0');
+const E=context.RondaSmartTemplates;assert.match(E.VERSION,/^1\.2\./);
 const model={version:1,title:'Teste',source:'Fonte: Teste',slides:[{number:1,role:'Título principal',roleType:'cover',title:'Título',subtitle:'Subtítulo',body:'Subtítulo',source:'Fonte: Teste',image:'https://img.test/a.jpg'}]};
 const invalid={id:'bad',name:'Inválido',project:{artboards:[{id:'x',width:1080,height:1080,elements:[]}]}};
 const pre=E.preflightTemplate(invalid,model);assert.equal(pre.ok,false);

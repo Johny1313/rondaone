@@ -116,6 +116,7 @@
 .direct-article-status.show{display:block}.direct-article-status.ok{background:#eaf5e7;color:#37683f}.direct-article-status.error{background:#fff0ec;color:#a24231}
 .direct-article-progress{height:4px;border-radius:999px;background:#dfdcd5;overflow:hidden;margin-top:7px}.direct-article-progress>i{display:block;height:100%;width:0;background:#6559e8;transition:width .25s ease}
 .direct-article-check{display:flex!important;align-items:center;gap:6px;margin-top:8px!important;color:var(--ink)!important}.direct-article-check input{width:auto!important;margin:0!important}
+.production-source-summary{margin-top:8px;padding:9px;border:1px solid #d9d5cd;border-radius:9px;background:#faf9f6;display:flex;flex-direction:column;gap:4px}.production-source-summary.hidden{display:none}.production-source-summary strong{font-size:8px;text-transform:uppercase;letter-spacing:.06em;color:#77736b}.production-source-summary a{font-size:9px;font-weight:800;color:#5147cc;text-decoration:none;overflow-wrap:anywhere}.production-source-summary a:hover{text-decoration:underline}.production-source-summary span{font-size:8px;color:#77736b;line-height:1.4}.production-image-credits{display:flex;flex-direction:column;gap:5px;margin-top:6px}.production-image-credit{padding:7px 8px;border-radius:8px;background:#f0eee9;font-size:8px;line-height:1.4;color:#625e56}.production-image-credit b{color:#282621}.template-card{position:relative;cursor:pointer}.template-card-delete{position:absolute;right:6px;top:6px;z-index:5;width:25px;height:25px;border:1px solid #ead3cc;border-radius:7px;background:#fff6f2;color:#a24231;font-size:13px;font-weight:900;display:grid;place-items:center}.template-card-delete:hover{background:#ffe8df}.template-meta{padding-right:30px}
 </style>
 
 </head>
@@ -205,6 +206,7 @@
               <label class="direct-article-check"><input id="directArticleForce" type="checkbox"> Releitura completa · ignorar carrossel em cache</label>
               <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Analisar e produzir</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div>
               <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div><div id="productionStages" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px;font-size:8px"><span data-prod-stage="source">1 Fonte</span><span data-prod-stage="reading">2 Leitura</span><span data-prod-stage="evidence">3 Evidências</span><span data-prod-stage="generating">4 Multi-AI</span><span data-prod-stage="quality">5 Qualidade</span><span data-prod-stage="ready">6 FORMA</span></div>
+              <div class="production-source-summary hidden" id="productionSourceSummary"><strong>Matéria efetivamente lida</strong><a id="productionSourceLink" href="#" target="_blank" rel="noopener noreferrer"></a><span id="productionSourceMeta"></span><div class="production-image-credits" id="productionImageCredits"></div></div>
             </div>
             <div class="smart-template-status" id="smartTemplateStatus"><strong>Template inteligente</strong><span id="smartTemplateStatusText">Importe um carrossel da RONDA para aplicar o conteúdo automaticamente.</span><div class="smart-template-actions"><button class="mini-btn" id="reapplySmartTemplate" disabled>Reaplicar</button><button class="mini-btn" id="detachSmartTemplate" disabled>Desvincular</button></div></div>
             <div class="template-grid" id="templateGrid"></div>
@@ -556,7 +558,7 @@
     <div class="modal-actions"><button class="secondary-btn" id="clearIntegrationKeys">Limpar Remove.bg</button><button class="primary-btn" id="saveIntegrationKeys">Salvar Remove.bg</button></div></div></div>
 
   <div class="workspace-resize-badge hidden" id="workspaceResizeBadge">318 px</div>
-  <script src="/design/smart-template-engine.js?v=097-forma-production"></script>
+  <script src="/design/smart-template-engine.js?v=0971-fast-carousel"></script>
   <script>
 (() => {
   const $ = s => document.querySelector(s);
@@ -1181,8 +1183,8 @@
     compiled.createdAt=new Date().toISOString();templates.unshift(compiled);
     try{localStorage.setItem(LS_TEMPLATES,JSON.stringify(templates.slice(0,30)));closeModal('templateModal');renderTemplates();showToast(`Template inteligente salvo · ${compiled.slotCount} campos detectados`);}catch{showToast('Template grande demais para o armazenamento local');}
   };
-  function getTemplates(){try{const current=JSON.parse(localStorage.getItem(LS_TEMPLATES)||'[]');if(current.length)return current;return JSON.parse(localStorage.getItem('rondaDesign.templates.v1')||'[]');}catch{return[];}}
-  const directArticleState={busy:false,lastJobId:null};
+  function getTemplates(){try{const stored=localStorage.getItem(LS_TEMPLATES);if(stored!==null)return JSON.parse(stored||'[]')||[];return JSON.parse(localStorage.getItem('rondaDesign.templates.v1')||'[]')||[];}catch{return[];}}
+  const directArticleState={busy:false,lastJobId:null,lastReused:false};
   function setDirectArticleStatus(text,mode='',progress=null){
     const box=$('#directArticleStatus'),label=$('#directArticleStatusText'),bar=$('#directArticleProgress');
     if(!box||!label||!bar)return;
@@ -1199,6 +1201,17 @@
     templates.forEach(t=>{const o=document.createElement('option');o.value=String(t.id||'');o.textContent=`${t.name} · ${t.project?.artboards?.length||1} layout(s)`;select.appendChild(o);});
     if(previous&&templates.some(t=>String(t.id)===previous))select.value=previous;
     else if(templates.length)select.value=String(templates[0].id||'');
+  }
+
+  function clearProductionProvenance(){const box=$('#productionSourceSummary'),link=$('#productionSourceLink'),meta=$('#productionSourceMeta'),credits=$('#productionImageCredits');box?.classList.add('hidden');if(link){link.textContent='';link.removeAttribute('href');}if(meta)meta.textContent='';if(credits)credits.innerHTML='';}
+  function renderProductionProvenance(data){
+    const evidence=data?.evidencePack||{};const production=data?.production||{};const readUrl=production.readUrl||evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||data?.reading?.selectedSource?.extractionUrl||data?.reading?.selectedSource?.url||data?.verificationLinks?.[0]?.url||'';
+    if(!/^https?:\/\//i.test(String(readUrl||''))){clearProductionProvenance();return;}
+    const box=$('#productionSourceSummary'),link=$('#productionSourceLink'),meta=$('#productionSourceMeta'),credits=$('#productionImageCredits');
+    link.href=readUrl;link.textContent=readUrl;const source=evidence.sourceName||production.sourceName||data?.reading?.selectedSource?.sourceName||'Fonte';const quality=Math.round(Number(evidence?.reading?.quality||production.readingQuality||0));const method=evidence?.reading?.method||'';const duration=Number(evidence?.reading?.durationMs||0);meta.textContent=`${source}${quality?` · leitura ${quality}/100`:''}${method?` · ${method}`:''}${duration?` · ${duration<1000?duration+' ms':(duration/1000).toFixed(1)+' s'}`:''}`;
+    const visuals=evidence?.images||data?.articleVisuals||data?.reading?.selectedSource?.images||{};const list=[visuals?.primary,...(visuals?.alternatives||[])].filter(Boolean);const unique=[];const seen=new Set();for(const image of list){const key=String(image.url||image.originalUrl||'');if(!key||seen.has(key))continue;seen.add(key);unique.push(image);if(unique.length>=5)break;}
+    credits.innerHTML='';unique.forEach((image,index)=>{const row=document.createElement('div');row.className='production-image-credit';const photographer=String(image.photographer||'').trim();const credit=String(image.credit||'').trim();const origin=String(image.sourceName||source||'').trim();const parts=[];if(photographer)parts.push(`<b>Foto:</b> ${escapeHtml(photographer)}`);if(credit&&(!photographer||!credit.toLocaleLowerCase('pt-BR').includes(photographer.toLocaleLowerCase('pt-BR'))))parts.push(`<b>Crédito:</b> ${escapeHtml(credit)}`);if(origin)parts.push(`<b>Origem:</b> ${escapeHtml(origin)}`);row.innerHTML=`<b>${index===0?'Imagem principal':`Imagem ${index+1}`}</b>${parts.length?' · '+parts.join(' · '):' · crédito autoral não informado pelo portal'}`;credits.appendChild(row);});
+    box.classList.remove('hidden');
   }
   async function directArticleApi(url,options={}){
     const response=await fetch(url,{cache:'no-store',credentials:'same-origin',...options});
@@ -1220,7 +1233,7 @@
   async function waitFormaProductionJob(jobId,pollAfterMs=1200){
     const deadline=Date.now()+8*60*1000;let networkErrors=0;
     while(Date.now()<deadline){
-      await new Promise(resolve=>setTimeout(resolve,Math.max(900,Number(pollAfterMs)||1200)));
+      await new Promise(resolve=>setTimeout(resolve,Math.max(600,Number(pollAfterMs)||900)));
       let bundle;
       try{bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);networkErrors=0;}
       catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',8);await new Promise(r=>setTimeout(r,Math.min(5000,800+networkErrors*500)));continue;}
@@ -1239,7 +1252,7 @@
     setProductionStage('source');
     const response=await directArticleApi('/api/production/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const jobId=response?.job?.id;if(!jobId)throw new Error('O Production Engine não retornou um job válido.');
-    directArticleState.lastJobId=jobId;
+    directArticleState.lastJobId=jobId;directArticleState.lastReused=Boolean(response?.reused);
     if(response?.job?.status==='ready'&&response.job.result?.slides?.length)return response.job.result;
     return waitFormaProductionJob(jobId,response.pollAfterMs);
   }
@@ -1331,7 +1344,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7',
+      sourceVersion:'0.9.7.1',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
@@ -1356,7 +1369,7 @@
     if(directArticleState.busy)return;
     const input=$('#directArticleUrl'),button=$('#directArticleGenerate'),articleUrl=String(input?.value||'').trim();
     if(!/^https?:\/\//i.test(articleUrl)){setDirectArticleStatus('Cole um link completo começando com http:// ou https://.','error',0);input?.focus();return;}
-    directArticleState.busy=true;button.disabled=true;const original=button.textContent;button.textContent='Lendo matéria…';
+    directArticleState.busy=true;directArticleState.lastReused=false;clearProductionProvenance();button.disabled=true;const original=button.textContent;button.textContent='Lendo matéria…';
     setDirectArticleStatus('Criando produção no FORMA Production Engine…','',2);
     try{
       const data=await startFormaProduction({sourceType:'url',url:articleUrl,slideCount:Number($('#directArticleSlides').value)||7,force:Boolean($('#directArticleForce').checked),templateId:$('#directArticleTemplate').value||null});
@@ -1376,7 +1389,8 @@
       }
       const visualMode=project.directArticle?.visualMode;
       const visualLabel=visualMode==='publisher'?'imagem da matéria':visualMode==='free-bank'?'imagem do Banco Free':'sem imagem automática liberada';
-      setDirectArticleStatus(`Carrossel concluído · ${project.slides.length} slides · ${visualLabel}${templateId?' · template aplicado':''}.`,'ok',100);
+      renderProductionProvenance(data);
+      setDirectArticleStatus(`Carrossel concluído${directArticleState.lastReused?' · cache rápido':''} · ${project.slides.length} slides · ${visualLabel}${templateId?' · template aplicado':''}.`,'ok',100);
       showToast(`Produção FORMA concluída · ${project.slides.length} slides`,3200);
     }catch(error){
       setDirectArticleStatus(error.message||'Não foi possível gerar o carrossel.','error',100);
@@ -1386,7 +1400,7 @@
     }
   }
   $('#directArticleGenerate').onclick=generateDirectArticleCarousel;
-  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;setDirectArticleStatus('', '', 0);};
+  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;setDirectArticleStatus('', '', 0);clearProductionProvenance();};
   $('#directArticleUrl').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();generateDirectArticleCarousel();}});
   function renderSmartTemplateStatus(){
     const text=$('#smartTemplateStatusText'),reapply=$('#reapplySmartTemplate'),detach=$('#detachSmartTemplate');if(!text)return;
@@ -1411,11 +1425,12 @@
   }
   $('#reapplySmartTemplate').onclick=reapplySmartTemplate;$('#detachSmartTemplate').onclick=detachSmartTemplate;
   function miniShapeStyle(m,e,sx,sy){if(e.type==='circle')m.style.borderRadius='50%';if(['rect','square','roundRect'].includes(e.type))m.style.borderRadius=Math.min(12,(e.radii?.[0]||0)*sx)+'px';if(e.type==='triangle')m.style.clipPath='polygon(50% 0,100% 100%,0 100%)';if(e.type==='star')m.style.clipPath=starPolygonCss(e.starPoints||5,e.starInner??44);}
+  function deleteTemplateRecord(id,name='Template'){if(!id)return;if(!confirm(`Apagar o template “${name}”? O design que já está aberto não será apagado.`))return;const next=getTemplates().filter(item=>String(item?.id)!==String(id));try{localStorage.setItem(LS_TEMPLATES,JSON.stringify(next));if(state.templateBinding?.templateId===id)showToast('Template apagado da biblioteca · composição atual preservada',3200);else showToast('Template apagado');renderTemplates();}catch{showToast('Não foi possível apagar o template');}}
   function renderTemplates(){
     renderDirectArticleTemplates();renderSmartTemplateStatus();const templates=getTemplates(),grid=$('#templateGrid'),empty=$('#templateEmpty');grid.innerHTML='';empty.style.display=templates.length?'none':'flex';
-    templates.forEach(raw=>{const t=normalizeTemplateRecord(raw);if(!t)return;const d=migrateSnapshot(t.project.artboards[0]),card=document.createElement('button');card.className='template-card'+(t.smart?' smart-template':'');const preview=document.createElement('div');preview.className='template-preview';preview.style.background=backgroundCss(d);if(t.smart){const badge=document.createElement('span');badge.className='template-smart-badge';badge.textContent='INTELIGENTE';preview.appendChild(badge);}
+    templates.forEach(raw=>{const t=normalizeTemplateRecord(raw);if(!t)return;const d=migrateSnapshot(t.project.artboards[0]),card=document.createElement('div');card.className='template-card'+(t.smart?' smart-template':'');card.tabIndex=0;card.setAttribute('role','button');const preview=document.createElement('div');preview.className='template-preview';preview.style.background=backgroundCss(d);if(t.smart){const badge=document.createElement('span');badge.className='template-smart-badge';badge.textContent='INTELIGENTE';preview.appendChild(badge);}const del=document.createElement('button');del.className='template-card-delete';del.type='button';del.title='Apagar template';del.setAttribute('aria-label',`Apagar template ${t.name}`);del.textContent='×';del.onclick=event=>{event.stopPropagation();deleteTemplateRecord(t.id,t.name);};card.appendChild(del);
       (d.elements||[]).slice(0,18).forEach(e=>{const isImg=e.type==='image'||(e.type==='mask'&&e.src),m=document.createElement(isImg?'img':'div'),sx=100/d.width,sy=100/d.height;m.className='mini-el';m.style.left=(e.x*sx)+'%';m.style.top=(e.y*sy)+'%';m.style.width=(e.w*sx)+'%';m.style.height=(e.h*sy)+'%';m.style.opacity=(e.opacity??100)/100;m.style.transform=`rotate(${e.rotation||0}deg)`;if(e.type==='text'){m.textContent=e.text;m.style.fontSize=Math.max(2,e.fontSize*sy)+'px';m.style.fontWeight=e.fontWeight;m.style.fontFamily=familyCss(e.fontFamily);m.style.color=e.textColor;m.style.overflow='hidden';}else if(e.type==='image'){m.src=e.src;m.style.objectFit=e.objectFit||'cover';}else if(e.type==='mask'){if(e.src){m.src=e.src;m.style.objectFit='cover';}else m.style.background='#ddd';if(e.maskShape==='circle')m.style.borderRadius='50%';if(e.maskShape==='square')m.style.borderRadius=Math.min(10,(e.radii?.[0]||0)*sx)+'px';if(e.maskShape==='triangle')m.style.clipPath='polygon(50% 0,100% 100%,0 100%)';}else{ensureShapePaint(e);m.style.background=shapeFillCss(e);if(e.strokeWidth){if(['triangle','star'].includes(e.type))m.style.filter=shapeStrokeFilter(Math.max(1,e.strokeWidth*sx),e.strokeColor);else m.style.border=`${Math.max(1,e.strokeWidth*sx)}px solid ${e.strokeColor}`;}miniShapeStyle(m,e,sx,sy);}preview.appendChild(m);});
-      const meta=document.createElement('div');meta.className='template-meta';meta.innerHTML=`<strong>${escapeHtml(t.name)}</strong><span>${escapeHtml(t.category||'Outro')} · ${t.project.artboards.length} layout(s) · ${t.slotCount||0} campos</span>`;card.append(preview,meta);card.onclick=()=>{if(state.rondaContentModel?.slides?.length){applySmartTemplate(t);return;}if(confirm(`Abrir o template “${t.name}”?`)){const project=t.project;state.artboards=clone(project.artboards);state.activeArtboardId=project.activeArtboardId&&state.artboards.some(b=>b.id===project.activeArtboardId)?project.activeArtboardId:state.artboards[0].id;state.docTitle=t.name;state.rondaContentModel=null;state.templateBinding=null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;fitZoom();renderAll();showToast('Template aberto');}};grid.appendChild(card);
+      const meta=document.createElement('div');meta.className='template-meta';meta.innerHTML=`<strong>${escapeHtml(t.name)}</strong><span>${escapeHtml(t.category||'Outro')} · ${t.project.artboards.length} layout(s) · ${t.slotCount||0} campos</span>`;card.append(preview,meta);const openTemplate=()=>{if(state.rondaContentModel?.slides?.length){applySmartTemplate(t);return;}if(confirm(`Abrir o template “${t.name}”?`)){const project=t.project;state.artboards=clone(project.artboards);state.activeArtboardId=project.activeArtboardId&&state.artboards.some(b=>b.id===project.activeArtboardId)?project.activeArtboardId:state.artboards[0].id;state.docTitle=t.name;state.rondaContentModel=null;state.templateBinding=null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;fitZoom();renderAll();showToast('Template aberto');}};card.onclick=openTemplate;card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openTemplate();}};grid.appendChild(card);
     });
   }
   $('#newDesignBtn').onclick=()=>{if(!confirm('Criar um novo design?'))return;state.width=1080;state.height=1080;state.bg='#f3f1ed';state.bgMode='solid';state.gradient={angle:90,stops:[{color:'#ff5c35',alpha:100,pos:0},{color:'#6941ff',alpha:0,pos:100}]};state.elements=[];clearSelection();state.editingTextId=null;state.maskEditingId=null;state.docTitle='Sem título';state.artboards=[];state.activeArtboardId=null;state.rondaContentModel=null;state.templateBinding=null;state.platformMeta=null;ensureArtboards();state.history=[snapshot()];state.historyIndex=0;fitZoom();renderAll();markDirty();};
@@ -1588,7 +1603,7 @@
       const data=await startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount:Number($('#directArticleSlides').value)||7,templateId:$('#directArticleTemplate').value||null});
       const articleUrl=data?.verificationLinks?.[0]?.url||data?.evidencePack?.canonicalUrl||'';
       const project=await buildDirectArticleProject(data,articleUrl);
-      project.source='forma-production-topic';project.topicId=topicId;
+      project.source='forma-production-topic';project.topicId=topicId;renderProductionProvenance(data);
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas da pauta.');
       const templateId=$('#directArticleTemplate').value;if(templateId){const template=getTemplates().find(t=>String(t.id)===String(templateId));if(template)applySmartTemplate(template);}
       setDirectArticleStatus(`Pauta produzida no FORMA · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
@@ -1750,6 +1765,6 @@
 })();
 
   </script>
-<script src="/access-client.js?v=097-forma-production" defer></script>
+<script src="/access-client.js?v=0971-fast-carousel" defer></script>
 </body>
 </html>

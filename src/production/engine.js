@@ -6,9 +6,9 @@ import {
   validateArticleUrl,
 } from "../ronda/v285/article-reader.js";
 import { stableHash, plainText } from "../ronda/v285/parser.js";
-import { buildEvidencePack, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
+import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.1";
 const JOB_TTL_HOURS = 48;
 const EVIDENCE_TTL_DAYS = 7;
 const MAX_RESULT_JSON = 900_000;
@@ -105,7 +105,7 @@ export async function createProductionJob(db,{sourceType,sourceRef=null,input={}
   await ensureProductionSchema(db);
   await cleanupProductionStorage(db).catch(()=>null);
   const normalizedSourceType=["url","topic","event","text"].includes(String(sourceType))?String(sourceType):"url";
-  const identity=normalizedSourceType==="url"?validateArticleUrl(sourceRef||input?.url):String(sourceRef||input?.topicId||input?.eventId||stableHash(safeJson(input)));
+  const identity=normalizedSourceType==="url"?normalizeArticleIdentity(sourceRef||input?.url):String(sourceRef||input?.topicId||input?.eventId||stableHash(safeJson(input)));
   const id=`prod-${crypto.randomUUID()}`;
   const now=nowIso();const expires=new Date(Date.now()+JOB_TTL_HOURS*3600000).toISOString();
   await db.prepare(`INSERT INTO production_jobs(id,source_type,source_ref,status,stage,progress,input_json,created_by,created_at,updated_at,expires_at) VALUES(?,?,?,'queued','source',1,?,?,?,?,?)`)
@@ -150,13 +150,60 @@ export async function getEvidencePackage(db,id){
   return row?parseJson(row.payload_json,null):null;
 }
 
-async function cachedEvidenceFor(db,job){
+async function cachedEvidenceFor(db,job,{maxAgeMinutes=null}={}){
   await ensureProductionSchema(db);
+  const age=Number(maxAgeMinutes)|| (job.sourceType==="url"?60:10);
+  const cutoff=new Date(Date.now()-Math.max(1,age)*60000).toISOString();
   if(job.sourceType==="url"){
-    const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type='url' AND source_ref=? AND expires_at>? ORDER BY reading_quality DESC, updated_at DESC LIMIT 1").bind(job.sourceRef,nowIso()).first();
+    const normalized=normalizeArticleIdentity(job.sourceRef);
+    const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type='url' AND expires_at>? AND updated_at>=? AND (source_ref=? OR canonical_url=?) ORDER BY reading_quality DESC, updated_at DESC LIMIT 1").bind(nowIso(),cutoff,job.sourceRef,normalized).first();
     return row?parseJson(row.payload_json,null):null;
   }
-  if(job.sourceRef){const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type=? AND source_ref=? AND expires_at>? ORDER BY updated_at DESC LIMIT 1").bind(job.sourceType,job.sourceRef,nowIso()).first();return row?parseJson(row.payload_json,null):null;}
+  if(job.sourceRef){const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type=? AND source_ref=? AND expires_at>? AND updated_at>=? ORDER BY updated_at DESC LIMIT 1").bind(job.sourceType,job.sourceRef,nowIso(),cutoff).first();return row?parseJson(row.payload_json,null):null;}
+  return null;
+}
+
+export function productionInputFingerprint(input={},sourceType="url",sourceRef=""){
+  const topic=input?.topic&&typeof input.topic==="object"?input.topic:null;
+  const topicItems=Array.isArray(topic?.items)?topic.items.slice(0,8).map((item)=>({
+    id:item?.id||null,
+    url:normalizeArticleIdentity(item?.url||""),
+    title:plainText(item?.title).slice(0,220),
+    publishedAt:item?.publishedAt||null,
+    contentHash:stableHash(plainText(item?.content||item?.description||"").slice(0,1600)),
+  })):[];
+  return stableHash(JSON.stringify({
+    sourceType,
+    sourceRef:sourceType==="url"?normalizeArticleIdentity(sourceRef||input?.url||""):String(sourceRef||input?.topicId||input?.eventId||""),
+    url:sourceType==="url"?normalizeArticleIdentity(input?.url||sourceRef||""):null,
+    title:plainText(input?.title||topic?.title||"").slice(0,240),
+    editoria:plainText(input?.editoria||topic?.editoria||"").slice(0,100),
+    topic:topic?{
+      id:topic.id||null,
+      lastChangedAt:topic.lastChangedAt||topic.updatedAt||topic.lastSeenAt||null,
+      sourceCount:Number(topic.sourceCount)||0,
+      itemCount:Number(topic.itemCount)||topicItems.length,
+      items:topicItems,
+    }:null,
+  }));
+}
+
+export async function findReusableProductionJob(db,{sourceType,sourceRef,createdBy,input={},maxAgeMinutes=null}={}){
+  await ensureProductionSchema(db);
+  if(!sourceType||!sourceRef||!createdBy)return null;
+  const age=Number(maxAgeMinutes)|| (sourceType==="url"?30:5);
+  const cutoff=new Date(Date.now()-Math.max(1,age)*60000).toISOString();
+  const normalizedRef=sourceType==="url"?normalizeArticleIdentity(sourceRef):String(sourceRef);
+  const rows=(await db.prepare("SELECT * FROM production_jobs WHERE source_type=? AND source_ref=? AND created_by=? AND status='ready' AND result_json IS NOT NULL AND updated_at>=? ORDER BY updated_at DESC LIMIT 8").bind(sourceType,normalizedRef,createdBy,cutoff).all())?.results||[];
+  const slideCount=Number(input?.slideCount)||7;const styleKey=String(input?.styleKey||"");
+  const fingerprint=productionInputFingerprint(input,sourceType,normalizedRef);
+  for(const row of rows){
+    const candidate=jobRow(row);const candidateInput=candidate?.input||{};
+    if((Number(candidateInput.slideCount)||7)!==slideCount)continue;
+    if(styleKey&&String(candidateInput.styleKey||"")!==styleKey)continue;
+    if(productionInputFingerprint(candidateInput,sourceType,normalizedRef)!==fingerprint)continue;
+    if(candidate?.result?.slides?.length)return candidate;
+  }
   return null;
 }
 
@@ -167,16 +214,16 @@ export async function processProductionRead(env,jobId,{force=false}={}){
   if(job.status==="ready"&&job.result)return job;
   await updateJob(db,jobId,{status:"running",stage:"reading",progress:10,error:null});await event(db,jobId,"reading","running","Leitura iniciada");
   try{
-    if(!force){const cached=await cachedEvidenceFor(db,job);if(cached?.articleText&&Number(cached?.reading?.quality)>=55){await saveEvidencePackage(db,cached);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:46,evidenceId:cached.id,fallbackLevel:1});await event(db,jobId,"evidence","completed_fallback","Evidence Pack recuperado do cache",{quality:cached?.reading?.quality});return job;}}
+    if(!force){const cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)});if(cached?.articleText&&Number(cached?.reading?.quality)>=55){await saveEvidencePackage(db,cached);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:46,evidenceId:cached.id,fallbackLevel:1});await event(db,jobId,"evidence","completed_fallback","Evidence Pack recuperado do cache",{quality:cached?.reading?.quality});return job;}}
     let evidenceResult;
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
-      const record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||16_000});
+      const record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||12_000,allowCollectedFastPath:!force});
       if(!record.ok)throw new Error(record.error||"A matéria externa não forneceu leitura útil.");
       evidenceResult={ok:true,evidence:buildEvidencePack(record,{sourceType:"url",sourceRef:job.sourceRef})};
     }else if(job.sourceType==="topic"||job.sourceType==="event"){
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
-      evidenceResult=await scrapeTopicToEvidence(topic,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||16_000});
+      evidenceResult=await scrapeTopicToEvidence(topic,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||12_000,allowCollectedFastPath:!force});
       if(!evidenceResult.ok)throw new Error(evidenceResult.error||"Nenhuma fonte da pauta foi lida.");
       evidenceResult.evidence={...evidenceResult.evidence,sourceType:job.sourceType,sourceRef:job.sourceRef,topicId:job.sourceRef};
     }else{
@@ -209,13 +256,29 @@ export async function processProductionGenerate(env,jobId){
     const models=[env.ARTICLE_ANALYSIS_MODEL||ARTICLE_ANALYSIS_MODEL,env.ARTICLE_SECONDARY_MODEL||ARTICLE_SECONDARY_MODEL,...(String(env.CAROUSEL_TERTIARY_AI||"")==="1"?[env.ARTICLE_TERTIARY_MODEL||ARTICLE_TERTIARY_MODEL]:[])];
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildIntelligentCarousel(topic,{ai:env.AI,model:models[0],models,multiAiMode:"failover",fetcher:syntheticFetcher,liveReading:true,slideCount,styleKey:job.input?.styleKey||"production",writingStyle:job.input?.writingProfile||null,articleTimeoutMs:6_000});
-    const finalResult={...result,editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,readingQuality:evidence?.reading?.quality||0},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,title:evidence.title,wordCount:evidence.wordCount,reading:evidence.reading,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.1",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,wordCount:evidence.wordCount,reading:evidence.reading,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score});return job;
   }catch(error){await updateJob(db,jobId,{status:"failed",stage:"generating",progress:100,error:error?.message||String(error)});await event(db,jobId,"generating","failed",error?.message||String(error));throw error;}
 }
 
 export async function startProductionPipeline(env,jobId,{force=false,ctx=null}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
+  if(!force){
+    const cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)}).catch(()=>null);
+    if(cached?.articleText&&Number(cached?.reading?.quality)>=55){
+      await saveEvidencePackage(db,cached).catch(()=>null);
+      job=await updateJob(db,jobId,{status:"queued",stage:"generating",progress:52,evidenceId:cached.id,fallbackLevel:1,error:null});
+      await event(db,jobId,"evidence","completed_fallback","Fast path: Evidence Pack recente reutilizado; leitura pulada",{quality:cached?.reading?.quality,readUrl:cached?.resolvedUrl||cached?.canonicalUrl||cached?.url||null}).catch(()=>null);
+      const carouselQueue=queueForCarousel(env);
+      if(carouselQueue?.send){
+        try{await carouselQueue.send({type:"production-generate",jobId});await event(db,jobId,"generating","queued","Fast path enviado direto para CAROUSEL_AI_QUEUE").catch(()=>null);return job;}
+        catch(error){await event(db,jobId,"generating","completed_fallback","CAROUSEL_AI_QUEUE indisponível no fast path; geração direta",{error:String(error?.message||error).slice(0,180)}).catch(()=>null);}
+      }
+      const task=processProductionGenerate(env,jobId);
+      if(ctx?.waitUntil){ctx.waitUntil(task.catch(()=>null));return job;}
+      await task;return getProductionJob(db,jobId);
+    }
+  }
   const readQueue=queueForRead(env);
   if(readQueue?.send){
     try{await readQueue.send({type:"production-read",jobId,force:Boolean(force)});job=await updateJob(db,jobId,{status:"queued",stage:"reading",progress:5});await event(db,jobId,"reading","queued","Enviado para ARTICLE_READ_QUEUE",{dedicated:Boolean(env.ARTICLE_READ_QUEUE)});return job;}
@@ -255,7 +318,7 @@ export async function runProductionQueue(batch,env){
 
 export async function productionBundle(db,id){
   const job=await getProductionJob(db,id);if(!job)return null;const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;const events=(await db.prepare("SELECT stage,status,detail,metadata_json,created_at FROM production_stage_events WHERE job_id=? ORDER BY created_at ASC LIMIT 80").bind(id).all())?.results||[];
-  return {job,evidence:job.status==="ready"?evidence:evidence?{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,title:evidence.title,url:evidence.url,canonicalUrl:evidence.canonicalUrl,wordCount:evidence.wordCount,reading:evidence.reading,images:evidence.images}:null,events:events.map((x)=>({stage:x.stage,status:x.status,detail:x.detail,metadata:parseJson(x.metadata_json,{}),createdAt:x.created_at}))};
+  return {job,evidence:job.status==="ready"?evidence:evidence?{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,title:evidence.title,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,wordCount:evidence.wordCount,reading:evidence.reading,images:evidence.images}:null,events:events.map((x)=>({stage:x.stage,status:x.status,detail:x.detail,metadata:parseJson(x.metadata_json,{}),createdAt:x.created_at}))};
 }
 
 export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
