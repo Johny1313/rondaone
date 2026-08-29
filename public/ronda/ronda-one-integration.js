@@ -1,7 +1,7 @@
 (()=>{
   'use strict';
 
-  const VERSION='0.9.2';
+  const VERSION='0.9.2.1';
   const BUILD='editorial-desk-operations';
   const JOB_KEY='rondaOne.intelligentJob';
   const MAX_LOCAL_JOB_AGE_MS=12*60*1000;

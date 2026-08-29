@@ -1,4 +1,16 @@
-# RONDA ONE Cloud v0.9.2 — Mesa Operacional
+# RONDA ONE Cloud v0.9.2.1 — Admin Login Hotfix
+
+A v0.9.2.1 é um hotfix sobre a v0.9.2 Mesa Operacional. Corrige o HTTP 500 no login administrativo causado pela ausência de `SESSION_COOKIE_NAME` no import do módulo de autenticação. A inteligência editorial e a estrutura da Mesa permanecem na versão 2.9.2.
+
+## Hotfix v0.9.2.1
+
+- corrige `ReferenceError: SESSION_COOKIE_NAME is not defined` após validação correta do ADM;
+- preserva o cookie `ronda_session` e a criação normal da sessão administrativa;
+- adiciona teste de regressão específico para o contrato do login ADM;
+- não exige migração do D1;
+- não altera o secret: `ADMIN_BOOTSTRAP_PASSWORD` continua sendo a senha canônica do administrador.
+
+---
 
 A v0.9.2 parte integralmente da v0.9.1 e transforma a Mesa Editorial em uma camada mais operacional para redação, sem alterar o desenho de coleta rápida, a unificação da página principal ou a recuperação de carrossel.
 

@@ -39,7 +39,7 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.2',
+      version:'0.9.2.1',
       modules:{
         ronda:true,
         editorialVersion:'2.9.2',
@@ -66,6 +66,11 @@ export default {
         mode:'cloudflare-secret',
         pbkdf2Bootstrap:false,
         secretRequired:true
+      },
+      adminLoginHotfixV0921:{
+        enabled:true,
+        sessionCookieNameImported:true,
+        successfulAdminLoginCreatesSession:true
       },
       roundPipeline:{
         mode:'workers-paid-full',
@@ -219,7 +224,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.2-092-editorial-desk'
+        assetCacheBust:'2.9.2-0921-admin-login'
       },
       navigation:{
         ronda:'/ronda',

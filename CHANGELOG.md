@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2.1 — Admin Login Hotfix
+
+- Corrige HTTP 500 no login ADM ao importar `SESSION_COOKIE_NAME` de `profile.js`.
+- Mantém autenticação por `ADMIN_BOOTSTRAP_PASSWORD`.
+- Adiciona teste `test-0921-admin-login-hotfix.mjs`.
+- Sem migração D1.
+
 ## 0.9.2 — Mesa Operacional
 
 - ação editorial: Pautar agora / Acompanhar / Validar / Observar;
