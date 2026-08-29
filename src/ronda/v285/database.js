@@ -2,7 +2,7 @@ import { getReliabilitySummary } from "../../reliability/core.js";
 import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.9.5";
+export const DATABASE_SCHEMA_VERSION = "2.9.5.1";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -829,15 +829,21 @@ export async function getLatestRound(db) {
   }
 }
 
-export async function getRunHistory(db, limit = 30) {
+export async function getRunHistory(db, limit = 30, { includeFastLane = false, includeTechnical = false } = {}) {
   await ensureSchema(db);
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 30));
+  const where = [];
+  if (!includeFastLane) where.push("trigger_type <> 'fast-lane'");
+  // Falhas sem uma única fonte diagnosticada são incidentes de infraestrutura,
+  // não uma ronda editorial. Permanecem no D1/watchdog, mas não poluem o Histórico.
+  if (!includeTechnical) where.push("NOT (status IN ('failed','expired') AND items_count = 0 AND topics_count = 0 AND sources_count = 0)");
   const result = await db
     .prepare(`
       SELECT id, trigger_type, status, queued_at,
              NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at,
              items_count, topics_count, sources_count, social_items_count, error
       FROM runs
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
       LIMIT ?
     `)
@@ -1313,15 +1319,19 @@ export async function listSourceDiagnostics(db) {
   }));
 }
 
-export async function getLatestRunSummary(db, { successOnly = false } = {}) {
+export async function getLatestRunSummary(db, { successOnly = false, editorialOnly = false, includeTechnical = true } = {}) {
   await ensureSchema(db);
+  const where = [];
+  if (successOnly) where.push("status = 'success'");
+  if (editorialOnly) where.push("trigger_type <> 'fast-lane'");
+  if (!includeTechnical) where.push("NOT (status IN ('failed','expired') AND items_count = 0 AND topics_count = 0 AND sources_count = 0)");
   const row = await db.prepare(`
     SELECT id, trigger_type, status, queued_at,
            NULLIF(started_at, '') AS started_at, NULLIF(heartbeat_at, '') AS heartbeat_at,
            NULLIF(completed_at, '') AS completed_at,
            items_count, topics_count, sources_count, social_items_count, error
     FROM runs
-    ${successOnly ? "WHERE status = 'success'" : ""}
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
     LIMIT 1
   `).first();

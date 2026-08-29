@@ -1,6 +1,7 @@
 import rondaWorker from './v285/index.js';
 import { rewriteRondaHtml } from './shell.js';
 import { runEditorialEventQueue } from './editorial-events.js';
+import { runProductionQueue } from '../production/engine.js';
 
 function modifiedHeaders(response, contentType){
   const headers=new Headers(response.headers);
@@ -43,10 +44,16 @@ export async function runRondaQueue(batch,env){
   const editorial=[];
   const original=[];
   const legacyFree=[];
+  const production=[];
 
   for(const message of messages){
     const body=message?.body&&typeof message.body==='object'?message.body:{};
     const type=String(body.type||'');
+
+    if(type.startsWith('production-')){
+      production.push(message);
+      continue;
+    }
 
     if(type==='event-enrich'||batch?.queue==='ronda-one-editorial-jobs'){
       editorial.push(message);
@@ -65,6 +72,7 @@ export async function runRondaQueue(batch,env){
   }
 
   for(const message of legacyFree) message?.ack?.();
+  if(production.length) await runProductionQueue({...batch,messages:production},env);
   if(editorial.length) await runEditorialEventQueue({...batch,messages:editorial},env);
   if(original.length&&typeof rondaWorker.queue==='function'){
     await rondaWorker.queue({...batch,messages:original},env);

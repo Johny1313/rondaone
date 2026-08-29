@@ -41,13 +41,13 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.5',
+      version:'0.9.7',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.5',
+        editorialVersion:'2.9.7',
         design:true,
         editorialAi:!!env.AI,
-        designImageAi:false,
+        designImageAi:!!env.AI,
         freeImages:true,
         articleImages:true,
         projects:!!env.DB,
@@ -55,10 +55,11 @@ export default {
           round:!!env.ROUND_JOBS_QUEUE,
           intelligent:!!env.INTELLIGENT_JOBS_QUEUE,
           carouselDedicated:!!env.CAROUSEL_JOBS_QUEUE,
+          carouselAiDedicated:!!env.CAROUSEL_AI_QUEUE,
           articleReadDedicated:!!env.ARTICLE_READ_QUEUE
         }
       },
-      billingMode:'workers-paid-carousel-first',
+      billingMode:'workers-paid-recommended',
       stabilityMode:'queue-first',
       carouselMode:'direct-article-source-evidence',
       discoveryMode:'rss-plus-direct-html-scraping-plus-domain-fallback',
@@ -80,7 +81,7 @@ export default {
         mode:'workers-paid-full',
         registeredSources:39,
         sourceConcurrency:8,
-        requestBudget:120,
+        requestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||120,
         oneSourcePerRound:false,
         uiForceLatestOnStartup:true,
         legacyBackoffClampMinutes:10,
@@ -185,6 +186,18 @@ export default {
         staleGetIsNonTerminal:true,
         legacyLockJobRecovery:true
       },
+      formaProductionEngineV096:{enabled:true,entryPoint:'forma-design',singleProductionApi:'/api/production/jobs',sourceTypes:['topic','event','url','text'],evidencePack:true,articleReadSeparated:true,carouselAiSeparated:true,stages:['source','reading','evidence','generating','ready'],dedicatedArticleQueue:!!env.ARTICLE_READ_QUEUE,dedicatedCarouselQueue:!!env.CAROUSEL_AI_QUEUE,legacyCarouselEndpointsCompatible:true},
+      scrapingEvidenceEngineV097:{enabled:true,adapters:['g1','cnn-brasil','folha','estadao','oglobo','poder360','agencia-brasil','metropoles','uol','infomoney'],genericExtraction:true,jsonLd:true,embeddedJson:true,ampFallback:true,collectedFallback:true,browserFallbackOptional:false,evidenceCacheDays:7},
+      roundStabilityV0951:{
+        enabled:true,
+        fastLaneSeparatedFromEditorialHistory:true,
+        technicalZeroSourceFailuresHiddenByDefault:true,
+        auxiliaryPrerequisitesNonBlocking:true,
+        configurableExternalRequestBudget:true,
+        recommendedWorkersPlan:'paid',
+        paidDefaultSubrequests:10000,
+        freeExternalSubrequests:50
+      },
       editorialDeskV092:{
         enabled:true,
         sourceHealthPanel:true,
@@ -234,7 +247,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.5-workflow-multi-ai'
+        assetCacheBust:'2.9.7-forma-production-scraping'
       },
       navigation:{
         ronda:'/ronda',
@@ -258,9 +271,9 @@ export default {
         directAuditLinks:true
       },
       imageEngine:{
-        mode:'non-generative',
-        priority:['publisher','wikimedia-commons','uploads','giphy'],
-        ai:false
+        mode:'forma-production-on-demand',
+        priority:['publisher','scraped-article','wikimedia-commons','uploads','giphy','ai-on-demand'],
+        ai:!!env.AI
       }
     });
 

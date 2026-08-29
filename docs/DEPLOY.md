@@ -1,100 +1,119 @@
-# Deploy — RONDA ONE v0.9.5
+# Deploy — RONDA ONE v0.9.7
 
-## 1. Bindings obrigatórios
+## 1. Perfil recomendado
 
-A v0.9.5 continua usando a infraestrutura existente:
+Para 39 fontes, scraping, fallbacks, Multi-AI e Queues dedicadas, use **Cloudflare Workers Paid**. A v0.9.7 aumenta a previsibilidade separando leitura de geração; não é recomendável voltar ao orçamento do Workers Free para a operação completa.
+
+## 2. Bindings principais
 
 - `DB` — D1;
 - `AI` — Workers AI;
+- `ASSETS`;
 - `ROUND_JOBS_QUEUE`;
-- `INTELLIGENT_JOBS_QUEUE`;
-- `ASSETS`.
+- `INTELLIGENT_JOBS_QUEUE` — compatibilidade/rotinas legadas;
+- `ARTICLE_READ_QUEUE` — nova, obrigatória na configuração entregue;
+- `CAROUSEL_AI_QUEUE` — nova, obrigatória na configuração entregue.
 
-O cron permanece:
+O cron permanece `* * * * *`.
 
-```text
-* * * * *
+## 3. Criar as novas Queues antes do primeiro deploy
+
+Execute uma vez:
+
+```bash
+npx wrangler queues create ronda-one-article-read
+npx wrangler queues create ronda-one-carousel-ai
+npx wrangler queues create ronda-one-article-read-dlq
+npx wrangler queues create ronda-one-carousel-ai-dlq
 ```
 
-## 2. Queues dedicadas opcionais
+Depois confira no Cloudflare se as quatro Queues existem. O `wrangler.jsonc` já contém producers/consumers para `ronda-one-article-read` e `ronda-one-carousel-ai`.
 
-O runtime reconhece, quando configuradas:
+A leitura usa concorrência máxima 3. A geração Multi-AI usa concorrência máxima 2, evitando que scraping pesado e geração editorial concorram dentro do mesmo consumidor.
 
-- `CAROUSEL_JOBS_QUEUE`;
-- `ARTICLE_READ_QUEUE`.
+## 4. D1
 
-Sem elas, a aplicação usa as Queues atuais. Não crie infraestrutura nova apenas para publicar esta versão; avalie separação quando houver backlog ou concorrência real entre leitura e carrossel.
+Não é necessário executar SQL manualmente. O Production Engine cria de forma aditiva e isolada:
 
-## 3. Variáveis opcionais de IA
+- `production_jobs`;
+- `evidence_packages`;
+- `production_stage_events`;
+- `production_state`.
+
+As tabelas da RONDA, Mesa, versões e workflow existentes permanecem intactas.
+
+## 5. Variáveis opcionais
 
 ```text
+ROUND_EXTERNAL_REQUEST_BUDGET=120
+ARTICLE_READ_TIMEOUT_MS=16000
 ARTICLE_ANALYSIS_MODEL
 ARTICLE_SECONDARY_MODEL
 ARTICLE_TERTIARY_MODEL
-CAROUSEL_MULTI_AI_MODE=failover
 CAROUSEL_TERTIARY_AI=1
+FORMA_IMAGE_MODEL=@cf/black-forest-labs/flux-1-schnell
 AI_ESTIMATED_COST_PER_CALL_USD
 ```
 
-Recomendação inicial: manter `failover` e a terceira IA desativada. Isso evita pagar processamento extra sem necessidade.
+Recomendação inicial: manter a terceira IA desligada. A imagem IA só é chamada manualmente no FORMA.
 
-## 4. Banco D1
-
-Novas estruturas são criadas automaticamente:
-
-- `carousel_versions`;
-- `production_workflow`;
-- `production_workflow_events`;
-- `watchdog_events`.
-
-Não há migração SQL manual obrigatória.
-
-## 5. Antes do push
+## 6. Testes antes do push
 
 ```bash
 npm install
 npm run test:all
 ```
 
-## 6. Deploy
+Testes específicos:
+
+```bash
+npm run test:096
+npm run test:097
+```
+
+## 7. Deploy
 
 ```bash
 npm run deploy
 ```
 
-Em GitHub + Cloudflare Workers Builds, substitua a árvore do projeto pela versão atual. Não misture arquivos de pacotes antigos.
+Em GitHub + Cloudflare Workers Builds, substitua a árvore antiga pela árvore CLEAN. Não misture arquivos de pacotes anteriores.
 
-## 7. Conferência pós-deploy
+## 8. Conferência pós-deploy
 
-Abra:
-
-```text
-/api/platform/status
-```
-
-Confirme:
+Abra `/api/platform/status` e confirme:
 
 ```text
-version: 0.9.5
-editorialVersion: 2.9.5
-multiAiCarouselV0941.enabled: true
-carouselVersioningV0942.enabled: true
-operationsV0943.enabled: true
-workflowV095.enabled: true
+version: 0.9.7
+editorialVersion: 2.9.7
+formaProductionEngineV096.enabled: true
+scrapingEvidenceEngineV097.enabled: true
+modules.queues.articleReadDedicated: true
+modules.queues.carouselAiDedicated: true
 ```
 
-Depois confira como ADM:
+Depois valide os dois caminhos separadamente:
 
 ```text
-/api/admin/source-health
-/api/admin/watchdog?hours=24
-/api/admin/cost-monitor?hours=24
+RONDA → Produzir no FORMA → leitura → Evidence Pack → Multi-AI → template
 ```
-
-E valide o fluxo real:
 
 ```text
-login → ronda → leitura → carrossel → FORMA → salvar versão → enviar revisão → aprovar → publicar
+FORMA → colar link externo → leitura → Evidence Pack → Multi-AI → template
 ```
 
-Faça hard refresh uma vez em `/ronda`, `/design/` e `/admin/`.
+Por fim teste `Gerar imagem com IA` no Banco Free do FORMA.
+
+## 9. Diagnóstico
+
+Uma produção pode ser consultada por:
+
+```text
+GET /api/production/jobs/:id
+```
+
+O retorno informa `stage`, `progress`, `evidence`, eventos e resultado. Use isso para distinguir falha de leitura, evidência, IA ou composição.
+
+## 10. Browser Rendering
+
+Não habilite browser/headless inicialmente. A v0.9.7 usa `fetch()` + parsers + adapters + AMP + conteúdo coletado. Browser rendering deve ser uma v0.9.7.1 somente se as métricas mostrarem portais importantes que dependem de JavaScript para liberar o texto público.

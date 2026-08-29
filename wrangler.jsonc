@@ -22,6 +22,14 @@
       {
         "binding": "INTELLIGENT_JOBS_QUEUE",
         "queue": "ronda-one-intelligent-jobs"
+      },
+      {
+        "binding": "ARTICLE_READ_QUEUE",
+        "queue": "ronda-one-article-read"
+      },
+      {
+        "binding": "CAROUSEL_AI_QUEUE",
+        "queue": "ronda-one-carousel-ai"
       }
     ],
     "consumers": [
@@ -39,6 +47,22 @@
         "max_batch_timeout": 1,
         "max_retries": 5,
         "dead_letter_queue": "ronda-one-jobs-dlq",
+        "max_concurrency": 2
+      },
+      {
+        "queue": "ronda-one-article-read",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "ronda-one-article-read-dlq",
+        "max_concurrency": 3
+      },
+      {
+        "queue": "ronda-one-carousel-ai",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 5,
+        "dead_letter_queue": "ronda-one-carousel-ai-dlq",
         "max_concurrency": 2
       }
     ]

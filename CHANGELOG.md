@@ -1,5 +1,37 @@
 # Changelog — RONDA ONE
 
+## 0.9.7 — Scraping + Evidence Engine
+
+- Evidence Pack persistente para pautas, eventos, links externos e texto próprio;
+- parser genérico + adapters por portal + AMP + fallback de conteúdo coletado;
+- adapters iniciais: G1/ge, CNN Brasil, Folha, Estadão, O Globo, Poder360, Agência Brasil, Metrópoles, UOL e InfoMoney;
+- cache de evidências por 7 dias;
+- fatos, entidades, números, datas, imagens, método e qualidade de leitura armazenados;
+- Multi-AI gera a partir do Evidence Pack sem reabrir o portal;
+- browser rendering reservado para fallback futuro, sem bypass de paywall/CAPTCHA.
+
+## 0.9.6 — Unified FORMA Production Engine
+
+- FORMA passa a ser o centro único de produção;
+- RONDA troca “Gerar roteiro” por “Produzir no FORMA”;
+- endpoint único `/api/production/jobs` para pauta, evento, URL e texto;
+- pipeline persistente `source → reading → evidence → generating → ready`;
+- tabelas `production_jobs`, `evidence_packages`, `production_stage_events` e `production_state`;
+- `ARTICLE_READ_QUEUE` e `CAROUSEL_AI_QUEUE` dedicadas;
+- leitura e Multi-AI deixam de compartilhar o mesmo job monolítico;
+- geração de imagem IA volta ao FORMA como ação manual em `/api/production/image`;
+- endpoints antigos de carrossel permanecem por compatibilidade, mas deixam de ser a interface principal.
+
+## 0.9.5.1 — Round Stability + History Hygiene
+
+- Fast Lane passa a usar `trigger_type=fast-lane` e deixa de poluir o Histórico editorial por padrão.
+- falhas técnicas com 0 fontes/0 conteúdos permanecem registradas no D1/watchdog, mas saem da visão editorial padrão; podem ser consultadas com `?technical=1`.
+- termos monitorados, ronda anterior e source-state tornam-se dependências degradáveis: falha nelas não impede o coletor de tentar as fontes.
+- orçamento externo da coleta passa a aceitar `ROUND_EXTERNAL_REQUEST_BUDGET`; padrão continua 120.
+- banner de status ignora Fast Lane e tentativas técnicas vazias ao decidir se a "última tentativa" editorial falhou.
+- watchdog pesado roda na ronda completa, reduzindo carga da Fast Lane.
+- Workers Paid passa a ser recomendação operacional explícita para 39 fontes + fallback.
+
 ## 0.9.5 — Workflow editorial multiusuário
 
 - papéis `editor`, `reviewer` e `publisher` adicionados ao controle de acesso;

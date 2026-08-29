@@ -195,7 +195,7 @@
               <button class="mini-btn" id="newDesignBtn">Novo</button>
             </div>
             <div class="direct-article-card" id="directArticleCard">
-              <div class="direct-title"><strong>Matéria → carrossel</strong><span>Leia o link, gere o conteúdo e aplique direto no template.</span></div>
+              <div class="direct-title"><strong>Produção FORMA</strong><span>Um único fluxo para pautas da RONDA, links externos, evidências, Multi-AI e template.</span></div>
               <label for="directArticleUrl">Link da matéria</label>
               <input id="directArticleUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://portal.com.br/noticia..." />
               <div class="direct-article-grid">
@@ -203,8 +203,8 @@
                 <div><label for="directArticleSlides">Slides</label><select id="directArticleSlides"><option>3</option><option>4</option><option>5</option><option>6</option><option selected>7</option><option>8</option><option>9</option><option>10</option></select></div>
               </div>
               <label class="direct-article-check"><input id="directArticleForce" type="checkbox"> Releitura completa · ignorar carrossel em cache</label>
-              <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Gerar no template</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div>
-              <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div>
+              <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Analisar e produzir</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div>
+              <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div><div id="productionStages" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px;font-size:8px"><span data-prod-stage="source">1 Fonte</span><span data-prod-stage="reading">2 Leitura</span><span data-prod-stage="evidence">3 Evidências</span><span data-prod-stage="generating">4 Multi-AI</span><span data-prod-stage="quality">5 Qualidade</span><span data-prod-stage="ready">6 FORMA</span></div>
             </div>
             <div class="smart-template-status" id="smartTemplateStatus"><strong>Template inteligente</strong><span id="smartTemplateStatusText">Importe um carrossel da RONDA para aplicar o conteúdo automaticamente.</span><div class="smart-template-actions"><button class="mini-btn" id="reapplySmartTemplate" disabled>Reaplicar</button><button class="mini-btn" id="detachSmartTemplate" disabled>Desvincular</button></div></div>
             <div class="template-grid" id="templateGrid"></div>
@@ -291,6 +291,13 @@
             <div class="helper-card">
               <strong>Licença e crédito</strong>
               <span>O resultado mantém autor, licença e página de origem. Confira essas informações antes de publicar.</span>
+            </div>
+            <div class="helper-card" style="margin-top:10px">
+              <strong>Imagem por IA · opcional</strong>
+              <span>Use somente quando uma imagem factual adequada não estiver disponível. A geração acontece no backend do FORMA.</span>
+              <textarea id="formaImagePrompt" class="search-input" rows="3" placeholder="Descreva a imagem editorial que deseja gerar" style="margin-top:7px;resize:vertical"></textarea>
+              <button class="secondary-btn full" id="formaImageGenerateBtn" type="button" style="margin-top:6px">Gerar imagem com IA</button>
+              <span id="formaImageStatus" style="font-size:8px;color:var(--muted);margin-top:5px;display:block"></span>
             </div>
             <div id="freeBankStatus" class="empty-inline">Digite um assunto para buscar imagens.</div>
             <div id="freeBankResults" class="uploads-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:9px"></div>
@@ -549,7 +556,7 @@
     <div class="modal-actions"><button class="secondary-btn" id="clearIntegrationKeys">Limpar Remove.bg</button><button class="primary-btn" id="saveIntegrationKeys">Salvar Remove.bg</button></div></div></div>
 
   <div class="workspace-resize-badge hidden" id="workspaceResizeBadge">318 px</div>
-  <script src="/design/smart-template-engine.js?v=095-workflow-multi-ai"></script>
+  <script src="/design/smart-template-engine.js?v=097-forma-production"></script>
   <script>
 (() => {
   const $ = s => document.querySelector(s);
@@ -1202,6 +1209,40 @@
     }
     return data;
   }
+  const LEGACY_DIRECT_ARTICLE_ENDPOINT='/api/design/article-carousel';
+  function setProductionStage(stage,detail=''){
+    const order=['source','reading','evidence','generating','quality','ready'];
+    const index=Math.max(0,order.indexOf(stage));
+    document.querySelectorAll('#productionStages [data-prod-stage]').forEach((node)=>{
+      const i=order.indexOf(node.dataset.prodStage);node.style.opacity=i<=index?'1':'.38';node.style.fontWeight=i===index?'800':'500';node.title=i===index?detail:'';
+    });
+  }
+  async function waitFormaProductionJob(jobId,pollAfterMs=1200){
+    const deadline=Date.now()+8*60*1000;let networkErrors=0;
+    while(Date.now()<deadline){
+      await new Promise(resolve=>setTimeout(resolve,Math.max(900,Number(pollAfterMs)||1200)));
+      let bundle;
+      try{bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);networkErrors=0;}
+      catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',8);await new Promise(r=>setTimeout(r,Math.min(5000,800+networkErrors*500)));continue;}
+      const job=bundle?.job||{};const stage=job.stage||'source';setProductionStage(stage,job.error||'');
+      const evidence=bundle?.evidence;
+      const label=stage==='reading'?'Lendo a matéria e testando as rotas de extração…':stage==='evidence'&&evidence?`Evidence Pack pronto · ${evidence.wordCount||0} palavras · leitura ${Math.round(evidence?.reading?.quality||0)}/100`:stage==='generating'?'Evidence Pack preservado. Multi-AI redigindo e validando os slides…':stage==='ready'?'Conteúdo pronto para composição no FORMA.':job.error||'Processando produção…';
+      setDirectArticleStatus(label,job.status==='failed'?'error':'',Math.max(2,Number(job.progress)||2));
+      if(job.status==='ready'&&job.result?.slides?.length){setProductionStage('ready');return job.result;}
+      if(job.status==='failed'){
+        const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id;error.productionStage=job.stage;throw error;
+      }
+    }
+    throw new Error('A produção não concluiu em 8 minutos. O job foi preservado para replay e diagnóstico.');
+  }
+  async function startFormaProduction(payload){
+    setProductionStage('source');
+    const response=await directArticleApi('/api/production/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const jobId=response?.job?.id;if(!jobId)throw new Error('O Production Engine não retornou um job válido.');
+    directArticleState.lastJobId=jobId;
+    if(response?.job?.status==='ready'&&response.job.result?.slides?.length)return response.job.result;
+    return waitFormaProductionJob(jobId,response.pollAfterMs);
+  }
   async function waitDirectArticleJob(jobId,pollAfterMs=1500){
     const startedAt=Date.now(),deadline=startedAt+8*60*1000;let rescueAttempts=0,nextRescueAt=startedAt+12000,errors=0;
     directArticleState.lastJobId=jobId;
@@ -1251,7 +1292,7 @@
     throw new Error('A matéria não concluiu em 8 minutos. O job foi preservado para diagnóstico.');
   }
   function publisherVisualsFromCarousel(data){
-    const visuals=data?.articleVisuals||data?.reading?.selectedSource?.images||null;
+    const visuals=data?.evidencePack?.images||data?.articleVisuals||data?.reading?.selectedSource?.images||null;
     if(!visuals)return null;
     const allowedPrimary=visuals?.primary?.autoUseAllowed?visuals.primary:null;
     const allowedAlternatives=(visuals?.alternatives||[]).filter(x=>x?.autoUseAllowed);
@@ -1288,11 +1329,11 @@
       visualMode=articleVisuals?'free-bank':'none';
     }
     return {
-      contractVersion:'ronda-one-direct-article-v1',
+      contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.8.8',
+      sourceVersion:'0.9.7',
       title,
-      editoria:'Notícias',
+      editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
       questions:data?.questions||{},
       entities:data?.entities||{},
@@ -1316,15 +1357,10 @@
     const input=$('#directArticleUrl'),button=$('#directArticleGenerate'),articleUrl=String(input?.value||'').trim();
     if(!/^https?:\/\//i.test(articleUrl)){setDirectArticleStatus('Cole um link completo começando com http:// ou https://.','error',0);input?.focus();return;}
     directArticleState.busy=true;button.disabled=true;const original=button.textContent;button.textContent='Lendo matéria…';
-    setDirectArticleStatus('Enviando a matéria para o mesmo pipeline editorial da RONDA…','',2);
+    setDirectArticleStatus('Criando produção no FORMA Production Engine…','',2);
     try{
-      const response=await directArticleApi('/api/design/article-carousel',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({url:articleUrl,slideCount:Number($('#directArticleSlides').value)||7,force:Boolean($('#directArticleForce').checked)})
-      });
-      let data=response?.data||null;
-      if(!data?.slides?.length&&response?.job?.jobId)data=await waitDirectArticleJob(response.job.jobId,response.pollAfterMs);
-      if(!data?.slides?.length)throw new Error('O pipeline terminou sem slides válidos.');
+      const data=await startFormaProduction({sourceType:'url',url:articleUrl,slideCount:Number($('#directArticleSlides').value)||7,force:Boolean($('#directArticleForce').checked),templateId:$('#directArticleTemplate').value||null});
+      if(!data?.slides?.length)throw new Error('O Production Engine terminou sem slides válidos.');
 
       setDirectArticleStatus('Conteúdo concluído. Selecionando imagem editorial…','',92);
       const project=await buildDirectArticleProject(data,articleUrl);
@@ -1341,7 +1377,7 @@
       const visualMode=project.directArticle?.visualMode;
       const visualLabel=visualMode==='publisher'?'imagem da matéria':visualMode==='free-bank'?'imagem do Banco Free':'sem imagem automática liberada';
       setDirectArticleStatus(`Carrossel concluído · ${project.slides.length} slides · ${visualLabel}${templateId?' · template aplicado':''}.`,'ok',100);
-      showToast(`Matéria → carrossel concluído · ${project.slides.length} slides`,3200);
+      showToast(`Produção FORMA concluída · ${project.slides.length} slides`,3200);
     }catch(error){
       setDirectArticleStatus(error.message||'Não foi possível gerar o carrossel.','error',100);
       showToast(error.message||'Falha ao gerar a partir da matéria',4000);
@@ -1545,6 +1581,19 @@
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     if(!project?.articleVisuals?.primary && !project?.articleVisuals?.alternatives?.length){const q=document.getElementById('freeBankQuery');if(q&&!q.value)q.value=project.title||'';}return true;
   }
+  async function importProductionTopicFromUrl(){
+    const params=new URLSearchParams(location.search),topicId=params.get('productionTopic'),runId=params.get('runId');if(!topicId)return false;
+    document.querySelector('[data-panel="templates"]')?.click();setDirectArticleStatus('Pauta recebida da RONDA. Abrindo no Production Engine…','',2);setProductionStage('source');
+    try{
+      const data=await startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount:Number($('#directArticleSlides').value)||7,templateId:$('#directArticleTemplate').value||null});
+      const articleUrl=data?.verificationLinks?.[0]?.url||data?.evidencePack?.canonicalUrl||'';
+      const project=await buildDirectArticleProject(data,articleUrl);
+      project.source='forma-production-topic';project.topicId=topicId;
+      if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas da pauta.');
+      const templateId=$('#directArticleTemplate').value;if(templateId){const template=getTemplates().find(t=>String(t.id)===String(templateId));if(template)applySmartTemplate(template);}
+      setDirectArticleStatus(`Pauta produzida no FORMA · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
+    }catch(error){setDirectArticleStatus(error.message||'Não foi possível produzir a pauta.','error',100);showToast(error.message||'Falha na produção da pauta',4200);return false;}
+  }
   async function importPlatformProjectFromUrl(){
     const params=new URLSearchParams(location.search),projectId=params.get('project'),handoff=params.get('handoff');if(!projectId&&!handoff)return;
     setPlatformImportStatus('Carregando Ronda…');
@@ -1674,16 +1723,33 @@
     }
   }
 
+  async function generateFormaImage(){
+    const prompt=String(document.getElementById('formaImagePrompt')?.value||'').trim();
+    const button=document.getElementById('formaImageGenerateBtn'),status=document.getElementById('formaImageStatus');
+    if(prompt.length<8){showToast('Descreva melhor a imagem que deseja gerar');return;}
+    if(button){button.disabled=true;button.textContent='Gerando…';}if(status)status.textContent='Workers AI está criando uma opção visual. Isso pode levar alguns segundos.';
+    try{
+      const response=await fetch('/api/production/image',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,width:1024,height:1024})});
+      if(!response.ok){const out=await response.json().catch(()=>({}));throw new Error(out.detail||out.error||`HTTP ${response.status}`);}
+      const blob=await response.blob();const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(blob);});
+      const size=await imageNaturalSize(dataUrl);const ratio=(size?.w||1024)/(size?.h||1024);const maxW=state.width*.78,maxH=state.height*.78;let w=maxW,h=w/ratio;if(h>maxH){h=maxH;w=h*ratio;}
+      state.elements.push({id:uid(),type:'image',name:'Imagem IA · FORMA',x:(state.width-w)/2,y:(state.height-h)/2,w,h,rotation:0,opacity:100,locked:false,visible:true,src:dataUrl,sourceWidth:size?.w||1024,sourceHeight:size?.h||1024,objectFit:'cover',sourceOrigin:'forma-ai',sourcePrompt:prompt});
+      state.selectedId=state.elements.at(-1).id;state.selectedIds=[state.selectedId];pushHistory();renderAll();markDirty();if(status)status.textContent='Imagem gerada e inserida na prancheta. Revise o uso editorial antes de publicar.';showToast('Imagem IA inserida no FORMA');
+    }catch(error){if(status)status.textContent=error.message||'A geração de imagem não respondeu.';showToast(error.message||'Falha ao gerar imagem',3800);}
+    finally{if(button){button.disabled=false;button.textContent='Gerar imagem com IA';}}
+  }
+  const formaImageGenerateBtn=document.getElementById('formaImageGenerateBtn');if(formaImageGenerateBtn)formaImageGenerateBtn.onclick=generateFormaImage;
+
   const freeBankSearchBtn=document.getElementById('freeBankSearchBtn');
   const freeBankQuery=document.getElementById('freeBankQuery');
   if(freeBankSearchBtn)freeBankSearchBtn.onclick=freeBankSearch;
   if(freeBankQuery)freeBankQuery.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();freeBankSearch();}});
 
   workspaceLoadWidths();
-  markSaved();updateUndoButtons();updateIntegrationStatus();initFonts();setTimeout(importPlatformProjectFromUrl,120);
+  markSaved();updateUndoButtons();updateIntegrationStatus();initFonts();setTimeout(async()=>{const produced=await importProductionTopicFromUrl();if(!produced)await importPlatformProjectFromUrl();},120);
 })();
 
   </script>
-<script src="/access-client.js?v=095-workflow-multi-ai" defer></script>
+<script src="/access-client.js?v=097-forma-production" defer></script>
 </body>
 </html>

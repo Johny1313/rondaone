@@ -1,4 +1,168 @@
-# RONDA ONE Cloud v0.9.5 — Workflow + Multi-AI + Reliability Operations
+# RONDA ONE Cloud v0.9.7 — Unified FORMA Production + Scraping Evidence Engine
+
+A v0.9.7 é cumulativa: inclui integralmente a **v0.9.6 — Unified FORMA Production Engine** e acrescenta a **v0.9.7 — Scraping + Evidence Engine**.
+
+A divisão operacional passa a ser explícita:
+
+```text
+RONDA
+  descoberta · agrupamento · confirmação · inteligência editorial
+        ↓
+FORMA DESIGN
+  leitura · evidências · Multi-AI · carrossel · imagem · template · revisão
+```
+
+A RONDA não é mais o ponto principal de geração. Nos cards, a ação passa a ser **Produzir no FORMA →**. Pautas da RONDA, eventos da Mesa, links externos e texto próprio entram no mesmo Production Engine.
+
+## v0.9.6 — Unified FORMA Production Engine
+
+### Endpoint único de produção
+
+```text
+POST /api/production/jobs
+GET  /api/production/jobs/:id
+POST /api/production/jobs/:id/retry
+POST /api/production/image
+```
+
+Entradas aceitas:
+
+- `sourceType=url` — matéria externa;
+- `sourceType=topic` — pauta da RONDA;
+- `sourceType=event` — evento editorial;
+- `sourceType=text` — texto próprio.
+
+Toda produção percorre os mesmos estados:
+
+```text
+SOURCE
+  ↓
+READING
+  ↓
+EVIDENCE
+  ↓
+GENERATING
+  ↓
+QUALITY GATE
+  ↓
+READY / FORMA
+```
+
+O FORMA mostra essa progressão ao operador. Se leitura falhar, o erro fica na etapa de leitura; se a IA falhar, o Evidence Pack continua salvo e a geração pode ser repetida sem acessar o portal novamente.
+
+### Separação de Queues
+
+A produção passa a ter filas próprias:
+
+- `ARTICLE_READ_QUEUE` → scraping/leitura;
+- `CAROUSEL_AI_QUEUE` → Multi-AI/Quality Gate.
+
+As Queues antigas permanecem para compatibilidade, mas o `wrangler.jsonc` da v0.9.7 já declara as duas filas dedicadas. Crie as filas antes do primeiro deploy desta versão; veja `docs/DEPLOY.md`.
+
+### Persistência do Production Engine
+
+O módulo cria estruturas isoladas do schema principal da RONDA:
+
+- `production_jobs`;
+- `evidence_packages`;
+- `production_stage_events`;
+- `production_state`.
+
+Essa separação é proposital: falha na evolução do Production Engine não deve impedir a coleta da RONDA.
+
+### Imagem no FORMA
+
+A geração de imagem por Workers AI volta como ação **opcional e manual dentro do FORMA** via `/api/production/image`.
+
+Prioridade editorial continua sendo:
+
+1. imagem factual encontrada na matéria;
+2. imagens recuperadas pelo Scraping/Evidence Engine;
+3. Banco Free / Wikimedia;
+4. upload;
+5. GIPHY;
+6. imagem IA somente quando o operador optar por gerar.
+
+Modelo padrão: `@cf/black-forest-labs/flux-1-schnell`, substituível por `FORMA_IMAGE_MODEL`.
+
+## v0.9.7 — Scraping + Evidence Engine
+
+A leitura deixa de ser apenas um passo interno do carrossel e passa a gerar um artefato persistente: **Evidence Pack**.
+
+Fluxo:
+
+```text
+URL / pauta
+   ↓
+HTML direto
+   ↓
+parser genérico: JSON-LD / conteúdo semântico / JSON embutido
+   ↓
+adapter específico do portal, quando disponível
+   ↓
+AMP
+   ↓
+conteúdo já coletado pela RONDA
+   ↓
+Evidence Pack
+```
+
+Browser rendering não é executado por padrão. O código possui o ponto de fallback, mas ele só deve ser ativado quando métricas reais mostrarem necessidade. O sistema não tenta contornar login, CAPTCHA ou paywall fechado.
+
+### Adapters iniciais
+
+- G1 + ge;
+- CNN Brasil;
+- Folha;
+- Estadão;
+- O Globo;
+- Poder360;
+- Agência Brasil;
+- Metrópoles;
+- UOL;
+- InfoMoney.
+
+O adapter não substitui o parser genérico: os dois resultados são avaliados e o melhor conteúdo é preservado.
+
+### Evidence Pack
+
+Cada leitura útil persiste, conforme disponibilidade:
+
+- URL original e canônica;
+- portal;
+- título e subtítulo;
+- autor;
+- publicação;
+- texto principal;
+- quantidade de palavras;
+- fatos/evidências determinísticas;
+- entidades;
+- números;
+- datas;
+- imagens e créditos encontrados;
+- método de leitura;
+- adapter utilizado;
+- qualidade de leitura 0–100;
+- tentativas/fallbacks.
+
+A Multi-AI recebe uma cópia sintética construída a partir do Evidence Pack. Portanto, **a IA não precisa reabrir o portal** para gerar ou regerar o carrossel.
+
+### Resultado operacional esperado
+
+A mudança não promete que todos os portais permitirão leitura completa. O ganho estrutural é outro:
+
+- falha de scraping não destrói o restante da produção;
+- Evidence Pack bem-sucedido pode ser reutilizado;
+- troca de template não relê a matéria;
+- regeração Multi-AI não relê a matéria;
+- diagnóstico identifica exatamente `reading`, `evidence` ou `generating`;
+- pauta da RONDA e link externo usam a mesma esteira.
+
+## v0.9.5.1 — estabilidade da Ronda em produção
+
+Esta revisão separa **Fast Lane** de **Ronda editorial**, remove incidentes técnicos vazios da visão padrão do Histórico e impede dependências auxiliares de abortarem a coleta antes das fontes.
+
+Para a configuração completa de 39 fontes com RSS + HTML + fallback, o perfil recomendado é **Cloudflare Workers Paid**. O Workers Free possui apenas 50 subrequests externos por invocação; o coletor completo trabalha com orçamento interno de até 120. Em Workers Free, configure `ROUND_EXTERNAL_REQUEST_BUDGET=45` e aceite cobertura/fallback reduzidos.
 
 A v0.9.5 consolida, de forma cumulativa, as evoluções **v0.9.4.1 → v0.9.5** sobre a base de Reliability/Production Hardening da v0.9.4.
 

@@ -927,12 +927,14 @@ export async function collectRound({
   sourceStates = new Map(),
   mode = "full",
   forceRefresh = false,
+  externalRequestLimit = PORTAL_SUBREQUEST_LIMIT,
 } = {}) {
   const startedAt = Date.now();
   const collectedAt = new Date(now);
   const fastMode = mode === "fast";
   const cutoff = new Date(collectedAt.getTime() - 24 * 60 * 60 * 1000);
-  const requestBudget = { remaining: PORTAL_SUBREQUEST_LIMIT, used: 0, seenUrls: new Set() };
+  const safeExternalRequestLimit = Math.max(12, Math.min(PORTAL_SUBREQUEST_LIMIT, Number(externalRequestLimit) || PORTAL_SUBREQUEST_LIMIT));
+  const requestBudget = { remaining: safeExternalRequestLimit, used: 0, seenUrls: new Set() };
   const portalFetcher = sharedResponseFetcher(fetcher);
   const portalResults = new Array(feeds.length);
   const due = [];
@@ -1039,7 +1041,7 @@ export async function collectRound({
         portalsDue: due.length,
         portalsDeferred: feeds.length - due.length,
         externalPortalRequests: requestBudget.used,
-        externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
+        externalPortalLimit: safeExternalRequestLimit,
       },
     };
   }
@@ -1092,7 +1094,7 @@ export async function collectRound({
         portalsDue: due.length,
         portalsDeferred: 0,
         externalPortalRequests: requestBudget.used,
-        externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
+        externalPortalLimit: safeExternalRequestLimit,
       },
     };
   }
@@ -1137,7 +1139,7 @@ export async function collectRound({
       portalsDue: due.length,
       portalsDeferred: feeds.length - due.length,
       externalPortalRequests: requestBudget.used,
-      externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
+      externalPortalLimit: safeExternalRequestLimit,
     },
   };
 }

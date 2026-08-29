@@ -99,7 +99,7 @@ import {
   listWatchdogEvents,
   getCostMonitor,
 } from "./database.js";
-import { parseFeed, plainText } from "./parser.js";
+import { parseFeed, plainText, stableHash } from "./parser.js";
 import {
   ADMIN_EMAIL,
   DEFAULT_SLIDE_COUNT,
@@ -138,8 +138,9 @@ import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from
 import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
 import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
+import { createProductionJob, generateProductionImage, getProductionJob, listProductionJobs, productionBundle, retryProductionJob, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.5";
+const VERSION = "2.9.7";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1074,7 +1075,7 @@ async function processIntelligentQueueBatch(batch, env) {
 
 async function processRoundQueueMessage(message, env, body = {}) {
   const runId = String(body.runId || "").trim();
-  const triggerType = body.triggerType === "manual" ? "manual" : "scheduled";
+  const triggerType = body.triggerType === "manual" ? "manual" : body.triggerType === "fast-lane" ? "fast-lane" : "scheduled";
   const mode = body.mode === "fast" ? "fast" : "full";
   const queuedAt = String(body.queuedAt || body.startedAt || new Date().toISOString());
   const startedAt = new Date().toISOString();
@@ -1165,11 +1166,21 @@ async function performRound(env, triggerType, options = {}) {
     let payload;
     let collectedPayload = null;
     try {
-      const [monitoringTerms, previousRound, sourceStates] = await Promise.all([
-        listMonitoringTerms(db, { activeOnly: true }),
-        getLatestRound(db).catch(() => null),
-        getSourceStates(db, roundFeeds.map((feed) => feed.id)).catch(() => new Map()),
-      ]);
+      // Dependências auxiliares nunca podem impedir a coleta principal.
+      const monitoringTerms = await listMonitoringTerms(db, { activeOnly: true }).catch((error) => {
+        structuredLog("monitoring_terms_degraded", { runId, detail: error instanceof Error ? error.message : String(error) });
+        return [];
+      });
+      const previousRound = await getLatestRound(db).catch((error) => {
+        structuredLog("previous_round_unavailable", { runId, detail: error instanceof Error ? error.message : String(error) });
+        return null;
+      });
+      const sourceStates = await getSourceStates(db, roundFeeds.map((feed) => feed.id)).catch((error) => {
+        structuredLog("source_state_read_degraded", { runId, detail: error instanceof Error ? error.message : String(error) });
+        return new Map();
+      });
+      const requestedBudget = Number(env.ROUND_EXTERNAL_REQUEST_BUDGET);
+      const externalRequestLimit = Number.isFinite(requestedBudget) && requestedBudget > 0 ? requestedBudget : 120;
       payload = await collectRound({
         feeds: roundFeeds,
         monitoringTerms,
@@ -1177,6 +1188,7 @@ async function performRound(env, triggerType, options = {}) {
         sourceStates,
         mode,
         forceRefresh: mode === "fast",
+        externalRequestLimit,
       });
       collectedPayload = payload;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -1375,6 +1387,84 @@ async function selfTest() {
 }
 
 async function handleApi(request, env, url, ctx) {
+  if (url.pathname === "/api/production/jobs" && request.method === "GET") {
+    const { user } = await requireEditorialUser(request, env);
+    return json({ ok:true, jobs:await listProductionJobs(requireDatabase(env),{userId:isAdminUser(user)&&url.searchParams.get("all")==="1"?null:user.id,limit:Number(url.searchParams.get("limit"))||40}) });
+  }
+
+  if (url.pathname === "/api/production/jobs" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const db = requireDatabase(env);
+    const body = await readJsonBody(request);
+    let sourceType = String(body?.sourceType || "").toLowerCase();
+    if (!sourceType) sourceType = body?.url ? "url" : body?.topicId ? "topic" : body?.text ? "text" : "url";
+    let sourceRef = null;
+    let input = {};
+    if (sourceType === "url") {
+      try { sourceRef = validateArticleUrl(body?.url); } catch (error) { throw new HttpError(400,error?.message||"Informe um link válido de matéria."); }
+      input = { url:sourceRef, title:plainText(body?.title), description:plainText(body?.description), sourceName:plainText(body?.sourceName), editoria:plainText(body?.editoria)||"Notícias" };
+    } else if (sourceType === "topic" || sourceType === "event") {
+      sourceRef = String(body?.topicId || body?.eventId || "").trim();
+      if (!sourceRef) throw new HttpError(400,"Informe o assunto que será produzido no FORMA.");
+      let payload = null;
+      if (body?.runId) {
+        const stored = await getRunPayload(db,String(body.runId));
+        if (stored?.payload) payload = withEditorias({ ...stored.payload, runId:stored.id, triggerType:stored.triggerType });
+      }
+      if (!payload) payload = withEditorias(await getLatestRound(db));
+      let topic = payload?.topics?.find((item)=>item?.id===sourceRef) || null;
+      if (!topic) {
+        const editorialEvent = await getEditorialEvent(db,sourceRef).catch(()=>null);
+        topic = editorialEvent ? topicFromEditorialEvent(editorialEvent) : null;
+      }
+      if (!topic) throw new HttpError(404,"Assunto não encontrado na Ronda ou na Mesa Editorial.");
+      input = { topic, runId:body?.runId||payload?.runId||null, editoria:topic.editoria||body?.editoria||"Notícias" };
+      sourceType = topic?.editorialEvent?.eventId ? "event" : "topic";
+    } else if (sourceType === "text") {
+      const text = plainText(body?.text);
+      if (text.length < 120) throw new HttpError(400,"O texto próprio precisa ter conteúdo suficiente para gerar um carrossel.");
+      sourceRef = `text-${stableHash(text.slice(0,4000))}`;
+      input = { title:plainText(body?.title)||"Conteúdo próprio", text, editoria:plainText(body?.editoria)||"Notícias" };
+    } else throw new HttpError(400,"Tipo de produção inválido.");
+
+    let slideCount;
+    try { slideCount = validateSlideCount(body?.slideCount ?? user?.defaultSlideCount ?? DEFAULT_SLIDE_COUNT); }
+    catch (error) { throw new HttpError(400,error?.message||"Quantidade de slides inválida."); }
+    const writingProfile = await getWritingProfile(db,user.id).catch(()=>null);
+    const learningStats = await getCarouselLearningStats(db,user.id).catch(()=>({count:0,updatedAt:null}));
+    input = { ...input, slideCount, writingProfile, styleKey:`${user.id}:${writingProfile?.updatedAt||"default"}:${learningStats.updatedAt||"no-learning"}:${learningStats.count||0}`, requestedTemplateId:body?.templateId||null };
+    let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
+    job = await startProductionPipeline(env,job.id,{force:Boolean(body?.force),ctx});
+    return json({ ok:true, production:true, engineVersion:"0.9.7", job, pollAfterMs:1200 },202);
+  }
+
+  const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
+  if (productionJobMatch && request.method === "GET") {
+    const { user } = await requireEditorialUser(request, env);
+    const bundle = await productionBundle(requireDatabase(env),productionJobMatch[1]);
+    if (!bundle?.job) throw new HttpError(404,"Produção não encontrada.");
+    if (!isAdminUser(user) && bundle.job.createdBy && bundle.job.createdBy !== user.id) throw new HttpError(403,"Esta produção pertence a outro usuário.");
+    return json({ ok:true, ...bundle });
+  }
+
+  const productionRetryMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})\/retry$/i.exec(url.pathname);
+  if (productionRetryMatch && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const db = requireDatabase(env); const current = await getProductionJob(db,productionRetryMatch[1]);
+    if (!current) throw new HttpError(404,"Produção não encontrada.");
+    if (!isAdminUser(user) && current.createdBy && current.createdBy !== user.id) throw new HttpError(403,"Esta produção pertence a outro usuário.");
+    const body = await readJsonBody(request);
+    return json({ok:true,job:await retryProductionJob(env,current.id,{ctx,stage:body?.stage||null})},202);
+  }
+
+  if (url.pathname === "/api/production/image" && request.method === "POST") {
+    await requireEditorialUser(request, env);
+    const body = await readJsonBody(request);
+    try {
+      const generated = await generateProductionImage(env,{prompt:body?.prompt,width:body?.width,height:body?.height});
+      return new Response(generated.body,{status:200,headers:{"Content-Type":"image/png","Cache-Control":"no-store","X-Ronda-Image-Model":generated.model}});
+    } catch (error) { throw new HttpError(503,"A geração de imagem não pôde ser concluída.",error?.message||String(error)); }
+  }
   if (url.pathname === "/api/usage/ping" && request.method === "POST") {
     const { user } = await requireEditorialUser(request, env);
     const body = await request.json().catch(() => ({}));
@@ -1712,7 +1802,9 @@ async function handleApi(request, env, url, ctx) {
     const db = requireDatabase(env);
     await expireStaleRuns(db).catch(() => null);
     const [latest, latestSuccess] = await Promise.all([
-      getLatestRunSummary(db),
+      // O banner operacional ignora Fast Lane e incidentes técnicos sem diagnóstico.
+      getLatestRunSummary(db, { editorialOnly: true, includeTechnical: false }),
+      // A última coleta válida pode ser Fast Lane, pois ela atualiza o snapshot principal.
       getLatestRunSummary(db, { successOnly: true }),
     ]);
     const activeRun = freshActiveRun(latest);
@@ -1979,7 +2071,10 @@ async function handleApi(request, env, url, ctx) {
   }
 
   if (url.pathname === "/api/history" && request.method === "GET") {
-    const runs = await getRunHistory(requireDatabase(env), url.searchParams.get("limit"));
+    const runs = await getRunHistory(requireDatabase(env), url.searchParams.get("limit"), {
+      includeFastLane: url.searchParams.get("fastLane") === "1",
+      includeTechnical: url.searchParams.get("technical") === "1",
+    });
     return json({ ok: true, runs });
   }
 
@@ -2407,28 +2502,30 @@ export default {
       const queuedAt = new Date().toISOString();
       const minute = new Date(queuedAt).getUTCMinutes();
       const mode = minute % 3 === 0 ? "full" : "fast";
+      const triggerType = mode === "fast" ? "fast-lane" : "scheduled";
       const db = requireDatabase(env);
       await autoRecoverStaleIntelligentJobs(env,{limit:3}).catch(()=>null);
-      await runOperationalWatchdog(env).catch(error=>structuredLog("watchdog_failed",{detail:error instanceof Error?error.message:String(error)}));
+      // Watchdog completo somente na ronda editorial; Fast Lane fica leve.
+      if (mode === "full") await runOperationalWatchdog(env).catch(error=>structuredLog("watchdog_failed",{detail:error instanceof Error?error.message:String(error)}));
       await expireStaleRuns(db).catch(() => null);
       const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
       if (activeRun) {
         structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt, mode });
         return;
       }
-      await queueRun(db, { id: runId, triggerType: "scheduled", queuedAt });
+      await queueRun(db, { id: runId, triggerType, queuedAt });
       if (env.ROUND_JOBS_QUEUE?.send) {
         try{
-          await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt, mode });
-          structuredLog("round_enqueued", { runId, triggerType: "scheduled", mode });
+          await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType, queuedAt, mode });
+          structuredLog("round_enqueued", { runId, triggerType, mode });
           return;
         }catch(error){
           structuredLog("scheduled_round_queue_fallback_inline",{runId,mode,detail:error instanceof Error?error.message:String(error)});
         }
       }
       const startedAt = new Date().toISOString();
-      await markRunStarted(db, { id: runId, triggerType: "scheduled", queuedAt, startedAt });
-      await performRound(env, "scheduled", { runId, startedAt, runStarted: true, mode });
+      await markRunStarted(db, { id: runId, triggerType, queuedAt, startedAt });
+      await performRound(env, triggerType, { runId, startedAt, runStarted: true, mode });
     };
 
     ctx.waitUntil(roundTask().catch((error) => {
