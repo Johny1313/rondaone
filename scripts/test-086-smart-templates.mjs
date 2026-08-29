@@ -4,7 +4,7 @@ import vm from 'node:vm';
 
 const engineCode=fs.readFileSync(new URL('../public/design/smart-template-engine.js',import.meta.url),'utf8');
 const context={console};context.globalThis=context;vm.createContext(context);vm.runInContext(engineCode,context);
-const E=context.RondaSmartTemplates;assert.ok(E);assert.equal(E.VERSION,'1.0.0');
+const E=context.RondaSmartTemplates;assert.ok(E);assert.match(E.VERSION,/^1\./);
 
 const project={title:'Notícia de teste',editoria:'Notícias',verificationLinks:[{sourceName:'Agência Brasil'}],slides:[
  {number:1,role:'Título principal',title:'Título grande que precisa se adaptar ao box do template',subtitle:'Resumo da capa',visual:{asset:{url:'https://img.test/1.jpg',credit:'Agência'}}},

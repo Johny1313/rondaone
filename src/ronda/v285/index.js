@@ -1,5 +1,5 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
-import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
+import { ARTICLE_ANALYSIS_MODEL, ARTICLE_SECONDARY_MODEL, ARTICLE_TERTIARY_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
 import { collectRound, FAST_LANE_FEEDS, FEEDS, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
@@ -88,6 +88,16 @@ import {
   finishCarouselReliabilityAttempt,
   touchCarouselReliabilityAttempt,
   startCarouselReliabilityAttempt,
+  saveCarouselVersion,
+  getCarouselVersion,
+  listCarouselVersions,
+  createWorkflowItem,
+  getWorkflowItem,
+  listWorkflowItems,
+  transitionWorkflowItem,
+  recordWatchdogEvent,
+  listWatchdogEvents,
+  getCostMonitor,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import {
@@ -127,12 +137,14 @@ import {
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
 import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
+import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 
-const VERSION = "2.9.2";
+const VERSION = "2.9.5";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
 const EDITORIAL_ROUND_LOCK_TTL_MS = 3 * 60 * 1000;
+function carouselQueue(env){ return env?.CAROUSEL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null; }
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -152,6 +164,10 @@ class HttpError extends Error {
 
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...SECURITY_HEADERS, ...extraHeaders } });
+}
+
+async function readJsonBody(request) {
+  try { return await request.json(); } catch { return {}; }
 }
 
 function normalizedEtag(value) {
@@ -578,7 +594,10 @@ function publicIntelligentJob(job) {
 
 async function processIntelligentCarouselJob(env, job, topic, options = {}) {
   const jobStartedAt = Date.now();
+  const reliabilityActionId=`carousel:${job.jobId}`;
+  await startReliabilityAction(requireDatabase(env),{actionId:reliabilityActionId,actionType:"carousel",subjectId:job.jobId,status:"queued",stage:"queue",metadata:{runId:job.runId,topicId:job.topicId}}).catch(()=>null);
   const db = requireDatabase(env);
+  await advanceReliabilityAction(db,reliabilityActionId,{status:"reading",stage:"source-reading",attemptIncrement:1}).catch(()=>null);
 
   const cachedBeforeLock = await getIntelligentCarousel(db, job.cacheKey).catch(() => null);
   if (cachedBeforeLock?.slides?.length) {
@@ -590,6 +609,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       payload: cachedBeforeLock,
     });
     await finishCarouselReliabilityAttempt(db,{jobId:job.jobId,status:"succeeded",recovered:true}).catch(()=>null);
+    await finishReliabilityAction(db,reliabilityActionId,{status:"completed_fallback",stage:"cache-recovery",fallbackLevel:1,recovered:true}).catch(()=>null);
     structuredLog("intelligent_job_recovered_from_cache", { jobId: job.jobId, phase: "before-lock" });
     return recovered?.status === "succeeded" ? (recovered.payload || cachedBeforeLock) : cachedBeforeLock;
   }
@@ -620,6 +640,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
         payload: cachedAfterLock,
       });
       await finishCarouselReliabilityAttempt(db,{jobId:job.jobId,status:"succeeded",recovered:true}).catch(()=>null);
+      await finishReliabilityAction(db,reliabilityActionId,{status:"completed_fallback",stage:"cache-recovery",fallbackLevel:1,recovered:true}).catch(()=>null);
       structuredLog("intelligent_job_recovered_from_cache", { jobId: job.jobId, phase: "after-lock" });
       return cachedAfterLock;
     }
@@ -651,9 +672,16 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       prompt: combinedStylePrompt,
       adaptiveMemory: { count: adaptiveMemory.count, metrics: adaptiveMemory.metrics },
     } : null;
+    await advanceReliabilityAction(db,reliabilityActionId,{status:"analyzing",stage:"carousel-generation"}).catch(()=>null);
     const data = await buildIntelligentCarousel(topic, {
       ai: articleAnalysisAi(env),
       model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+      models: [
+        env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+        env.ARTICLE_SECONDARY_MODEL || ARTICLE_SECONDARY_MODEL,
+        ...(env.ARTICLE_TERTIARY_MODEL ? [env.ARTICLE_TERTIARY_MODEL] : (env.CAROUSEL_TERTIARY_AI === "1" ? [ARTICLE_TERTIARY_MODEL] : [])),
+      ],
+      multiAiMode: env.CAROUSEL_MULTI_AI_MODE || "failover",
       fetcher: fetch,
       liveReading: env.ARTICLE_LIVE_READING !== "0",
       sourceStats,
@@ -720,8 +748,21 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
     await finishCarouselReliabilityAttempt(db,{
       jobId:job.jobId,status:"succeeded",recovered:Boolean(options.recoveryMode),
     }).catch(()=>null);
+    const deterministicFallback=data?.analysisMode==="source-extraction" || Boolean(data?.aiError) || Boolean(options.recoveryMode);
+    await finishReliabilityAction(db,reliabilityActionId,{status:reliabilityResultStatus({fallback:deterministicFallback}),stage:"completed",fallbackLevel:deterministicFallback?1:0,recovered:Boolean(options.recoveryMode),metadata:{analysisMode:data?.analysisMode||null,slideCount}}).catch(()=>null);
     if(options.recoveryMode)await recordUsageMetric(db,'carousels_recovered',{value:1,samples:1,durationMs:completedDurationMs}).catch(()=>null);
     await recordUsageMetric(db, 'carousels_generated', { value:1, samples:1, durationMs:completedDurationMs }).catch(() => null);
+    for(const attempt of data?.aiTrace||[]){
+      const role=String(attempt?.role||'primary').replace(/[^a-z0-9_-]/gi,'_').toLowerCase();
+      await recordUsageMetric(db,`ai_${role}_calls`,{value:1,samples:1,durationMs:Number(attempt?.durationMs)||0}).catch(()=>null);
+      if(attempt?.status==='error')await recordUsageMetric(db,`ai_${role}_errors`,{value:1,samples:1}).catch(()=>null);
+    }
+    if((data?.aiTrace||[]).length>1)await recordUsageMetric(db,'ai_failovers',{value:1,samples:1}).catch(()=>null);
+    await recordUsageMetric(db,'carousel_quality_score',{value:Number(data?.qualityGate?.score)||0,samples:1}).catch(()=>null);
+    await recordUsageMetric(db,'carousel_confidence_score',{value:Number(data?.confidence?.score)||0,samples:1}).catch(()=>null);
+    const versionUserId=options.userId||job?.request?.createdByUserId||null;
+    const version=await saveCarouselVersion(db,{jobId:job.jobId,cacheKey:job.cacheKey,topicId:job.topicId,userId:versionUserId,kind:'carousel',title:storedData.topicTitle||topic.title,payload:storedData,status:'draft',qualityScore:data?.qualityGate?.score,confidenceScore:data?.confidence?.score,createdBy:versionUserId}).catch(()=>null);
+    if(version&&versionUserId){await createWorkflowItem(db,{subjectType:'carousel',subjectId:job.jobId,versionId:version.id,title:storedData.topicTitle||topic.title,ownerUserId:versionUserId,createdBy:versionUserId}).catch(()=>null);}
     structuredLog("intelligent_job_completed", {
       jobId: job.jobId,
       durationMs: completedDurationMs,
@@ -729,12 +770,15 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       aiMs: Number(data?.performance?.aiMs) || null,
       fastPath: Boolean(data?.performance?.fastPath),
       analysisMode: data?.analysisMode || "source-extraction",
+      qualityScore: Number(data?.qualityGate?.score) || null,
+      confidenceScore: Number(data?.confidence?.score) || null,
+      aiAttempts: Array.isArray(data?.aiTrace) ? data.aiTrace.length : 0,
       slideCount,
     });
     return storedData;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    if (retryableProcessingError(error)) throw error;
+    if (retryableProcessingError(error)){await advanceReliabilityAction(db,reliabilityActionId,{status:"queued",stage:"retry-wait",error}).catch(()=>null);throw error;}
     const failed = await updateIntelligentJob(db, {
       jobId: job.jobId,
       status: "failed",
@@ -747,6 +791,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       jobId:job.jobId,status:"failed",failureStage:carouselFailureStage(error),
       errorCode:error?.code||null,errorDetail:detail,
     }).catch(()=>null);
+    await finishReliabilityAction(db,reliabilityActionId,{status:error?.code==="PUBLISHER_ARTICLE_UNAVAILABLE"?"failed_input":"failed_final",stage:carouselFailureStage(error),error}).catch(()=>null);
     await recordUsageMetric(db, 'carousels_failed', { value:1, samples:1, durationMs:Date.now()-jobStartedAt }).catch(() => null);
     structuredLog("intelligent_job_failed", { jobId: job.jobId, detail, stage:carouselFailureStage(error) });
     return null;
@@ -903,7 +948,7 @@ async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) 
   // Quando existe Queue, o HTTP nunca vira um segundo consumidor. Enquanto o
   // heartbeat estiver ativo, o resgate apenas acompanha. Só um job realmente
   // órfão é reenfileirado, preservando o mesmo jobId e o mesmo cacheKey.
-  if (env.INTELLIGENT_JOBS_QUEUE?.send) {
+  if (carouselQueue(env)?.send) {
     if (!job.stale) {
       return {
         status: job.status || "running",
@@ -926,7 +971,7 @@ async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) 
       error: null,
     });
     try {
-      await env.INTELLIGENT_JOBS_QUEUE.send({
+      await carouselQueue(env).send({
         type: "intelligent",
         mode: job?.request?.mode || "recovery",
         jobId,
@@ -975,6 +1020,49 @@ async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) 
     }
     throw error;
   }
+}
+
+async function autoRecoverStaleIntelligentJobs(env,{limit=3}={}){
+  const db=requireDatabase(env);
+  const cutoff=new Date(Date.now()-45*1000).toISOString();
+  const rows=(await db.prepare("SELECT job_id FROM intelligent_jobs WHERE status IN ('queued','running') AND updated_at < ? ORDER BY updated_at ASC LIMIT ?").bind(cutoff,Math.max(1,Math.min(8,Number(limit)||3))).all())?.results||[];
+  let recovered=0;
+  for(const row of rows){
+    try{const result=await rescueIntelligentCarouselJob(env,row.job_id,{});if(result?.requeued||result?.recovered)recovered+=1;}catch(error){structuredLog("auto_recovery_failed",{jobId:row.job_id,detail:error instanceof Error?error.message:String(error)});}
+  }
+  if(rows.length)structuredLog("auto_recovery_scan",{candidates:rows.length,recovered});
+  return {candidates:rows.length,recovered};
+}
+
+
+async function watchdogOnce(db,eventType,{severity='warning',subjectId=null,detail=null,metadata=null,minGapMinutes=10}={}){
+  const cutoff=new Date(Date.now()-Math.max(1,Number(minGapMinutes)||10)*60000).toISOString();
+  const existing=await db.prepare('SELECT id FROM watchdog_events WHERE event_type=? AND COALESCE(subject_id,\'\')=COALESCE(?,\'\') AND created_at>=? ORDER BY created_at DESC LIMIT 1').bind(eventType,subjectId,cutoff).first().catch(()=>null);
+  if(existing?.id)return null;return recordWatchdogEvent(db,{eventType,severity,subjectId,detail,metadata});
+}
+
+async function autoReplayRetryableFailedJobs(env,{limit=1}={}){
+  const db=requireDatabase(env);if(!carouselQueue(env)?.send)return {candidates:0,replayed:0};
+  const cutoff=new Date(Date.now()-20*60000).toISOString();
+  const rows=(await db.prepare("SELECT job_id FROM intelligent_jobs WHERE status='failed' AND updated_at>=? AND (LOWER(error) LIKE '%timeout%' OR LOWER(error) LIKE '%tempor%' OR LOWER(error) LIKE '%503%' OR LOWER(error) LIKE '%queue%' OR LOWER(error) LIKE '%network%') ORDER BY updated_at DESC LIMIT ?").bind(cutoff,Math.max(1,Math.min(3,Number(limit)||1))).all())?.results||[];
+  let replayed=0;
+  for(const row of rows){
+    const original=await getIntelligentJob(db,row.job_id).catch(()=>null);if(!original)continue;const count=Number(original?.request?.autoReplayCount)||0;if(count>=1)continue;
+    const key=`${original.cacheKey}|auto-replay|${original.jobId}`;const created=await createIntelligentJob(db,{cacheKey:key,runId:original.runId,topicId:original.topicId,replaceCompleted:true,requestPayload:{...(original.request||{}),replayOf:original.jobId,autoReplayCount:count+1}}).catch(()=>null);if(!created?.job)continue;
+    const userId=original?.request?.createdByUserId||null;const slideCount=validateSlideCount(original?.request?.slideCount||DEFAULT_SLIDE_COUNT,DEFAULT_SLIDE_COUNT);const writingProfile=userId?await getWritingProfile(db,userId).catch(()=>null):null;
+    try{await carouselQueue(env).send({type:'intelligent',jobId:created.job.jobId,slideCount,writingProfile,styleKey:original?.request?.styleKey||'auto-replay',userId});replayed+=1;await watchdogOnce(db,'auto-replay',{severity:'info',subjectId:created.job.jobId,detail:`Replay automático de ${original.jobId}`,metadata:{originalJobId:original.jobId}});}catch{}
+  }
+  return {candidates:rows.length,replayed};
+}
+
+async function runOperationalWatchdog(env){
+  const db=requireDatabase(env);const latest=await getLatestRunSummary(db,{successOnly:true}).catch(()=>null);const successMs=Date.parse(latest?.completedAt||'');const roundAge=Number.isFinite(successMs)?Date.now()-successMs:Infinity;
+  if(roundAge>8*60000)await watchdogOnce(db,'round-stale',{severity:'critical',subjectId:latest?.id||'none',detail:`Nenhuma ronda válida nos últimos ${Number.isFinite(roundAge)?Math.round(roundAge/60000):'?' } min.`,metadata:{lastSuccessAt:latest?.completedAt||null},minGapMinutes:8});
+  const stale=(await db.prepare("SELECT COUNT(*) AS total FROM intelligent_jobs WHERE status IN ('queued','running') AND updated_at < ?").bind(new Date(Date.now()-2*60000).toISOString()).first().catch(()=>null))?.total||0;
+  if(Number(stale)>0)await watchdogOnce(db,'stale-jobs',{severity:'warning',subjectId:'intelligent-jobs',detail:`${stale} job(s) com heartbeat atrasado.`,metadata:{stale:Number(stale)},minGapMinutes:5});
+  const diagnostics=await listSourceDiagnostics(db).catch(()=>[]);const critical=diagnostics.filter(item=>['failed','blocked','not-found','timeout','rate-limited'].includes(String(item.status||item.errorCode||'').toLowerCase()) || Number(item.failureCount)>=3);
+  if(critical.length>=3)await watchdogOnce(db,'source-health-degraded',{severity:critical.length>=8?'critical':'warning',subjectId:'sources',detail:`${critical.length} fontes exigem atenção.`,metadata:{sources:critical.slice(0,12).map(x=>x.name||x.sourceId)},minGapMinutes:10});
+  const replay=await autoReplayRetryableFailedJobs(env,{limit:1}).catch(()=>({candidates:0,replayed:0}));return {roundAgeMs:roundAge,staleJobs:Number(stale)||0,criticalSources:critical.length,replay};
 }
 
 async function processIntelligentQueueBatch(batch, env) {
@@ -1068,7 +1156,10 @@ async function performRound(env, triggerType, options = {}) {
   const mode = options.mode === "fast" ? "fast" : "full";
   const roundFeeds = mode === "fast" ? FAST_LANE_FEEDS : FEEDS;
   structuredLog("round_started", { runId, triggerType, mode });
+  const reliabilityActionId=`round:${runId}`;
+  await startReliabilityAction(db,{actionId:reliabilityActionId,actionType:"round",subjectId:runId,status:"queued",stage:"queue",metadata:{triggerType,mode}}).catch(()=>null);
   try {
+    await advanceReliabilityAction(db,reliabilityActionId,{status:"fetching",stage:"collection",attemptIncrement:1}).catch(()=>null);
     if (!options.runStarted) await markRunStarted(db, { id: runId, triggerType, queuedAt: startedAt, startedAt });
     else await touchRun(db, runId, startedAt).catch(() => null);
     let payload;
@@ -1135,7 +1226,7 @@ async function performRound(env, triggerType, options = {}) {
         });
         const queueResult = mode === "full"
           ? await enqueueEditorialEnrichmentJobs(env, db, editorialSync.enrichmentCandidates || [])
-          : { queued: 0, available: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send) };
+          : { queued: 0, available: Boolean(carouselQueue(env)?.send) };
         payload.editorialEvents = {
           ...(editorialSync.summary || {}),
           enrichmentQueued: queueResult.queued || 0,
@@ -1251,7 +1342,12 @@ async function performRound(env, triggerType, options = {}) {
       portalsDegraded: Number(payload?.diagnostics?.portals?.degraded) || 0,
     });
     if (!payload.ok) throw new HttpError(503, payload.error, payload.detail || null);
+    const roundFallback=Boolean(payload.degraded || payload.collectionStatus==="partial" || Number(payload?.diagnostics?.portals?.degraded||0)>0);
+    await finishReliabilityAction(db,reliabilityActionId,{status:reliabilityResultStatus({partial:payload.collectionStatus==="partial",fallback:roundFallback}),stage:"stored",fallbackLevel:roundFallback?1:0,recovered:roundFallback,metadata:{items:Number(payload?.totals?.items)||0,sources:Number(payload?.totals?.sources)||0,mode}}).catch(()=>null);
     return storedPayload;
+  } catch(error) {
+    await finishReliabilityAction(db,reliabilityActionId,{status:"failed_final",stage:"round",error,metadata:{triggerType,mode}}).catch(()=>null);
+    throw error;
   } finally {
     await releaseLock(db, lock).catch(() => null);
   }
@@ -1289,6 +1385,31 @@ async function handleApi(request, env, url, ctx) {
   if (url.pathname === "/api/admin/overview" && request.method === "GET") {
     await requireAdminUser(request, env);
     return json({ ok:true, dashboard:await getAdminDashboard(requireDatabase(env)) });
+  }
+
+  if (url.pathname === "/api/admin/cost-monitor" && request.method === "GET") {
+    await requireAdminUser(request, env);
+    return json({ok:true,cost:await getCostMonitor(requireDatabase(env),{hours:Number(url.searchParams.get('hours'))||24,estimatedCallUsd:Number(env.AI_ESTIMATED_COST_PER_CALL_USD)||0})});
+  }
+  if (url.pathname === "/api/admin/watchdog" && request.method === "GET") {
+    await requireAdminUser(request, env);
+    return json({ok:true,events:await listWatchdogEvents(requireDatabase(env),{hours:Number(url.searchParams.get('hours'))||24,limit:150})});
+  }
+  if (url.pathname === "/api/admin/source-health" && request.method === "GET") {
+    await requireAdminUser(request, env); const db=requireDatabase(env); const activeSourceIds=new Set(FEEDS.map(feed=>feed.id));
+    const diagnostics=(await listSourceDiagnostics(db)).filter(item=>activeSourceIds.has(item.sourceId)); const now=Date.now();
+    const sources=diagnostics.map(item=>{const successMs=Date.parse(item.lastSuccessAt||'');const ageMinutes=Number.isFinite(successMs)?Math.max(0,(now-successMs)/60000):9999;const failing=['failed','blocked','not-found','timeout','rate-limited'].includes(String(item.status||item.errorCode||'').toLowerCase());const freshnessPenalty=Math.min(40,Math.max(0,ageMinutes-5)*1.5);const failurePenalty=Math.min(45,(Number(item.failureCount)||0)*9);const score=Math.max(0,Math.round(100-freshnessPenalty-failurePenalty-(failing?30:0)));return {...item,healthScore:score,healthLabel:score>=90?'excelente':score>=75?'saudável':score>=55?'atenção':'crítica',ageMinutes:Number(ageMinutes.toFixed(1))};}).sort((a,b)=>a.healthScore-b.healthScore);
+    return json({ok:true,summary:{total:sources.length,healthy:sources.filter(x=>x.healthScore>=75).length,critical:sources.filter(x=>x.healthScore<55).length},sources});
+  }
+  const adminReplayMatch=/^\/api\/admin\/replay\/([a-z0-9-]{16,100})$/i.exec(url.pathname);
+  if(adminReplayMatch&&request.method==='POST'){
+    const {user}=await requireAdminUser(request,env);const db=requireDatabase(env);const original=await getIntelligentJob(db,adminReplayMatch[1]);if(!original)throw new HttpError(404,'Job não encontrado.');
+    if(['queued','running'].includes(original.status)&&!original.stale)throw new HttpError(409,'O job ainda está ativo; não é seguro duplicá-lo.');
+    const replayKey=`${original.cacheKey}|replay|${Date.now()}`;const created=await createIntelligentJob(db,{cacheKey:replayKey,runId:original.runId,topicId:original.topicId,replaceCompleted:true,requestPayload:{...(original.request||{}),replayOf:original.jobId,createdByUserId:user.id}});
+    const writingProfile=await getWritingProfile(db,user.id).catch(()=>null);const slideCount=validateSlideCount(original?.request?.slideCount||DEFAULT_SLIDE_COUNT,DEFAULT_SLIDE_COUNT);const payload={type:'intelligent',jobId:created.job.jobId,slideCount,writingProfile,styleKey:original?.request?.styleKey||'replay',userId:user.id};
+    if(carouselQueue(env)?.send)await carouselQueue(env).send(payload);else{const topic=await resolveTopicForIntelligentJob(env,created.job);ctx?.waitUntil?.(processIntelligentCarouselJob(env,created.job,topic,{slideCount,writingProfile,styleKey:payload.styleKey,userId:user.id,recoveryMode:true}).catch(()=>null));}
+    await recordWatchdogEvent(db,{eventType:'manual-replay',severity:'info',subjectId:created.job.jobId,detail:`Replay manual de ${original.jobId}`,metadata:{originalJobId:original.jobId,userId:user.id}}).catch(()=>null);
+    return json({ok:true,replay:publicJob(created.job),originalJobId:original.jobId},202);
   }
   if (url.pathname === "/api/admin/users" && request.method === "GET") {
     await requireAdminUser(request, env);
@@ -1705,9 +1826,9 @@ async function handleApi(request, env, url, ctx) {
         aiReady: Boolean(articleAnalysisAi(env)?.run),
         mode: "publisher-article-required",
         asynchronousJobs: true,
-        queueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
+        queueReady: Boolean(carouselQueue(env)?.send),
         deadLetterQueueConfigured: true,
-        executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
+        executionMode: carouselQueue(env)?.send ? "cloudflare-queue" : "request-fallback",
         articleLimit: 1,
         readingStrategy: "try-up-to-8-publisher-sources-with-history",
         cycleMode: "one-read-publisher-article-one-script",
@@ -1727,7 +1848,7 @@ async function handleApi(request, env, url, ctx) {
         enabled: true,
         centralEntity: "EVENTO EDITORIAL",
         storage: "D1 incremental",
-        enrichmentQueueReady: Boolean(env.EDITORIAL_JOBS_QUEUE?.send || env.EDITORIAL_JOBS_QUEUE?.sendBatch || env.INTELLIGENT_JOBS_QUEUE?.send || env.INTELLIGENT_JOBS_QUEUE?.sendBatch),
+        enrichmentQueueReady: Boolean(env.EDITORIAL_JOBS_QUEUE?.send || env.EDITORIAL_JOBS_QUEUE?.sendBatch || carouselQueue(env)?.send || carouselQueue(env)?.sendBatch),
         enrichmentQueueMode: env.EDITORIAL_JOBS_QUEUE ? "dedicated" : "shared-intelligent",
         oneArticlePerJob: true,
         collectionBlocking: false,
@@ -1745,6 +1866,27 @@ async function handleApi(request, env, url, ctx) {
     return conditionalJson(request, { ok: true, diagnostics }, `sources-${updatedAt || "empty"}`);
   }
 
+
+
+  if (url.pathname === "/api/carousel-versions" && request.method === "GET") {
+    await requireEditorialUser(request,env);return json({ok:true,versions:await listCarouselVersions(requireDatabase(env),{jobId:url.searchParams.get('jobId')||null,topicId:url.searchParams.get('topicId')||null,limit:Number(url.searchParams.get('limit'))||40})});
+  }
+  if (url.pathname === "/api/carousel-versions" && request.method === "POST") {
+    const {user}=await requireEditorialUser(request,env);const body=await readJsonBody(request);const version=await saveCarouselVersion(requireDatabase(env),{jobId:body.jobId||null,cacheKey:body.cacheKey||null,topicId:body.topicId||null,userId:user.id,kind:body.kind||'design',title:body.title||'Revisão no FORMA',payload:body.payload,status:'draft',qualityScore:body.qualityScore,confidenceScore:body.confidenceScore,note:body.note,createdBy:user.id});
+    const workflow=await createWorkflowItem(requireDatabase(env),{subjectType:body.kind||'design',subjectId:body.jobId||body.topicId||version.id,versionId:version.id,title:version.title,ownerUserId:user.id,createdBy:user.id}).catch(()=>null);return json({ok:true,version,workflow},201);
+  }
+  const carouselVersionRoute=/^\/api\/carousel-versions\/([a-z0-9-]{16,100})$/i.exec(url.pathname);
+  if(carouselVersionRoute&&request.method==='GET'){await requireEditorialUser(request,env);const version=await getCarouselVersion(requireDatabase(env),carouselVersionRoute[1]);if(!version)throw new HttpError(404,'Versão não encontrada.');return json({ok:true,version});}
+
+  if(url.pathname==='/api/workflow'&&request.method==='GET'){
+    const {user}=await requireEditorialUser(request,env);const role=user.role||'user';const mine=url.searchParams.get('mine')==='1';const items=await listWorkflowItems(requireDatabase(env),{status:url.searchParams.get('status')||null,userId:mine||role==='user'?user.id:null,limit:Number(url.searchParams.get('limit'))||100});return json({ok:true,items,permissions:{role,canReview:isAdminUser(user)||['reviewer','publisher'].includes(role),canPublish:isAdminUser(user)||role==='publisher'}});
+  }
+  if(url.pathname==='/api/workflow'&&request.method==='POST'){
+    const {user}=await requireEditorialUser(request,env);const body=await readJsonBody(request);const item=await createWorkflowItem(requireDatabase(env),{subjectType:body.subjectType||'carousel',subjectId:body.subjectId,versionId:body.versionId||null,title:body.title||'',ownerUserId:body.ownerUserId||user.id,assigneeUserId:body.assigneeUserId||null,groupId:body.groupId||null,createdBy:user.id});return json({ok:true,item},201);
+  }
+  const workflowRoute=/^\/api\/workflow\/([a-z0-9-]{16,100})$/i.exec(url.pathname);
+  if(workflowRoute&&request.method==='GET'){const {user}=await requireEditorialUser(request,env);const item=await getWorkflowItem(requireDatabase(env),workflowRoute[1]);if(!item)throw new HttpError(404,'Item de workflow não encontrado.');return json({ok:true,item,viewer:{id:user.id,role:user.role}});}
+  if(workflowRoute&&request.method==='PATCH'){const {user}=await requireEditorialUser(request,env);const body=await readJsonBody(request);try{const item=await transitionWorkflowItem(requireDatabase(env),workflowRoute[1],{action:body.action,userId:user.id,role:isAdminUser(user)?'admin':(user.role||'user'),note:body.note,assigneeUserId:body.assigneeUserId,groupId:body.groupId});if(!item)throw new HttpError(404,'Item de workflow não encontrado.');return json({ok:true,item});}catch(error){if(error instanceof HttpError)throw error;throw new HttpError(409,error?.message||'Transição não permitida.');}}
 
   if (url.pathname === "/api/newsroom" && request.method === "GET") {
     const db = requireDatabase(env);
@@ -2006,9 +2148,9 @@ async function handleApi(request, env, url, ctx) {
       }).catch(() => null);
       await recordUsageMetric(db, "carousels_attempted", { value:1, samples:1 }).catch(() => null);
 
-      if (env.INTELLIGENT_JOBS_QUEUE?.send) {
+      if (carouselQueue(env)?.send) {
         try {
-          await env.INTELLIGENT_JOBS_QUEUE.send({
+          await carouselQueue(env).send({
             type:"intelligent",
             mode:"direct-article-url",
             jobId:queued.job.jobId,
@@ -2027,16 +2169,16 @@ async function handleApi(request, env, url, ctx) {
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          await updateIntelligentJob(db, {
-            jobId:queued.job.jobId,status:"failed",progress:100,
-            message:"Não foi possível enviar a matéria para a fila.",error:detail,
+          structuredLog("carousel_queue_send_fallback_inline",{jobId:queued.job.jobId,mode:"direct-article-url",detail});
+          queued.job = await updateIntelligentJob(db, {
+            jobId:queued.job.jobId,status:"running",progress:4,
+            message:"Fila temporariamente indisponível. Processamento direto de contingência iniciado.",error:null,
           });
-          await finishCarouselReliabilityAttempt(db, {
-            jobId:queued.job.jobId,status:"failed",failureStage:"queue",
-            errorCode:"DIRECT_URL_QUEUE_SEND_FAILED",errorDetail:detail,
-          }).catch(() => null);
-          await recordUsageMetric(db,"carousels_failed",{value:1,samples:1}).catch(()=>null);
-          throw new HttpError(503,"Fila de carrossel indisponível.",detail);
+          await advanceReliabilityAction(db,`carousel:${queued.job.jobId}`,{status:"reading",stage:"queue-inline-fallback",fallbackLevel:1,recovered:true,error}).catch(()=>null);
+          const data=await processIntelligentCarouselJob(env,queued.job,topic,{slideCount,writingProfile,styleKey,userId:user.id,recoveryMode:true});
+          if(data?.slides?.length)return json({ok:true,cached:false,status:"succeeded",fallback:"inline-after-queue-failure",data});
+          const current=await getIntelligentJob(db,queued.job.jobId);
+          throw new HttpError(503,current?.error||"Fila e processamento direto não concluíram o carrossel.",detail);
         }
       } else {
         try {
@@ -2136,9 +2278,9 @@ async function handleApi(request, env, url, ctx) {
       }).catch(()=>null);
       await recordUsageMetric(db,'carousels_attempted',{value:1,samples:1}).catch(()=>null);
 
-      if (env.INTELLIGENT_JOBS_QUEUE?.send) {
+      if (carouselQueue(env)?.send) {
         try {
-          await env.INTELLIGENT_JOBS_QUEUE.send({
+          await carouselQueue(env).send({
             type: "intelligent",
             jobId: queued.job.jobId,
             runId: queued.job.runId,
@@ -2156,19 +2298,13 @@ async function handleApi(request, env, url, ctx) {
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          await updateIntelligentJob(db, {
-            jobId: queued.job.jobId,
-            status: "failed",
-            progress: 100,
-            message: "Não foi possível enviar a leitura para a fila.",
-            error: detail,
-          });
-          await finishCarouselReliabilityAttempt(db,{
-            jobId:queued.job.jobId,status:"failed",failureStage:"queue",
-            errorCode:"QUEUE_SEND_FAILED",errorDetail:detail,
-          }).catch(()=>null);
-          await recordUsageMetric(db,'carousels_failed',{value:1,samples:1}).catch(()=>null);
-          throw new HttpError(503, "Fila de leitura indisponível.", detail);
+          structuredLog("carousel_queue_send_fallback_inline",{jobId:queued.job.jobId,mode:"round-topic",detail});
+          queued.job=await updateIntelligentJob(db,{jobId:queued.job.jobId,status:"running",progress:4,message:"Fila temporariamente indisponível. Processamento direto de contingência iniciado.",error:null});
+          await advanceReliabilityAction(db,`carousel:${queued.job.jobId}`,{status:"reading",stage:"queue-inline-fallback",fallbackLevel:1,recovered:true,error}).catch(()=>null);
+          const data=await processIntelligentCarouselJob(env,queued.job,topic,{slideCount,writingProfile,styleKey,userId:user?.id||null,recoveryMode:true});
+          if(data?.slides?.length)return json({ok:true,cached:false,status:"succeeded",fallback:"inline-after-queue-failure",data});
+          const current=await getIntelligentJob(db,queued.job.jobId);
+          throw new HttpError(503,current?.error||"Fila e processamento direto não concluíram a leitura.",detail);
         }
       } else {
         try {
@@ -2219,22 +2355,12 @@ async function handleApi(request, env, url, ctx) {
         return json({ ok: true, queued: true, runId, status: "queued" }, 202);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        await saveRun(db, {
-          id: runId,
-          triggerType: "manual",
-          startedAt: queuedAt,
-          payload: {
-            ok: false,
-            collectedAt: new Date().toISOString(),
-            error: "Não foi possível enviar a ronda para a fila.",
-            detail,
-            sources: [],
-            totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
-            items: [],
-            topics: [],
-          },
-        });
-        throw new HttpError(503, "Fila de rondas indisponível.", detail);
+        structuredLog("round_queue_send_fallback_inline",{runId,triggerType:"manual",detail});
+        const startedAt=new Date().toISOString();
+        await markRunStarted(db,{id:runId,triggerType:"manual",queuedAt,startedAt});
+        await advanceReliabilityAction(db,`round:${runId}`,{status:"fetching",stage:"queue-inline-fallback",fallbackLevel:1,recovered:true,error}).catch(()=>null);
+        const data=await performRound(env,"manual",{runId,startedAt,runStarted:true});
+        return json({ok:true,queued:false,runId,status:"success",fallback:"inline-after-queue-failure",data});
       }
     }
 
@@ -2282,6 +2408,8 @@ export default {
       const minute = new Date(queuedAt).getUTCMinutes();
       const mode = minute % 3 === 0 ? "full" : "fast";
       const db = requireDatabase(env);
+      await autoRecoverStaleIntelligentJobs(env,{limit:3}).catch(()=>null);
+      await runOperationalWatchdog(env).catch(error=>structuredLog("watchdog_failed",{detail:error instanceof Error?error.message:String(error)}));
       await expireStaleRuns(db).catch(() => null);
       const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
       if (activeRun) {
@@ -2290,9 +2418,13 @@ export default {
       }
       await queueRun(db, { id: runId, triggerType: "scheduled", queuedAt });
       if (env.ROUND_JOBS_QUEUE?.send) {
-        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt, mode });
-        structuredLog("round_enqueued", { runId, triggerType: "scheduled", mode });
-        return;
+        try{
+          await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt, mode });
+          structuredLog("round_enqueued", { runId, triggerType: "scheduled", mode });
+          return;
+        }catch(error){
+          structuredLog("scheduled_round_queue_fallback_inline",{runId,mode,detail:error instanceof Error?error.message:String(error)});
+        }
       }
       const startedAt = new Date().toISOString();
       await markRunStarted(db, { id: runId, triggerType: "scheduled", queuedAt, startedAt });

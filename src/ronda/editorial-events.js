@@ -1,6 +1,7 @@
 import { classifyEditoria, normalizeText, titleTokens, tokenSimilarity } from './v285/clustering.js';
 import { plainText, stableHash } from './v285/parser.js';
 import { readArticle } from './v285/article-reader.js';
+import { advanceReliabilityAction, finishReliabilityAction, startReliabilityAction } from '../reliability/core.js';
 
 const EVENT_SCHEMA_VERSION=1;
 const EVENT_WINDOW_HOURS=72;
@@ -13,6 +14,7 @@ const MAX_NEW_INFO=12;
 const MAX_ARTICLE_CONTENT_STORE=9000;
 let editorialSchemaPromise=null;
 const PORTUGUESE_HINTS=/\b(que|para|com|não|uma|mais|foi|por|dos|das|sobre|segundo|após|também|entre|ainda)\b/i;
+function articleQueue(env){return env?.ARTICLE_READ_QUEUE||env?.EDITORIAL_JOBS_QUEUE||env?.INTELLIGENT_JOBS_QUEUE||null;}
 
 const OFFICIAL_HOST_PATTERNS=[
   /(^|\.)gov\.br$/i,
@@ -904,7 +906,7 @@ export async function enqueueEditorialEnrichmentJobs(env,db,candidates=[]){
   // Compatibilidade primeiro: reutiliza a fila inteligente que já existe no
   // projeto. Se futuramente houver uma fila editorial dedicada, ela assume
   // automaticamente sem exigir mudança de código.
-  const queue=env?.EDITORIAL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE;
+  const queue=articleQueue(env);
   if(!queue?.send && !queue?.sendBatch)return {queued:0,available:false,queue:'none'};
   const jobs=[];
   for(const candidate of candidates.slice(0,EVENT_ARTICLE_READ_LIMIT)){
@@ -917,7 +919,7 @@ export async function enqueueEditorialEnrichmentJobs(env,db,candidates=[]){
     for(let i=0;i<jobs.length;i+=6)await Promise.all(jobs.slice(i,i+6).map(body=>queue.send(body)));
   }
   for(const job of jobs)await markArticleStatus(db,job.eventId,job.articleKey,'queued').catch(()=>null);
-  return {queued:jobs.length,available:true,queue:env?.EDITORIAL_JOBS_QUEUE?'editorial':'intelligent-shared'};
+  return {queued:jobs.length,available:true,queue:env?.ARTICLE_READ_QUEUE?'article-read':env?.EDITORIAL_JOBS_QUEUE?'editorial':'intelligent-shared'};
 }
 
 async function refreshEventReadState(db,eventId,article,item){
@@ -964,15 +966,27 @@ async function refreshEventReadState(db,eventId,article,item){
   return event;
 }
 
+function partialArticleFromItem(item,error=null){
+  const content=plainText(item?.content||item?.description||item?.summary||item?.snippet||'').trim();
+  const title=plainText(item?.title||'').trim();
+  const combined=content||title;
+  const words=combined.split(/\s+/).filter(Boolean).length;
+  if(words<6)return null;
+  return {ok:true,url:item?.url||null,extractionUrl:item?.url||null,title:title||combined.slice(0,180),description:plainText(item?.description||item?.summary||''),publishedAt:item?.publishedAt||null,sourceName:item?.sourceName||item?.collectorName||'Fonte não informada',content:combined.slice(0,MAX_ARTICLE_CONTENT_STORE),wordCount:words,contentLevel:'partial',readMode:'feed-fallback',fallback:true,error:error?String(error?.message||error).slice(0,240):null,images:null};
+}
+
 export async function processEditorialEventMessage(message,env,body={}){
   const db=env?.DB;
   if(!db?.prepare){message?.ack?.();return;}
   await ensureEditorialEventSchema(db);
   const eventId=clean(body.eventId,120),articleKey=clean(body.articleKey,120),item=body.item||{};
   if(!eventId||!articleKey||!safeUrl(item?.url)){message?.ack?.();return;}
+  const reliabilityActionId=`article:${eventId}:${articleKey}`;
+  await startReliabilityAction(db,{actionId:reliabilityActionId,actionType:'article-read',subjectId:articleKey,status:'queued',stage:'queue',metadata:{eventId,url:item.url,sourceName:item.sourceName||null}}).catch(()=>null);
   const row=await first(db,'SELECT read_status FROM editorial_event_articles WHERE event_id=? AND article_key=?',[eventId,articleKey]);
   if(row?.read_status==='complete'){message?.ack?.();return;}
   await markArticleStatus(db,eventId,articleKey,'reading').catch(()=>null);
+  await advanceReliabilityAction(db,reliabilityActionId,{status:'reading',stage:'publisher-fetch',attemptIncrement:1}).catch(()=>null);
   try{
     const article=await readArticle(item,fetch,{timeoutMs:14000});
     if(article.ok){
@@ -985,17 +999,34 @@ export async function processEditorialEventMessage(message,env,body={}){
         error:null,
       });
       await refreshEventReadState(db,eventId,article,item).catch(()=>null);
+      await finishReliabilityAction(db,reliabilityActionId,{status:'completed',stage:'stored',metadata:{readMode:article.readMode,wordCount:article.wordCount||0}}).catch(()=>null);
       message?.ack?.();
       return;
     }
-    const status=article.readMode==='timeout'?'partial':'failed';
-    await markArticleStatus(db,eventId,articleKey,status,{readMode:article.readMode,wordCount:0,error:article.error||'Falha de leitura'});
-    await refreshEventReadState(db,eventId,article,item).catch(()=>null);
+    const fallback=partialArticleFromItem(item,article.error||'Falha de leitura');
+    if(fallback){
+      await markArticleStatus(db,eventId,articleKey,'partial',{readMode:fallback.readMode,wordCount:fallback.wordCount,contentHash:stableHash(fallback.content||''),articleJson:stringify(fallback),error:article.error||null});
+      await refreshEventReadState(db,eventId,fallback,item).catch(()=>null);
+      await finishReliabilityAction(db,reliabilityActionId,{status:'completed_fallback',stage:'feed-fallback',fallbackLevel:1,recovered:true,metadata:{wordCount:fallback.wordCount}}).catch(()=>null);
+    }else{
+      const status=article.readMode==='timeout'?'partial':'failed';
+      await markArticleStatus(db,eventId,articleKey,status,{readMode:article.readMode,wordCount:0,error:article.error||'Falha de leitura'});
+      await refreshEventReadState(db,eventId,article,item).catch(()=>null);
+      await finishReliabilityAction(db,reliabilityActionId,{status:status==='partial'?'completed_partial':'failed_final',stage:'publisher-fetch',error:article.error||'Falha de leitura'}).catch(()=>null);
+    }
     message?.ack?.();
   }catch(error){
-    const attempt=Number(body.attempt)||1;
-    if(attempt<3&&message?.retry){message.retry({delaySeconds:Math.min(60,attempt*15)});return;}
-    await markArticleStatus(db,eventId,articleKey,'failed',{error:error instanceof Error?error.message:String(error)}).catch(()=>null);
+    const attempt=Number(message?.attempts||body.attempt)||1;
+    if(attempt<3&&message?.retry){await advanceReliabilityAction(db,reliabilityActionId,{status:'queued',stage:'retry-wait',error}).catch(()=>null);message.retry({delaySeconds:Math.min(60,attempt*15)});return;}
+    const fallback=partialArticleFromItem(item,error);
+    if(fallback){
+      await markArticleStatus(db,eventId,articleKey,'partial',{readMode:fallback.readMode,wordCount:fallback.wordCount,contentHash:stableHash(fallback.content||''),articleJson:stringify(fallback),error:error instanceof Error?error.message:String(error)}).catch(()=>null);
+      await refreshEventReadState(db,eventId,fallback,item).catch(()=>null);
+      await finishReliabilityAction(db,reliabilityActionId,{status:'completed_fallback',stage:'feed-fallback',fallbackLevel:1,recovered:true,error,metadata:{wordCount:fallback.wordCount}}).catch(()=>null);
+    }else{
+      await markArticleStatus(db,eventId,articleKey,'failed',{error:error instanceof Error?error.message:String(error)}).catch(()=>null);
+      await finishReliabilityAction(db,reliabilityActionId,{status:'failed_final',stage:'publisher-fetch',error}).catch(()=>null);
+    }
     message?.ack?.();
   }
 }

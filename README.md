@@ -1,57 +1,161 @@
-# RONDA ONE Cloud v0.9.2.1 — Admin Login Hotfix
+# RONDA ONE Cloud v0.9.5 — Workflow + Multi-AI + Reliability Operations
 
-A v0.9.2.1 é um hotfix sobre a v0.9.2 Mesa Operacional. Corrige o HTTP 500 no login administrativo causado pela ausência de `SESSION_COOKIE_NAME` no import do módulo de autenticação. A inteligência editorial e a estrutura da Mesa permanecem na versão 2.9.2.
+A v0.9.5 consolida, de forma cumulativa, as evoluções **v0.9.4.1 → v0.9.5** sobre a base de Reliability/Production Hardening da v0.9.4.
 
-## Hotfix v0.9.2.1
+O objetivo desta linha é simples: aumentar a chance de toda ação editorial terminar com um resultado útil, preservar o trabalho humano e permitir operação profissional em equipe.
 
-- corrige `ReferenceError: SESSION_COOKIE_NAME is not defined` após validação correta do ADM;
-- preserva o cookie `ronda_session` e a criação normal da sessão administrativa;
-- adiciona teste de regressão específico para o contrato do login ADM;
-- não exige migração do D1;
-- não altera o secret: `ADMIN_BOOTSTRAP_PASSWORD` continua sendo a senha canônica do administrador.
+## v0.9.4.1 — Multi-AI + Quality Gate + Confidence Score
 
----
+O carrossel deixa de depender de uma única tentativa de IA.
 
-A v0.9.2 parte integralmente da v0.9.1 e transforma a Mesa Editorial em uma camada mais operacional para redação, sem alterar o desenho de coleta rápida, a unificação da página principal ou a recuperação de carrossel.
-
-## O que muda na Mesa
-
-- **Ação editorial separada do status do fato**: `PAUTAR AGORA`, `ACOMPANHAR`, `VALIDAR` ou `OBSERVAR`.
-- **Qualidade da apuração visível**: `AMPLA`, `PARCIAL` ou `LIMITADA`, com score e motivos.
-- **Saúde das fontes dentro da Mesa**: quantidade saudável, com conteúdo, em atenção e falhando; o painel usa o diagnóstico persistido de `/api/sources/diagnostics`.
-- **Histórico operacional do evento**: combina detecção, publicações e atualizações significativas em uma linha do tempo única.
-- **Apuração a um clique**: os cards possuem atalho direto para a melhor fonte disponível e cada matéria mantém seu link original no detalhe.
-- **Compatibilidade com eventos antigos**: eventos salvos antes da v0.9.2 recebem decisão editorial e qualidade de apuração ao serem lidos, sem migração obrigatória do D1.
-
-## Base preservada da v0.9.1
-
-- Fast Lane a cada 1 minuto e ronda completa a cada 3 minutos.
-- RSS + scraping HTML leve + fallback por domínio + cache.
-- `firstSeenAt` / `radarAt` para filtros curtos.
-- Mesa e coleta principal unificadas.
-- Queue única para geração de carrossel, heartbeat e recuperação de jobs órfãos.
-- Smart Templates, Direct Article, Access & Stability e Reliability 90.
-
-## Estrutura do repositório
+Fluxo padrão:
 
 ```text
-public/       interface e assets
-src/          Worker, coleta, eventos, IA e serviços
-scripts/      testes de regressão + teste da versão atual
-docs/         deploy, changelog e auditoria de limpeza
-package.json  comandos de validação e deploy
-wrangler.jsonc configuração Cloudflare
+Evidências da matéria
+  ↓
+IA primária
+  ↓
+Quality Gate
+  ├─ aprovado → resultado
+  └─ rejeitado/erro → IA secundária
+                       ↓
+                    Quality Gate
+                       ├─ aprovado → resultado
+                       └─ falhou → IA terciária opcional
+                                      ↓
+                                   Quality Gate
+                                      └─ falhou → motor determinístico seguro
 ```
 
-## Validação
+- primária: `@cf/meta/llama-3.3-70b-instruct-fp8-fast`;
+- secundária: `@cf/meta/llama-3.1-8b-instruct-fast`;
+- terciária: `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, opcional;
+- modo padrão: **failover**, não execução paralela;
+- Quality Gate padrão: **88/100**;
+- Confidence Score geral e por slide;
+- rastreio `aiTrace` com modelo, papel, duração, resultado e score;
+- geração determinística continua sendo o último fallback sem fatos inventados.
+
+A IA redige a partir das evidências já extraídas. O sistema não permite que um modelo acrescente fatos sem suporte na matéria lida.
+
+## v0.9.4.2 — Versionamento + Content Lock no FORMA
+
+- tabela persistente `carousel_versions`;
+- botão **Salvar versão** no FORMA;
+- visualização/recuperação de versões anteriores;
+- cada versão preserva Quality Score e Confidence Score quando disponíveis;
+- **Content Lock** por campo semântico: título, corpo ou imagem editados manualmente podem ser travados;
+- reaplicar IA/template preserva os campos travados e atualiza somente os demais;
+- Smart Template Engine atualizado para **1.2.0**;
+- envio para revisão diretamente do FORMA.
+
+## v0.9.4.3 — Watchdog + Replay + Saúde + Custos
+
+O Admin passa a funcionar também como painel operacional.
+
+- watchdog automático no scheduler;
+- alerta de ronda atrasada;
+- detecção de jobs sem heartbeat;
+- alerta quando várias fontes entram em estado crítico;
+- replay automático limitado para falhas transitórias;
+- replay manual de carrossel pelo backend;
+- `/api/admin/source-health` com score de saúde por fonte;
+- `/api/admin/watchdog`;
+- `/api/admin/cost-monitor`;
+- métricas de chamadas de IA primária/secundária/terciária, failovers, Quality Score e Confidence Score;
+- estimativa opcional de custo por chamada via `AI_ESTIMATED_COST_PER_CALL_USD`.
+
+A estimativa interna é indicativa. O faturamento real continua sendo o informado pelo Cloudflare.
+
+## v0.9.5 — Workflow de aprovação e operação multiusuário
+
+Novos papéis editoriais:
+
+- `user` — usuário padrão;
+- `editor` — cria, edita, atribui e envia conteúdo para revisão;
+- `reviewer` — revisa, aprova ou rejeita;
+- `publisher` — revisa, aprova e publica;
+- `admin` — mantém os poderes administrativos existentes.
+
+Fluxo:
+
+```text
+RASCUNHO
+   ↓
+EM REVISÃO
+  ↙     ↘
+REJEITADO  APROVADO
+   ↓          ↓
+RASCUNHO   PUBLICADO
+```
+
+- `production_workflow` mantém o estado atual;
+- `production_workflow_events` mantém auditoria das transições;
+- dono, responsável e grupo editorial podem ser registrados;
+- Admin ganhou aba **Workflow**;
+- FORMA pode salvar uma versão e enviá-la para revisão;
+- aprovar/publicar é protegido por papel;
+- histórico de versões e workflow não sobrescreve o projeto local do operador.
+
+## Correção adicional de confiabilidade
+
+Durante a implementação foi localizado um erro latente nas rotas da Newsroom: duas ações chamavam `readJsonBody()` sem uma implementação local. A função foi adicionada ao runtime, evitando um possível HTTP 500 nessas ações.
+
+## Infraestrutura
+
+A v0.9.5 continua compatível com os bindings atuais:
+
+- `DB` — Cloudflare D1;
+- `AI` — Workers AI;
+- `ROUND_JOBS_QUEUE`;
+- `INTELLIGENT_JOBS_QUEUE`;
+- `ASSETS`.
+
+Queues dedicadas continuam opcionais:
+
+- `CAROUSEL_JOBS_QUEUE`;
+- `ARTICLE_READ_QUEUE`.
+
+Não existe migração SQL manual obrigatória: novas tabelas são criadas de forma aditiva por `ensureSchema()`.
+
+## Custo e processamento
+
+**Não é obrigatório contratar outro serviço para fazer o deploy da v0.9.5.**
+
+O modo Multi-AI é em cascata: a segunda IA só é usada quando a primeira falha ou não passa no Quality Gate. A terceira IA permanece desativada por padrão e pode ser habilitada com:
+
+```text
+CAROUSEL_TERTIARY_AI=1
+```
+
+Também é possível substituir modelos por variáveis:
+
+```text
+ARTICLE_ANALYSIS_MODEL
+ARTICLE_SECONDARY_MODEL
+ARTICLE_TERTIARY_MODEL
+CAROUSEL_MULTI_AI_MODE
+```
+
+Portanto, consumo adicional de Workers AI cresce principalmente conforme a taxa de failover. Recomenda-se medir `/api/admin/cost-monitor?hours=24` e o painel do Cloudflare antes de elevar concorrência ou habilitar a terceira IA permanentemente.
+
+## Testes
 
 ```bash
 npm install
 npm run test:all
 ```
 
-`test:all` executa verificação de sintaxe, regressão desde a base v0.8.0 e a verificação estrutural da versão atual.
+A regressão cobre desde a v0.8.0 até a v0.9.5, incluindo testes específicos de:
+
+- Reliability Core;
+- Production Hardening;
+- Chaos local;
+- Multi-AI / Quality Gate / Confidence;
+- Versionamento / Content Lock;
+- Watchdog / Replay / Saúde / Custos;
+- Workflow multiusuário.
 
 ## Deploy
 
-Consulte [`docs/DEPLOY.md`](docs/DEPLOY.md). Para a auditoria de limpeza do GitHub, consulte [`docs/GITHUB-CLEANUP.md`](docs/GITHUB-CLEANUP.md).
+Consulte `docs/DEPLOY.md`.

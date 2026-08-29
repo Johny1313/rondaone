@@ -1,7 +1,7 @@
 (function(root){
   'use strict';
 
-  const VERSION='1.0.0';
+  const VERSION='1.2.0';
   const SLOTS=['TITLE','SUBTITLE','BODY','ROLE','SOURCE','IMAGE','IMAGE_CREDIT','CTA','SLIDE_NUMBER','EDITORIA'];
   const clone=value=>JSON.parse(JSON.stringify(value));
   const norm=value=>String(value||'').trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
@@ -69,9 +69,17 @@
     return names.length?`Fonte: ${names.slice(0,3).join(' · ')}`:'Origem verificada na Ronda Editorial';
   }
 
+  function assetProxyUrl(value){
+    const raw=String(value||'');
+    let origin='';try{origin=String(root?.location?.origin||'');}catch{}
+    if(!/^https?:\/\//i.test(raw)||!origin||raw.startsWith(origin))return raw;
+    return `/api/assets/proxy?url=${encodeURIComponent(raw)}`;
+  }
+
   function normalizeAsset(asset){
     if(!asset?.url)return null;
-    return {url:String(asset.url),credit:String(asset.credit||asset.sourceName||''),sourceName:String(asset.sourceName||''),articleUrl:String(asset.articleUrl||'')};
+    const originalUrl=String(asset.url);
+    return {url:assetProxyUrl(originalUrl),originalUrl,credit:String(asset.credit||asset.sourceName||''),sourceName:String(asset.sourceName||''),articleUrl:String(asset.articleUrl||'')};
   }
 
   function buildContentModel(project={}){
@@ -165,11 +173,17 @@
     }
   }
 
-  function bindElement(element,content,model){
+  function bindElement(element,content,model,lockedValue=null){
     const out=clone(element);const slot=out.semanticSlot||namedSlot(out);if(!slot)return {element:out,warnings:[]};
     out.semanticSlot=slot;out.semanticBound=true;const warnings=[];
+    if(lockedValue?.semanticContentLocked){
+      out.semanticContentLocked=true;
+      if(out.type==='text')out.text=String(lockedValue.text??out.text??'');
+      if(slot==='IMAGE'){out.src=lockedValue.src||out.src||'';out.sourceCredit=lockedValue.sourceCredit||out.sourceCredit||'';out.objectFit=lockedValue.objectFit||out.objectFit||'cover';}
+      return {element:out,warnings:[{type:'content-lock-preserved',slot,name:out.name||slot}]};
+    }
     if(slot==='IMAGE'){
-      if(content.image){out.src=content.image;out.objectFit=out.objectFit||'cover';out.sourceCredit=content.imageCredit||'';out.semanticMissing=false;}
+      if(content.image){out.src=assetProxyUrl(content.image);out.objectFit=out.objectFit||'cover';out.sourceCredit=content.imageCredit||'';out.semanticMissing=false;}
       else {out.semanticMissing=true;warnings.push({type:'missing-image',slot,name:out.name||'Imagem'});}
       return {element:out,warnings};
     }
@@ -190,21 +204,52 @@
     return boards[index%boards.length]||boards[0];
   }
 
-  function applyTemplate(template,contentModel){
-    const model=clone(contentModel);const boards=template?.project?.artboards||[];const warnings=[];let autoFitCount=0;
+  function preflightTemplate(template,contentModel){
+    const boards=template?.project?.artboards||[];const errors=[],warnings=[];const slots=new Set();
+    if(!boards.length)errors.push({code:'no-layouts',message:'Template sem pranchetas.'});
+    boards.forEach((board,index)=>{
+      const bw=Number(board?.width||board?.w),bh=Number(board?.height||board?.h);
+      if(!(bw>0)||!(bh>0))warnings.push({code:'invalid-board-size',board:index+1});
+      const elements=Array.isArray(board?.elements)?board.elements:[];
+      if(!elements.length)warnings.push({code:'empty-layout',board:index+1});
+      elements.forEach(el=>{const slot=el.semanticSlot||namedSlot(el);if(slot)slots.add(slot);});
+    });
+    if(!slots.has('TITLE'))errors.push({code:'missing-title-slot',message:'Template sem campo de título.'});
+    if(!slots.has('BODY')&&!slots.has('SUBTITLE'))warnings.push({code:'missing-body-slot',message:'Template sem campo de texto/subtítulo.'});
+    const modelSlides=Array.isArray(contentModel?.slides)?contentModel.slides:[];
+    if(!modelSlides.length)errors.push({code:'no-content',message:'Conteúdo da RONDA não possui slides.'});
+    return {ok:errors.length===0,errors,warnings,slots:[...slots],boardCount:boards.length,slideCount:modelSlides.length};
+  }
+
+  function defaultTemplate(contentModel){
+    const w=1080,h=1080;const elements=[
+      {id:'fallback_image',type:'image',name:'Imagem',semanticSlot:'IMAGE',x:64,y:64,w:952,h:480,rotation:0,opacity:100,locked:false,visible:true,src:'',objectFit:'cover'},
+      {id:'fallback_role',type:'text',name:'Função editorial',semanticSlot:'ROLE',x:72,y:584,w:936,h:40,rotation:0,opacity:100,locked:false,visible:true,text:'',fontSize:22,fontWeight:700,fontFamily:'Arial',textColor:'#2f6f49',lineHeight:1.05,letterSpacing:1},
+      {id:'fallback_title',type:'text',name:'Título',semanticSlot:'TITLE',x:72,y:632,w:936,h:178,rotation:0,opacity:100,locked:false,visible:true,text:'',fontSize:58,fontWeight:800,fontFamily:'Arial',textColor:'#151915',lineHeight:1.02,letterSpacing:0,autoFitMinSize:32},
+      {id:'fallback_body',type:'text',name:'Texto',semanticSlot:'BODY',x:72,y:826,w:936,h:130,rotation:0,opacity:100,locked:false,visible:true,text:'',fontSize:30,fontWeight:400,fontFamily:'Arial',textColor:'#343b36',lineHeight:1.18,letterSpacing:0,autoFitMinSize:20},
+      {id:'fallback_source',type:'text',name:'Fonte',semanticSlot:'SOURCE',x:72,y:984,w:936,h:36,rotation:0,opacity:80,locked:false,visible:true,text:'',fontSize:18,fontWeight:500,fontFamily:'Arial',textColor:'#4c554f',lineHeight:1,letterSpacing:0}
+    ];
+    const board={id:'fallback_layout',name:'Layout seguro RONDA',width:w,height:h,w,h,bg:'#f3f1ed',bgMode:'solid',gradient:null,templateRole:'content',elements,semanticSlots:['IMAGE','ROLE','TITLE','BODY','SOURCE']};
+    return {templateVersion:2,engineVersion:VERSION,id:'ronda-safe-default',name:'Layout seguro RONDA',category:'Sistema',smart:true,slotCount:5,project:{version:5,artboards:[board],activeArtboardId:board.id,docTitle:contentModel?.title||'Ronda'}};
+  }
+
+  function applyTemplate(template,contentModel,options={}){
+    const model=clone(contentModel);const preflight=preflightTemplate(template,model);const effectiveTemplate=preflight.ok?template:defaultTemplate(model);const usedFallbackTemplate=!preflight.ok;const boards=effectiveTemplate?.project?.artboards||[];const warnings=[...preflight.warnings,...preflight.errors.map(error=>({...error,type:'template-preflight'}))];let autoFitCount=0;
+    const lockMap=new Map();
+    (options.preserveLockedBoards||[]).forEach((board,boardIndex)=>{const contentIndex=Number.isInteger(board?.contentIndex)?board.contentIndex:boardIndex;(board?.elements||[]).forEach(el=>{const slot=el.semanticSlot||namedSlot(el);if(slot&&el.semanticContentLocked)lockMap.set(`${contentIndex}:${slot}`,clone(el));});});
     const output=(model.slides||[]).map((content,index)=>{
       const layout=selectLayout(boards,content,index);if(!layout)return null;
       const elements=(layout.elements||[]).map(el=>{
-        const bound=bindElement(el,content,model);warnings.push(...bound.warnings.map(w=>({...w,slide:index+1})));if(bound.element.autoFitApplied)autoFitCount+=1;return bound.element;
+        const slot=el.semanticSlot||namedSlot(el);const bound=bindElement(el,content,model,slot?lockMap.get(`${index}:${slot}`):null);warnings.push(...bound.warnings.map(w=>({...w,slide:index+1})));if(bound.element.autoFitApplied)autoFitCount+=1;return bound.element;
       });
       return {...clone(layout),id:`smart_${Date.now()}_${index}_${Math.random().toString(36).slice(2,6)}`,name:`${String(index+1).padStart(2,'0')} · ${content.role}`,templateRole:content.roleType,contentIndex:index,semanticBinding:{templateId:template.id||'',contentIndex:index,roleType:content.roleType},elements};
     }).filter(Boolean);
-    return {boards:output,warnings,stats:{slides:output.length,autoFitCount,warningCount:warnings.length,missingImages:warnings.filter(w=>w.type==='missing-image').length,overflows:warnings.filter(w=>w.type==='text-overflow').length}};
+    return {boards:output,warnings,preflight,usedFallbackTemplate,effectiveTemplateId:effectiveTemplate?.id||'',stats:{slides:output.length,autoFitCount,warningCount:warnings.length,missingImages:warnings.filter(w=>w.type==='missing-image').length,overflows:warnings.filter(w=>w.type==='text-overflow').length,contentLocksPreserved:warnings.filter(w=>w.type==='content-lock-preserved').length,preflightPassed:preflight.ok,fallbackTemplate:usedFallbackTemplate}};
   }
 
   function detachBoards(boards=[]){
     return clone(boards).map(board=>({...board,semanticBinding:null,elements:(board.elements||[]).map(el=>{const out={...el};delete out.semanticSlot;delete out.semanticBound;delete out.semanticMissing;delete out.autoFitOriginalFontSize;delete out.autoFitApplied;delete out.autoFitOverflow;delete out.autoFitMode;return out;})}));
   }
 
-  root.RondaSmartTemplates={VERSION,SLOTS,roleType,namedSlot,inferBoardSlots,compileTemplate,buildContentModel,fitText,applyTemplate,detachBoards};
+  root.RondaSmartTemplates={VERSION,SLOTS,roleType,namedSlot,inferBoardSlots,compileTemplate,buildContentModel,fitText,preflightTemplate,defaultTemplate,applyTemplate,detachBoards,assetProxyUrl};
 })(typeof window!=='undefined'?window:globalThis);

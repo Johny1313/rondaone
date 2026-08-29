@@ -137,7 +137,7 @@
         </div>
         <button class="secondary-btn" id="customSizeBtn">Tamanho personalizado</button>
         <button class="secondary-btn" id="integrationBtn">Integrações</button>
-        <button class="secondary-btn" id="saveProjectBtn">Salvar projeto</button>
+        <button class="secondary-btn" id="saveProjectBtn">Salvar projeto</button><button class="secondary-btn" id="saveRevisionBtn" title="Salvar uma versão editorial no RONDA">Salvar versão</button><button class="secondary-btn" id="versionsBtn" title="Ver versões salvas">Versões</button><button class="secondary-btn" id="submitReviewBtn" title="Enviar a versão atual para revisão">Enviar revisão</button>
         <button class="secondary-btn" id="saveTemplateBtn">Salvar template</button>
         <button class="primary-btn" id="exportBtn">Exportar PNG</button>
       </div>
@@ -515,7 +515,7 @@
             </div>
 
             <div class="divider"></div><label class="field-label">Nome da camada</label><input type="text" id="propName" />
-            <div class="action-grid"><button id="duplicateBtn">Duplicar</button><button id="bringFrontBtn">Frente</button><button id="sendBackBtn">Fundo</button><button id="lockBtn">Bloquear</button></div>
+            <div class="action-grid"><button id="duplicateBtn">Duplicar</button><button id="bringFrontBtn">Frente</button><button id="sendBackBtn">Fundo</button><button id="lockBtn">Bloquear</button><button id="contentLockBtn" title="Impede uma nova geração/reaplicação da IA de sobrescrever este conteúdo">Travar conteúdo IA</button></div>
           </div>
         </section>
         <section class="right-section layers-section"><div class="section-title-row"><div><h3>Camadas</h3><span id="layerCount">0 elementos</span></div></div><div class="layers-list" id="layersList"></div><div class="layers-hint">Segure e arraste uma camada para reordenar. Clique com o botão direito para organizar.</div></section>
@@ -549,7 +549,7 @@
     <div class="modal-actions"><button class="secondary-btn" id="clearIntegrationKeys">Limpar Remove.bg</button><button class="primary-btn" id="saveIntegrationKeys">Salvar Remove.bg</button></div></div></div>
 
   <div class="workspace-resize-badge hidden" id="workspaceResizeBadge">318 px</div>
-  <script src="/design/smart-template-engine.js?v=092-editorial-desk"></script>
+  <script src="/design/smart-template-engine.js?v=095-workflow-multi-ai"></script>
   <script>
 (() => {
   const $ = s => document.querySelector(s);
@@ -747,10 +747,11 @@
   }
   function addShape(type){const e=elementDefaults(type);state.elements.push(e);selectOnly(e.id);pushHistory();renderAll();}
   function addMask(shape){const e=maskDefaults(shape);state.elements.push(e);selectOnly(e.id);pushHistory();renderAll();}
+  function proxyExternalAsset(src){const raw=String(src||'');if(!/^https?:\/\//i.test(raw))return raw;try{if(new URL(raw).origin===location.origin)return raw;}catch{}return `/api/assets/proxy?url=${encodeURIComponent(raw)}`;}
   function addImage(src,name='Imagem'){
-    const img=new Image();if(/^https?:/i.test(src))img.crossOrigin='anonymous';img.onload=()=>{let w=520,h=360;const r=img.naturalWidth/img.naturalHeight;if(r>1)h=w/r;else{h=520;w=h*r;}const e={id:uid(),type:'image',name,x:160,y:160,w:Math.round(w),h:Math.round(h),rotation:0,opacity:100,locked:false,visible:true,src,objectFit:'cover',sourceWidth:img.naturalWidth||img.width,sourceHeight:img.naturalHeight||img.height};state.elements.push(e);selectOnly(e.id);pushHistory();renderAll();};img.src=src;
+    const original=String(src||''),safe=proxyExternalAsset(original),img=new Image();img.onload=()=>{let w=520,h=360;const r=img.naturalWidth/img.naturalHeight;if(r>1)h=w/r;else{h=520;w=h*r;}const e={id:uid(),type:'image',name,x:160,y:160,w:Math.round(w),h:Math.round(h),rotation:0,opacity:100,locked:false,visible:true,src:safe,originalSrc:original!==safe?original:null,objectFit:'cover',sourceWidth:img.naturalWidth||img.width,sourceHeight:img.naturalHeight||img.height};state.elements.push(e);selectOnly(e.id);pushHistory();renderAll();};img.onerror=()=>showToast('Imagem externa indisponível. O FORMA continuou sem adicionar o asset.',2800);img.src=safe;
   }
-  function setMaskImage(el,src){return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>{el.src=src;el.imageAspect=img.naturalWidth/img.naturalHeight||1;el.sourceWidth=img.naturalWidth||img.width;el.sourceHeight=img.naturalHeight||img.height;el.imageScale=100;el.imageX=0;el.imageY=0;resolve();};img.onerror=reject;img.src=src;});}
+  function setMaskImage(el,src){return new Promise((resolve,reject)=>{const original=String(src||''),safe=proxyExternalAsset(original),img=new Image();img.onload=()=>{el.src=safe;el.originalSrc=original!==safe?original:null;el.imageAspect=img.naturalWidth/img.naturalHeight||1;el.sourceWidth=img.naturalWidth||img.width;el.sourceHeight=img.naturalHeight||img.height;el.imageScale=100;el.imageX=0;el.imageY=0;resolve();};img.onerror=reject;img.src=safe;});}
 
   function fitZoom(){
     state.width=normalizeDimension(state.width,1080);state.height=normalizeDimension(state.height,1080);ensureArtboards();
@@ -840,7 +841,7 @@
     if(e.type==='mask'){
       $('#maskImageScale').value=e.imageScale??100;$('#maskImageX').value=e.imageX??0;$('#maskImageY').value=e.imageY??0;$('#maskScaleValue').textContent=`${Math.round(e.imageScale??100)}%`;$('#maskPosXValue').textContent=Math.round(e.imageX??0);$('#maskPosYValue').textContent=Math.round(e.imageY??0);$('#maskInfo').textContent=`Máscara ${e.maskShape==='circle'?'circular':e.maskShape==='square'?'quadrada':'triangular'}${state.maskEditingId===e.id?' · ajustando foto':''}`;$('#editMaskImageBtn').textContent=state.maskEditingId===e.id?'Concluir ajuste da imagem':'Ajustar imagem dentro da máscara';$('#maskCornerWrap').classList.toggle('hidden',e.maskShape!=='square');if(e.maskShape==='square'){fillRadiusUI('mask',e.radii||defaultRadii(0),e.radiusLinked!==false);$('#maskBorderColor').value=(e.borderColor||'#ffffff').replace('#','').toUpperCase();$('#maskBorderColorPicker').value=normalizeHex(e.borderColor||'#ffffff');$('#maskBorderWidth').value=e.borderWidth||0;}if(e.src)updateImageResolutionStatus(e,'#upscaleMaskStatus');else $('#upscaleMaskStatus').textContent='Insira uma imagem para usar o upscale.';
     }
-    $('#lockBtn').textContent=e.locked?'Desbloquear':'Bloquear';
+    $('#lockBtn').textContent=e.locked?'Desbloquear':'Bloquear';const contentLock=$('#contentLockBtn');if(contentLock){const semantic=Boolean(e.semanticSlot);contentLock.disabled=!semantic;contentLock.textContent=e.semanticContentLocked?'Destravar conteúdo':'Travar conteúdo IA';contentLock.title=semantic?'Preserva o texto/imagem deste campo quando o template ou conteúdo da RONDA for reaplicado.':'Disponível para campos semânticos de templates RONDA.';}
   }
 
   function renderBackgroundPanel(){
@@ -1046,7 +1047,7 @@
   function duplicateSelected(){const list=selectedElements();if(!list.length)return;const copies=list.map(e=>{const c=clone(e);c.id=uid();c.name=e.name+' cópia';c.x+=28;c.y+=28;return c;});state.elements.push(...copies);state.selectedIds=copies.map(c=>c.id);state.selectedId=state.selectedIds[0]||null;state.maskEditingId=null;pushHistory();renderAll();}
   function bringFront(){const ids=selectedElements().map(e=>e.id);if(!ids.length)return;const chosen=state.elements.filter(e=>ids.includes(e.id)),rest=state.elements.filter(e=>!ids.includes(e.id));state.elements=[...rest,...chosen];pushHistory();renderAll();}
   function sendBack(){const ids=selectedElements().map(e=>e.id);if(!ids.length)return;const chosen=state.elements.filter(e=>ids.includes(e.id)),rest=state.elements.filter(e=>!ids.includes(e.id));state.elements=[...chosen,...rest];pushHistory();renderAll();}
-  $('#deleteBtn').onclick=deleteSelected;$('#duplicateBtn').onclick=duplicateSelected;$('#bringFrontBtn').onclick=bringFront;$('#sendBackBtn').onclick=sendBack;$('#lockBtn').onclick=()=>{const e=selected();if(!e)return;e.locked=!e.locked;pushHistory();renderAll();};
+  $('#deleteBtn').onclick=deleteSelected;$('#duplicateBtn').onclick=duplicateSelected;$('#bringFrontBtn').onclick=bringFront;$('#sendBackBtn').onclick=sendBack;$('#lockBtn').onclick=()=>{const e=selected();if(!e)return;e.locked=!e.locked;pushHistory();renderAll();};$('#contentLockBtn').onclick=()=>{const e=selected();if(!e?.semanticSlot){showToast('Selecione um campo semântico da RONDA');return;}e.semanticContentLocked=!e.semanticContentLocked;pushHistory();renderAll();showToast(e.semanticContentLocked?'Conteúdo protegido contra atualizações da IA':'Conteúdo liberado para atualização');};
 
   artboard.addEventListener('pointerdown',ev=>{if(ev.target!==artboard)return;if(ev.button===1)beginPan(ev,true);else if(ev.button===0)beginMarquee(ev);else if(ev.button===2){hideLayerContextMenu();clearSelection();state.editingTextId=null;state.maskEditingId=null;renderAll();}});
   stageViewport.addEventListener('pointerdown',ev=>{if(!(ev.target===stageViewport||ev.target.id==='stageWorld'))return;if(ev.button===1)beginPan(ev,false);else if(ev.button===0)beginMarquee(ev);else if(ev.button===2){hideLayerContextMenu();clearSelection();state.editingTextId=null;state.maskEditingId=null;renderAll();}});
@@ -1140,7 +1141,7 @@
   async function loadGifs(mode='search'){let q=$('#gifSearch').value.trim();if(q.length>50){q=q.slice(0,50);$('#gifSearch').value=q;}if(mode==='search'&&!q){showToast('Digite um termo para buscar GIFs');return;}const btn=mode==='search'?$('#gifSearchBtn'):$('#gifTrendingBtn'),old=btn.textContent;btn.disabled=true;btn.textContent='Carregando…';try{const params={limit:'24',rating:'g'};if(mode==='search'){params.q=q;params.lang='pt';}const j=await giphyRequest(mode,params);state.gifResults=Array.isArray(j.data)?j.data:[];state.gifQuery=q;renderGifResults();if(!state.gifResults.length)showToast('O GIPHY não retornou resultados para esta busca',2200);}catch(err){showToast(`GIPHY: ${err.message||'falha na busca'}`,3400);}finally{btn.disabled=false;btn.textContent=old;}}
   $('#gifSearchBtn').onclick=()=>loadGifs('search');$('#gifTrendingBtn').onclick=()=>loadGifs('trending');$('#gifSearch').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadGifs('search');}});
 
-  async function dataUrlToBlob(src){const r=await fetch(src);return await r.blob();}
+  async function dataUrlToBlob(src){const r=await fetch(proxyExternalAsset(src));if(!r.ok)throw new Error(`Imagem respondeu HTTP ${r.status}`);return await r.blob();}
   async function blobToDataUrl(blob){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});}
   async function removeBgForElement(el,button){
     const key=getRemoveBgKey();if(!key){updateRemoveBgStatus();openModal('integrationModal');showToast('Configure sua licença/API key Remove.bg');return;}const src=el.src;if(!src){showToast('Este elemento ainda não tem imagem');return;}button.classList.add('busy');button.disabled=true;const old=button.textContent;button.textContent='Processando…';try{const blob=await dataUrlToBlob(src),form=new FormData();form.append('image_file',blob,'imagem.png');form.append('size','auto');const response=await fetch('https://api.remove.bg/v1.0/removebg',{method:'POST',headers:{'X-Api-Key':key},body:form});if(!response.ok){let detail='';try{const j=await response.json();detail=j?.errors?.[0]?.title||j?.errors?.[0]?.detail||'';}catch{}throw new Error(detail||`Erro ${response.status}`);}const out=await response.blob(),data=await blobToDataUrl(out);el.src=data;if(el.type==='mask')await setMaskImage(el,data);state.uploads.unshift({name:'remove-bg.png',src:data});pushHistory();renderAll();showToast('Fundo removido');}catch(err){showToast(`Remove.bg: ${err.message||'falha na requisição'}`,3200);}finally{button.classList.remove('busy');button.disabled=false;button.textContent=old;}}
@@ -1148,7 +1149,14 @@
 
   $('#undoBtn').onclick=undo;$('#redoBtn').onclick=redo;window.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo();}if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();deleteSelected();}if(e.key==='Escape'&&state.maskEditingId){state.maskEditingId=null;renderAll();}});
 
+  async function saveCloudRevision(note=''){
+    syncActiveArtboard();const meta=state.platformMeta||{};if(!meta.jobId&&!meta.topicId){showToast('Este projeto ainda não está vinculado a um carrossel da RONDA');return null;}
+    const payload=projectSnapshot();const res=await fetch('/api/carousel-versions',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:meta.jobId||null,topicId:meta.topicId||null,kind:'design',title:state.docTitle,payload,qualityScore:meta.qualityGate?.score??null,confidenceScore:meta.confidence?.score??null,note})});const out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta={...(state.platformMeta||{}),versionId:out.version?.id||null,workflowId:out.workflow?.id||state.platformMeta?.workflowId||null,versionNumber:out.version?.versionNumber||null};try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}return out;
+  }
   $('#saveProjectBtn').onclick=()=>{try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));markSaved();showToast('Projeto e pranchetas salvos neste navegador');}catch{showToast('Projeto grande demais para o armazenamento local');}};
+  $('#saveRevisionBtn').onclick=async()=>{try{const out=await saveCloudRevision('Versão salva no FORMA');if(out){markSaved();showToast(`Versão ${out.version?.versionNumber||''} salva no RONDA`);}}catch(error){showToast(error.message||'Não foi possível salvar a versão',3200);}};
+  $('#versionsBtn').onclick=async()=>{try{const meta=state.platformMeta||{};if(!meta.jobId&&!meta.topicId){showToast('Projeto sem histórico de versões');return;}const q=meta.jobId?`jobId=${encodeURIComponent(meta.jobId)}`:`topicId=${encodeURIComponent(meta.topicId)}`;const res=await fetch('/api/carousel-versions?'+q,{cache:'no-store',credentials:'same-origin'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Falha ao carregar versões');const list=out.versions||[];if(!list.length){showToast('Nenhuma versão salva ainda');return;}const text=list.slice(0,12).map(v=>`v${v.versionNumber} · ${new Date(v.createdAt).toLocaleString('pt-BR')} · ${v.kind}`).join('\n');const choice=prompt(`VERSÕES DO CARROSSEL\n\n${text}\n\nDigite o número da versão para restaurar:`);if(!choice)return;const v=list.find(x=>String(x.versionNumber)===String(choice).trim());if(!v?.payload?.artboards){showToast('Esta versão não contém snapshot visual do FORMA');return;}const parsed=v.payload;state.artboards=clone(parsed.artboards);state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||state.docTitle;state.platformMeta={...(parsed.platformMeta||{}),versionId:v.id,versionNumber:v.versionNumber};state.rondaContentModel=parsed.rondaContentModel||state.rondaContentModel;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;renderAll();markDirty();showToast(`Versão ${v.versionNumber} restaurada`);}catch(error){showToast(error.message||'Falha ao abrir versões',3200);}};
+  $('#submitReviewBtn').onclick=async()=>{try{let workflowId=state.platformMeta?.workflowId;if(!workflowId){const saved=await saveCloudRevision('Versão enviada para revisão');workflowId=saved?.workflow?.id;}if(!workflowId)throw new Error('Não foi possível criar o fluxo de aprovação.');const res=await fetch('/api/workflow/'+encodeURIComponent(workflowId),{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',note:'Enviado pelo FORMA Design'})}),out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta.workflowStatus=out.item?.status||'in_review';try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}showToast('Versão enviada para revisão editorial');}catch(error){showToast(error.message||'Falha ao enviar para revisão',3600);}};
   function loadProject(){try{const raw=localStorage.getItem(LS_PROJECT)||localStorage.getItem('rondaDesign.project.v1');if(!raw)return false;const parsed=JSON.parse(raw);if(Array.isArray(parsed.artboards)&&parsed.artboards.length){state.artboards=parsed.artboards.map((b,i)=>{const d=migrateSnapshot(b);return {...b,...d,id:b.id||('board_'+Date.now()+'_'+i),name:b.name||`Prancheta ${i+1}`};});state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||'Sem título';state.platformMeta=parsed.platformMeta||null;state.rondaContentModel=parsed.rondaContentModel||parsed.platformMeta?.rondaContentModel||null;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));return true;}const d=migrateSnapshot(parsed);if(!d)return false;state.width=d.width;state.height=d.height;state.bg=d.bg;state.bgMode=d.bgMode;state.gradient=normalizeGradientData(d.gradient,d.bg);state.elements=clone(d.elements);state.docTitle=d.docTitle||'Sem título';return true;}catch{return false;}}
   $('#saveTemplateBtn').onclick=()=>{$('#templateName').value=state.docTitle==='Sem título'?'':state.docTitle;openModal('templateModal');setTimeout(()=>$('#templateName').focus(),20);};
   function smartEngine(){if(!window.RondaSmartTemplates)throw new Error('Motor de templates não carregado. Atualize a página.');return window.RondaSmartTemplates;}
@@ -1295,7 +1303,12 @@
       articleVisuals:articleVisuals||{primary:null,alternatives:[]},
       directArticle:{url:articleUrl,visualMode,generatedAt:new Date().toISOString(),jobId:directArticleState.lastJobId||null},
       editorialGate:data?.editorialGate||null,
-      validation:data?.validation||null
+      validation:data?.validation||null,
+      qualityGate:data?.qualityGate||null,
+      confidence:data?.confidence||null,
+      aiTrace:data?.aiTrace||[],
+      jobId:data?.cycle?.jobId||directArticleState.lastJobId||null,
+      topicId:data?.topicId||null
     };
   }
   async function generateDirectArticleCarousel(){
@@ -1348,13 +1361,13 @@
   function applySmartTemplate(templateRecord,{reapply=false}={}){
     if(!state.rondaContentModel?.slides?.length){showToast('Este projeto não possui conteúdo semântico da RONDA');return false;}
     const tpl=normalizeTemplateRecord(templateRecord);if(!tpl?.project?.artboards?.length){showToast('Template sem layout válido');return false;}
-    syncActiveArtboard();const result=smartEngine().applyTemplate(tpl,state.rondaContentModel);if(!result.boards.length){showToast('O template não possui pranchetas aplicáveis');return false;}
+    syncActiveArtboard();const result=smartEngine().applyTemplate(tpl,state.rondaContentModel,{preserveLockedBoards:state.artboards});if(!result.boards.length){showToast('O template não possui pranchetas aplicáveis');return false;}
     state.artboards=result.boards;state.activeArtboardId=result.boards[0].id;
-    state.templateBinding={templateId:tpl.id,templateName:tpl.name,appliedAt:new Date().toISOString(),engineVersion:smartEngine().VERSION,stats:result.stats,warnings:result.warnings};
+    state.templateBinding={templateId:result.effectiveTemplateId||tpl.id,requestedTemplateId:tpl.id,templateName:result.usedFallbackTemplate?'Layout seguro RONDA':tpl.name,appliedAt:new Date().toISOString(),engineVersion:smartEngine().VERSION,stats:result.stats,warnings:result.warnings,preflight:result.preflight,fallbackTemplate:Boolean(result.usedFallbackTemplate)};
     state.platformMeta={...(state.platformMeta||{}),smartTemplate:{id:tpl.id,name:tpl.name,engineVersion:smartEngine().VERSION}};
     loadBoardToState(state.artboards[0]);state.activeArtboardId=state.artboards[0].id;state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>fitZoom());markDirty();
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
-    const s=result.stats;showToast(`${reapply?'Template reaplicado':'Template aplicado'} · ${s.slides} slides · ${s.autoFitCount} autofit${s.warningCount?` · ${s.warningCount} atenção`:''}`,3200);return true;
+    const s=result.stats;if(result.usedFallbackTemplate)showToast(`Template selecionado falhou no preflight · layout seguro aplicado · ${s.slides} slides`,3600);else showToast(`${reapply?'Template reaplicado':'Template aplicado'} · ${s.slides} slides · ${s.autoFitCount} autofit${s.warningCount?` · ${s.warningCount} atenção`:''}`,3200);return true;
   }
   function reapplySmartTemplate(){const id=state.templateBinding?.templateId;if(!id)return;const raw=getTemplates().find(t=>String(t.id)===String(id));if(!raw){showToast('Template vinculado não está mais na biblioteca');return;}applySmartTemplate(raw,{reapply:true});}
   function detachSmartTemplate(){
@@ -1387,7 +1400,7 @@
       else{ensureShapePaint(e);ctx.fillStyle=e.fillMode==='gradient'?canvasGradient(ctx,e.w,e.h,e.fillGradient):e.fill;shapePath(ctx,e);ctx.fill();if(e.strokeWidth>0){ctx.strokeStyle=e.strokeColor||'#000';ctx.lineWidth=e.strokeWidth;ctx.lineJoin='round';ctx.lineCap='round';shapePath(ctx,e);ctx.stroke();}}ctx.restore();}
     canvas.toBlob(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(state.docTitle||'forma-design').replace(/[^\w\-]+/g,'_')+'.png';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);showToast('PNG exportado');},'image/png');
   }
-  function loadImage(src){return new Promise((res,rej)=>{const i=new Image();if(/^https?:/i.test(src))i.crossOrigin='anonymous';i.onload=()=>res(i);i.onerror=rej;i.src=src;});}
+  function loadImage(src){return new Promise((res,rej)=>{const raw=String(src||''),safe=proxyExternalAsset(raw),i=new Image();i.onload=()=>res(i);i.onerror=()=>{if(safe!==raw){const retry=new Image();retry.crossOrigin='anonymous';retry.onload=()=>res(retry);retry.onerror=rej;retry.src=raw;}else rej(new Error('Imagem indisponível'));};i.src=safe;});}
   function drawImageFit(ctx,img,w,h,fit){const ir=img.width/img.height,br=w/h;let sw=img.width,sh=img.height,sx=0,sy=0,dx=0,dy=0,dw=w,dh=h;if(fit==='cover'){if(ir>br){sw=img.height*br;sx=(img.width-sw)/2;}else{sh=img.width/br;sy=(img.height-sh)/2;}ctx.drawImage(img,sx,sy,sw,sh,0,0,w,h);}else{if(ir>br){dh=w/ir;dy=(h-dh)/2;}else{dw=h*ir;dx=(w-dw)/2;}ctx.drawImage(img,0,0,img.width,img.height,dx,dy,dw,dh);}}
   function drawMaskedImage(ctx,img,e){const aspect=img.width/img.height,br=e.w/e.h;let bw,bh;if(aspect>br){bh=e.h;bw=bh*aspect;}else{bw=e.w;bh=bw/aspect;}const scale=clamp(e.imageScale||100,25,500)/100;bw*=scale;bh*=scale;const dx=(clamp(e.imageX||0,-200,200)/100)*(e.w/2),dy=(clamp(e.imageY||0,-200,200)/100)*(e.h/2);ctx.drawImage(img,e.w/2+dx-bw/2,e.h/2+dy-bh/2,bw,bh);}
   function drawText(ctx,text,w,lineH,align){const paragraphs=String(text).split('\n'),lines=[];paragraphs.forEach((p,pi)=>{const words=p.split(/\s+/).filter(Boolean);if(!words.length){lines.push('');return;}let line='';for(const word of words){const test=line?line+' '+word:word;if(ctx.measureText(test).width>w&&line){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);if(pi<paragraphs.length-1&&p==='')lines.push('');});ctx.textAlign=align==='center'?'center':align==='right'?'right':'left';const x=align==='center'?w/2:align==='right'?w:0;lines.forEach((l,i)=>ctx.fillText(l,x,i*lineH));}
@@ -1527,7 +1540,7 @@
   function applyRondaProject(project,id=''){
     if(!project?.slides?.length)return false;
     const boards=buildRondaBoards(project);if(!boards.length)return false;
-    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;state.platformMeta={source:'ronda-editorial',projectId:id||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1'};
+    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1'};
     loadBoardToState(boards[0]);$('#docTitle').value=state.docTitle;state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>fitZoom());markDirty();setPlatformImportStatus('Importado da Ronda','ok');
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     if(!project?.articleVisuals?.primary && !project?.articleVisuals?.alternatives?.length){const q=document.getElementById('freeBankQuery');if(q&&!q.value)q.value=project.title||'';}return true;
@@ -1538,7 +1551,7 @@
     try{
       let project=null;
       if(projectId){const res=await fetch('/api/projects/'+encodeURIComponent(projectId),{cache:'no-store'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Projeto não encontrado');project=out.project;}
-      else {const raw=localStorage.getItem('rondaOne.handoff');if(!raw)throw new Error('Handoff local não encontrado');const input=JSON.parse(raw),topic=input.topic||{},carousel=input.carousel||{};project={contractVersion:'ronda-one-import-v4-semantic-content',source:'ronda-editorial',sourceVersion:input.sourceVersion||'ronda-editorial',title:topic.title||carousel.topicTitle||'Projeto da Ronda',editoria:topic.editoria||'Notícias',slides:carousel.slides||[],questions:carousel.questions||{},entities:carousel.entities||{},reading:carousel.reading||{},verificationLinks:carousel.verificationLinks||[],disclaimer:carousel.disclaimer||'',visualPrompt:`Editorial documentary photograph illustrating ${String(topic.title||carousel.topicTitle||'news story').slice(0,220)}. Neutral realistic news context, natural light, credible environment, negative space for carousel text, no text, no watermark.`};localStorage.removeItem('rondaOne.handoff');}
+      else {const raw=localStorage.getItem('rondaOne.handoff');if(!raw)throw new Error('Handoff local não encontrado');const input=JSON.parse(raw),topic=input.topic||{},carousel=input.carousel||{};project={contractVersion:'ronda-one-import-v5-workflow',source:'ronda-editorial',sourceVersion:input.sourceVersion||'ronda-editorial',title:topic.title||carousel.topicTitle||'Projeto da Ronda',editoria:topic.editoria||'Notícias',jobId:carousel.cycle?.jobId||carousel.jobId||null,topicId:topic.id||carousel.topicId||null,qualityGate:carousel.qualityGate||null,confidence:carousel.confidence||null,slides:carousel.slides||[],questions:carousel.questions||{},entities:carousel.entities||{},reading:carousel.reading||{},verificationLinks:carousel.verificationLinks||[],disclaimer:carousel.disclaimer||'',visualPrompt:`Editorial documentary photograph illustrating ${String(topic.title||carousel.topicTitle||'news story').slice(0,220)}. Neutral realistic news context, natural light, credible environment, negative space for carousel text, no text, no watermark.`};localStorage.removeItem('rondaOne.handoff');}
       if(!applyRondaProject(project,projectId||''))throw new Error('Projeto sem slides compatíveis');
     }catch(err){setPlatformImportStatus('Falha na importação','error');showToast(err.message||'Não foi possível importar a Ronda',3600);}
   }
@@ -1671,6 +1684,6 @@
 })();
 
   </script>
-<script src="/access-client.js?v=087-reliability-90" defer></script>
+<script src="/access-client.js?v=095-workflow-multi-ai" defer></script>
 </body>
 </html>

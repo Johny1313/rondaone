@@ -18,7 +18,7 @@ assert.match(worker,/\/api\/design\/article-carousel/);
 assert.match(worker,/mode: "direct-article-url"/);
 assert.match(worker,/requestPayload:/);
 assert.match(worker,/validateArticleUrl/);
-assert.match(worker,/INTELLIGENT_JOBS_QUEUE\.send/);
+assert.match(worker,/(?:INTELLIGENT_JOBS_QUEUE\.send|carouselQueue\(env\)\.send)/);
 assert.match(worker,/startCarouselReliabilityAttempt/);
 assert.match(worker,/requestTopic = job\?\.request\?\.topic/);
 assert.match(worker,/articleVisuals: data\?\.reading\?\.selectedSource\?\.images/);

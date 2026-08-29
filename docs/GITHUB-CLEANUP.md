@@ -1,56 +1,78 @@
-# Auditoria de limpeza do GitHub
+# Auditoria de limpeza do GitHub — v0.9.5
 
-Repositório auditado: `Johny1313/rondaone`, branch `main`.
+Repositório de referência: `Johny1313/rondaone`, branch `main`.
 
-## Situação encontrada
+## Estrutura recomendada na raiz
 
-O branch principal ainda estava identificado no `package.json` como v0.9.0, enquanto a linha de desenvolvimento já havia avançado para v0.9.1. A raiz também acumulava um arquivo de atualização para praticamente cada hotfix anterior e documentação temporária de implementação.
+```text
+docs/
+public/
+scripts/
+src/
+.gitignore
+CHANGELOG.md
+README.md
+package.json
+wrangler.jsonc
+```
 
-## Pode ser removido ao publicar a v0.9.2 completa
+## Arquivos históricos que não precisam permanecer na raiz
 
-### Documentação histórica solta na raiz
+Podem ser removidos depois de confirmar o deploy da v0.9.5:
 
-- `ATUALIZAR-PARA-080.txt`
-- `ATUALIZAR-PARA-081.txt`
-- `ATUALIZAR-PARA-082.txt`
-- `ATUALIZAR-PARA-083.txt`
-- `ATUALIZAR-PARA-084.txt`
-- `ATUALIZAR-PARA-085.txt`
-- `ATUALIZAR-PARA-0852.txt`
-- `ATUALIZAR-PARA-0853.txt`
-- `ATUALIZAR-PARA-0854.txt`
-- `ATUALIZAR-PARA-0855.txt`
-- `ATUALIZAR-PARA-086.txt`
-- `ATUALIZAR-PARA-087.txt`
-- `ATUALIZAR-PARA-088.txt`
-- `ATUALIZAR-PARA-0881.txt`
-- `ATUALIZAR-PARA-089.txt`
-- `ATUALIZAR-PARA-090.txt`
-- `ATUALIZAR-PARA-091.txt`
-- `IMPLEMENTACAO-080.md`
-- `README-HOTFIX.txt`
-- `UPLOAD-GITHUB.txt`
-- `BUILD_INFO.txt`
+- `ATUALIZAR-PARA-*.txt` de versões anteriores;
+- `IMPLEMENTACAO-080.md`;
+- `README-HOTFIX.txt`;
+- `UPLOAD-GITHUB.txt`;
+- `BUILD_INFO.txt`.
 
-O histórico continua disponível pelo Git. Este pacote substitui esses arquivos por `README.md`, `CHANGELOG.md`, `docs/DEPLOY.md` e este relatório de limpeza.
+O histórico de implementação já permanece no Git e no `CHANGELOG.md`.
 
-### Scripts obsoletos
+## Scripts
 
-Os antigos `scripts/verify-080.mjs` até `scripts/verify-091.mjs` eram verificadores amarrados a números exatos de versões antigas. A v0.9.2 usa apenas `scripts/verify-current.mjs`.
+Manter os scripts citados por `package.json`, especialmente:
 
-Também foram removidos do pacote os testes `test-084-auth-profile-dashboard.mjs` e `test-085-open-email-access.mjs`, porque eles validavam estados intermediários substituídos pelo fluxo de autenticação mais recente; a regressão atual mantém `test-0854-email-only-auth.mjs` e os testes posteriores.
+- regressão histórica usada por `test:regression`;
+- `test-093-reliability-core.mjs`;
+- `test-094-production-hardening.mjs`;
+- `test-094-chaos.mjs`;
+- `test-0941-multi-ai-quality.mjs`;
+- `test-0942-version-content-lock.mjs`;
+- `test-0943-operations.mjs`;
+- `test-095-workflow.mjs`;
+- `verify-current.mjs`;
+- `smoke-production.mjs`;
+- `stress-readonly.mjs`.
 
-## Deve permanecer
+Não remova um teste apenas porque o número no nome é antigo enquanto ele ainda fizer parte da regressão atual.
 
-- `src/`
-- `public/`
-- `wrangler.jsonc`
-- `package.json`
-- `.gitignore`
-- `scripts/test-*` que fazem parte de `npm run test:regression`
-- `scripts/verify-current.mjs`
-- `README.md`, `CHANGELOG.md` e `docs/`
+## Não apagar
 
-## Não apagar automaticamente
+- `src/`;
+- `public/`;
+- `wrangler.jsonc`;
+- `package.json`;
+- `.gitignore`;
+- `README.md`;
+- `CHANGELOG.md`;
+- `docs/`.
 
-Não remover tabelas D1, bindings, Queues ou arquivos funcionais só porque possuem nomes herdados, como a pasta `src/ronda/v285/`. O nome interno é legado, mas ela continua contendo o runtime ativo da Ronda. Renomeá-la agora aumentaria o risco de regressão sem benefício operacional equivalente.
+## Nomes legados ainda ativos
+
+Não remova nem renomeie automaticamente `src/ronda/v285/`.
+
+O nome é herdado, mas a pasta contém partes ativas do runtime. Uma futura refatoração deve ocorrer em versão própria, com imports e regressão atualizados em conjunto.
+
+## Infraestrutura Cloudflare
+
+A limpeza do GitHub não inclui apagar:
+
+- banco D1;
+- tabelas D1;
+- Queues;
+- DLQ;
+- secrets;
+- bindings;
+- históricos de produção.
+
+Esses recursos devem ser avaliados separadamente pela operação/telemetria do ambiente.

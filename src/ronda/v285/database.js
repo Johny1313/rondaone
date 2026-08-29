@@ -1,7 +1,8 @@
+import { getReliabilitySummary } from "../../reliability/core.js";
 import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.8.3";
+export const DATABASE_SCHEMA_VERSION = "2.9.5";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -249,6 +250,31 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS newsroom_story_followers (
     story_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(story_id, user_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS carousel_versions (
+    id TEXT PRIMARY KEY, job_id TEXT, cache_key TEXT, topic_id TEXT, user_id TEXT, kind TEXT NOT NULL DEFAULT 'carousel',
+    version_number INTEGER NOT NULL DEFAULT 1, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft',
+    payload_json TEXT NOT NULL, quality_score REAL, confidence_score REAL, note TEXT, created_by TEXT, created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_carousel_versions_job ON carousel_versions(job_id, version_number DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_carousel_versions_topic ON carousel_versions(topic_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS production_workflow (
+    id TEXT PRIMARY KEY, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, version_id TEXT, title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft', owner_user_id TEXT, assignee_user_id TEXT, group_id TEXT,
+    created_by TEXT NOT NULL, reviewed_by TEXT, approved_by TEXT, published_by TEXT, rejection_reason TEXT, note TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, submitted_at TEXT, reviewed_at TEXT, approved_at TEXT, published_at TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_production_workflow_status ON production_workflow(status, updated_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_production_workflow_owner ON production_workflow(owner_user_id, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS production_workflow_events (
+    id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, event_type TEXT NOT NULL, from_status TEXT, to_status TEXT, user_id TEXT,
+    note TEXT, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_workflow_events_item ON production_workflow_events(workflow_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS watchdog_events (
+    id TEXT PRIMARY KEY, event_type TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'info', subject_id TEXT, status TEXT NOT NULL DEFAULT 'open',
+    detail TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, resolved_at TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_watchdog_events_time ON watchdog_events(created_at DESC)",
   `DELETE FROM source_state WHERE source_id IN (
     'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
     'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
@@ -270,6 +296,10 @@ const STORAGE_GUARD = Object.freeze({
   maxNewsroomStories: 500,
   maxNewsroomEvents: 3000,
   maxNewsroomNotes: 1500,
+  maxCarouselVersions: 800,
+  maxWorkflowItems: 1200,
+  maxWorkflowEvents: 5000,
+  maxWatchdogEvents: 2000,
 });
 
 export function isD1StorageLimitError(error) {
@@ -315,6 +345,10 @@ async function emergencyCleanupRaw(db) {
     `DELETE FROM newsroom_story_events WHERE id NOT IN (SELECT id FROM newsroom_story_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomEvents})`,
     `DELETE FROM newsroom_story_notes WHERE id NOT IN (SELECT id FROM newsroom_story_notes ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomNotes})`,
     `DELETE FROM newsroom_stories WHERE workflow_status IN ('published','discarded') AND id NOT IN (SELECT id FROM newsroom_stories ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomStories})`,
+    `DELETE FROM carousel_versions WHERE id NOT IN (SELECT id FROM carousel_versions ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxCarouselVersions})`,
+    `DELETE FROM production_workflow_events WHERE id NOT IN (SELECT id FROM production_workflow_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxWorkflowEvents})`,
+    `DELETE FROM production_workflow WHERE status IN ('published','rejected') AND id NOT IN (SELECT id FROM production_workflow ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxWorkflowItems})`,
+    `DELETE FROM watchdog_events WHERE id NOT IN (SELECT id FROM watchdog_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxWatchdogEvents})`,
   ];
   for (const statement of statements) {
     try { await db.prepare(statement).run(); } catch {}
@@ -1334,6 +1368,10 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
     db.prepare(`DELETE FROM intelligent_jobs WHERE job_id NOT IN (SELECT job_id FROM intelligent_jobs ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentJobs})`),
     db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
     db.prepare(`DELETE FROM article_read_cache WHERE cache_key NOT IN (SELECT cache_key FROM article_read_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxArticleReadCache})`),
+    db.prepare(`DELETE FROM carousel_versions WHERE id NOT IN (SELECT id FROM carousel_versions ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxCarouselVersions})`),
+    db.prepare(`DELETE FROM production_workflow_events WHERE id NOT IN (SELECT id FROM production_workflow_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxWorkflowEvents})`),
+    db.prepare(`DELETE FROM production_workflow WHERE status IN ('published','rejected') AND id NOT IN (SELECT id FROM production_workflow ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxWorkflowItems})`),
+    db.prepare(`DELETE FROM watchdog_events WHERE id NOT IN (SELECT id FROM watchdog_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxWatchdogEvents})`),
     db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -1685,7 +1723,7 @@ export async function ensureUserAccess(db, userId, email, defaultRole = 'editor'
   await ensureSchema(db);
   const now = new Date().toISOString();
   const admin = String(email || '').trim().toLowerCase() === ADMIN_EMAIL;
-  const role = admin ? 'admin' : (['user','editor'].includes(defaultRole) ? defaultRole : 'editor');
+  const role = admin ? 'admin' : (['user','editor','reviewer','publisher'].includes(defaultRole) ? defaultRole : 'editor');
   await db.prepare(`
     INSERT INTO user_access (user_id, role, disabled, created_at, updated_at)
     VALUES (?, ?, 0, ?, ?)
@@ -1756,7 +1794,7 @@ export async function setUserAccessRole(db, userId, role) {
   const user = await getEditorialUserById(db, userId);
   if (!user) return null;
   if (String(user.email || '').toLowerCase() === ADMIN_EMAIL) return user;
-  const normalized = ['user','editor'].includes(String(role)) ? String(role) : 'editor';
+  const normalized = ['user','editor','reviewer','publisher'].includes(String(role)) ? String(role) : 'editor';
   await ensureUserAccess(db, userId, user.email, normalized);
   const now = new Date().toISOString();
   await db.prepare("UPDATE user_access SET role = ?, updated_at = ? WHERE user_id = ?").bind(normalized, now, userId).run();
@@ -1863,6 +1901,62 @@ export async function listAdminUsers(db) {
   });
 }
 
+
+
+function parseCarouselVersion(row) {
+  if (!row) return null;
+  let payload = null; try { payload = JSON.parse(row.payload_json || 'null'); } catch {}
+  return { id:row.id, jobId:row.job_id||null, cacheKey:row.cache_key||null, topicId:row.topic_id||null, userId:row.user_id||null,
+    kind:row.kind||'carousel', versionNumber:Number(row.version_number)||1, title:row.title||'', status:row.status||'draft', payload,
+    qualityScore:row.quality_score==null?null:Number(row.quality_score), confidenceScore:row.confidence_score==null?null:Number(row.confidence_score),
+    note:row.note||null, createdBy:row.created_by||null, createdAt:row.created_at };
+}
+
+export async function saveCarouselVersion(db,{jobId=null,cacheKey=null,topicId=null,userId=null,kind='carousel',title='',payload,status='draft',qualityScore=null,confidenceScore=null,note=null,createdBy=null}={}){
+  await ensureSchema(db); if(!payload||typeof payload!=='object') throw new Error('Payload da versão é obrigatório.');
+  const where=jobId?'job_id = ?':topicId?'topic_id = ?':null; const key=jobId||topicId;
+  let number=1;if(where){const row=await db.prepare(`SELECT MAX(version_number) AS max_version FROM carousel_versions WHERE ${where}`).bind(key).first();number=(Number(row?.max_version)||0)+1;}
+  const id=crypto.randomUUID(),createdAt=new Date().toISOString();
+  const payloadJson=JSON.stringify(payload); if(payloadJson.length>1500000) throw new Error('Esta versão excede o limite seguro de 1,5 MB. Remova assets incorporados pesados e tente novamente.');
+  await db.prepare(`INSERT INTO carousel_versions(id,job_id,cache_key,topic_id,user_id,kind,version_number,title,status,payload_json,quality_score,confidence_score,note,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id,jobId,cacheKey,topicId,userId,String(kind||'carousel').slice(0,30),number,String(title||'').slice(0,220),String(status||'draft').slice(0,30),payloadJson,qualityScore==null?null:Number(qualityScore),confidenceScore==null?null:Number(confidenceScore),note?String(note).slice(0,600):null,createdBy||userId||null,createdAt).run();
+  return getCarouselVersion(db,id);
+}
+
+export async function getCarouselVersion(db,id){await ensureSchema(db);return parseCarouselVersion(await db.prepare('SELECT * FROM carousel_versions WHERE id=? LIMIT 1').bind(id).first());}
+export async function listCarouselVersions(db,{jobId=null,topicId=null,limit=40}={}){await ensureSchema(db);const take=Math.max(1,Math.min(100,Number(limit)||40));let sql='SELECT * FROM carousel_versions',params=[];if(jobId){sql+=' WHERE job_id=?';params=[jobId];}else if(topicId){sql+=' WHERE topic_id=?';params=[topicId];}sql+=' ORDER BY created_at DESC LIMIT ?';params.push(take);const out=await db.prepare(sql).bind(...params).all();return (out?.results||[]).map(parseCarouselVersion);}
+
+function parseWorkflow(row){if(!row)return null;return {id:row.id,subjectType:row.subject_type,subjectId:row.subject_id,versionId:row.version_id||null,title:row.title||'',status:row.status||'draft',ownerUserId:row.owner_user_id||null,assigneeUserId:row.assignee_user_id||null,groupId:row.group_id||null,createdBy:row.created_by,reviewedBy:row.reviewed_by||null,approvedBy:row.approved_by||null,publishedBy:row.published_by||null,rejectionReason:row.rejection_reason||null,note:row.note||null,createdAt:row.created_at,updatedAt:row.updated_at,submittedAt:row.submitted_at||null,reviewedAt:row.reviewed_at||null,approvedAt:row.approved_at||null,publishedAt:row.published_at||null};}
+async function workflowEvent(db,workflowId,eventType,{fromStatus=null,toStatus=null,userId=null,note=null,payload=null}={}){await db.prepare('INSERT INTO production_workflow_events(id,workflow_id,event_type,from_status,to_status,user_id,note,payload_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),workflowId,eventType,fromStatus,toStatus,userId,note?String(note).slice(0,600):null,payload?JSON.stringify(payload).slice(0,8000):'{}',new Date().toISOString()).run();}
+export async function createWorkflowItem(db,{subjectType='carousel',subjectId,versionId=null,title='',ownerUserId=null,assigneeUserId=null,groupId=null,createdBy}={}){
+  await ensureSchema(db);
+  if(!subjectId||!createdBy)throw new Error('Assunto e autor são obrigatórios.');
+  const existing=await db.prepare("SELECT * FROM production_workflow WHERE subject_type=? AND subject_id=? AND status NOT IN ('published','archived') ORDER BY created_at DESC LIMIT 1").bind(subjectType,subjectId).first();
+  if(existing){
+    const current=parseWorkflow(existing); const at=new Date().toISOString();
+    const nextVersion=versionId||current.versionId; const nextTitle=String(title||current.title||'').slice(0,220);
+    const nextOwner=ownerUserId||current.ownerUserId||createdBy; const nextAssignee=assigneeUserId===null?current.assigneeUserId:assigneeUserId; const nextGroup=groupId===null?current.groupId:groupId;
+    await db.prepare('UPDATE production_workflow SET version_id=?,title=?,owner_user_id=?,assignee_user_id=?,group_id=?,updated_at=? WHERE id=?').bind(nextVersion,nextTitle,nextOwner,nextAssignee,nextGroup,at,current.id).run();
+    if(versionId&&versionId!==current.versionId)await workflowEvent(db,current.id,'version_updated',{fromStatus:current.status,toStatus:current.status,userId:createdBy,payload:{previousVersionId:current.versionId,versionId}});
+    return getWorkflowItem(db,current.id);
+  }
+  const id=crypto.randomUUID(),at=new Date().toISOString();
+  await db.prepare(`INSERT INTO production_workflow(id,subject_type,subject_id,version_id,title,status,owner_user_id,assignee_user_id,group_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'draft',?,?,?,?,?,?)`).bind(id,subjectType,subjectId,versionId,String(title||'').slice(0,220),ownerUserId||createdBy,assigneeUserId,groupId,createdBy,at,at).run();
+  await workflowEvent(db,id,'created',{toStatus:'draft',userId:createdBy});
+  return getWorkflowItem(db,id);
+}
+export async function getWorkflowItem(db,id){await ensureSchema(db);const row=await db.prepare('SELECT * FROM production_workflow WHERE id=? LIMIT 1').bind(id).first();if(!row)return null;const item=parseWorkflow(row);const events=(await db.prepare('SELECT * FROM production_workflow_events WHERE workflow_id=? ORDER BY created_at DESC LIMIT 100').bind(id).all())?.results||[];item.events=events.map(e=>({id:e.id,eventType:e.event_type,fromStatus:e.from_status||null,toStatus:e.to_status||null,userId:e.user_id||null,note:e.note||null,createdAt:e.created_at}));return item;}
+export async function listWorkflowItems(db,{status=null,userId=null,limit=100}={}){await ensureSchema(db);const where=[],args=[];if(status){where.push('status=?');args.push(status);}if(userId){where.push('(owner_user_id=? OR assignee_user_id=? OR created_by=?)');args.push(userId,userId,userId);}const sql=`SELECT * FROM production_workflow ${where.length?'WHERE '+where.join(' AND '):''} ORDER BY updated_at DESC LIMIT ?`;args.push(Math.max(1,Math.min(200,Number(limit)||100)));const rows=(await db.prepare(sql).bind(...args).all())?.results||[];return rows.map(parseWorkflow);}
+export async function transitionWorkflowItem(db,id,{action,userId,role='user',note=null,assigneeUserId=undefined,groupId=undefined}={}){await ensureSchema(db);const row=await db.prepare('SELECT * FROM production_workflow WHERE id=? LIMIT 1').bind(id).first();if(!row)return null;const current=parseWorkflow(row);const admin=role==='admin';const editor=admin||role==='editor'||role==='reviewer'||role==='publisher';const reviewer=admin||role==='reviewer'||role==='publisher';const publisher=admin||role==='publisher';let next=current.status,fields={};switch(action){case 'submit':if(!editor||!['draft','rejected'].includes(current.status))throw new Error('Este item não pode ser enviado para revisão.');next='in_review';fields.submitted_at=new Date().toISOString();fields.rejection_reason=null;break;case 'approve':if(!reviewer||current.status!=='in_review')throw new Error('Aprovação exige função de revisor/publicador e item em revisão.');next='approved';fields.reviewed_by=userId;fields.approved_by=userId;fields.reviewed_at=new Date().toISOString();fields.approved_at=fields.reviewed_at;break;case 'reject':if(!reviewer||current.status!=='in_review')throw new Error('Rejeição exige item em revisão.');next='rejected';fields.reviewed_by=userId;fields.reviewed_at=new Date().toISOString();fields.rejection_reason=String(note||'Ajustes solicitados.').slice(0,600);break;case 'publish':if(!publisher||current.status!=='approved')throw new Error('Publicação exige função de publicador e item aprovado.');next='published';fields.published_by=userId;fields.published_at=new Date().toISOString();break;case 'return_draft':if(!editor||!['in_review','approved','rejected'].includes(current.status))throw new Error('Não é possível retornar este item para rascunho.');next='draft';break;case 'assign':if(!editor)throw new Error('Sem permissão para atribuir.');break;default:throw new Error('Ação de workflow inválida.');}
+  const at=new Date().toISOString();const assignment=assigneeUserId===undefined?current.assigneeUserId:assigneeUserId;const group=groupId===undefined?current.groupId:groupId;
+  await db.prepare(`UPDATE production_workflow SET status=?,assignee_user_id=?,group_id=?,reviewed_by=COALESCE(?,reviewed_by),approved_by=COALESCE(?,approved_by),published_by=COALESCE(?,published_by),rejection_reason=?,note=COALESCE(?,note),submitted_at=COALESCE(?,submitted_at),reviewed_at=COALESCE(?,reviewed_at),approved_at=COALESCE(?,approved_at),published_at=COALESCE(?,published_at),updated_at=? WHERE id=?`).bind(next,assignment,group,fields.reviewed_by||null,fields.approved_by||null,fields.published_by||null,fields.rejection_reason===undefined?current.rejectionReason:fields.rejection_reason,note?String(note).slice(0,600):null,fields.submitted_at||null,fields.reviewed_at||null,fields.approved_at||null,fields.published_at||null,at,id).run();
+  await workflowEvent(db,id,action,{fromStatus:current.status,toStatus:next,userId,note,payload:{assigneeUserId:assignment,groupId:group}});return getWorkflowItem(db,id);
+}
+
+export async function recordWatchdogEvent(db,{eventType,severity='info',subjectId=null,detail=null,metadata=null,status='open'}={}){await ensureSchema(db);const id=crypto.randomUUID(),at=new Date().toISOString();await db.prepare('INSERT INTO watchdog_events(id,event_type,severity,subject_id,status,detail,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(id,String(eventType||'watchdog').slice(0,80),String(severity||'info').slice(0,20),subjectId,status,detail?String(detail).slice(0,800):null,metadata?JSON.stringify(metadata).slice(0,8000):'{}',at).run();return id;}
+export async function listWatchdogEvents(db,{hours=24,limit=100}={}){await ensureSchema(db);const cutoff=new Date(Date.now()-Math.max(1,Number(hours)||24)*3600000).toISOString();const rows=(await db.prepare('SELECT * FROM watchdog_events WHERE created_at>=? ORDER BY created_at DESC LIMIT ?').bind(cutoff,Math.max(1,Math.min(300,Number(limit)||100))).all())?.results||[];return rows.map(r=>({id:r.id,eventType:r.event_type,severity:r.severity,subjectId:r.subject_id||null,status:r.status,detail:r.detail||null,createdAt:r.created_at,resolvedAt:r.resolved_at||null}));}
+
+export async function getCostMonitor(db,{hours=24,estimatedCallUsd=0}={}){await ensureSchema(db);const cutoff=new Date(Date.now()-Math.max(1,Number(hours)||24)*3600000).toISOString().slice(0,13);const rows=(await db.prepare("SELECT metric,SUM(value) AS value,SUM(samples) AS samples,SUM(total_ms) AS total_ms FROM usage_metrics WHERE granularity='hour' AND bucket>=? AND (metric LIKE 'ai_%' OR metric LIKE 'carousel_%') GROUP BY metric").bind(cutoff).all())?.results||[];const metrics=Object.fromEntries(rows.map(r=>[r.metric,{value:Number(r.value)||0,samples:Number(r.samples)||0,totalMs:Number(r.total_ms)||0}]));const aiCalls=Object.entries(metrics).filter(([k])=>/^ai_.*_calls$/.test(k)).reduce((sum,[,v])=>sum+v.value,0);return {hours:Number(hours)||24,metrics,aiCalls,estimatedUsd:Number((aiCalls*Math.max(0,Number(estimatedCallUsd)||0)).toFixed(4)),estimateOnly:true,note:'Estimativa interna por chamada. O faturamento real deve ser conferido no Cloudflare.'};}
 
 export async function startCarouselReliabilityAttempt(db, {
   jobId, cacheKey = null, userId = null, runId = null, topicId = null, slideCount = 7,
@@ -2052,7 +2146,7 @@ export async function getAdminDashboard(db) {
   const cutoff24 = new Date(now.getTime()-24*60*60*1000).toISOString().slice(0,13);
   const cutoff30 = new Date(now.getTime()-30*24*60*60*1000).toISOString().slice(0,10);
   const [activeUsers, registeredRow, groupsRow, dayMetrics, hourMetrics, monthTopics, hourlyTopics, dailyTopics, appUsage, designUsage,
-    jobRows, runRows, cacheRows, articleRows, sourceRows, navigationRows, carouselReliability] = await Promise.all([
+    jobRows, runRows, cacheRows, articleRows, sourceRows, navigationRows, carouselReliability, reliabilityCore] = await Promise.all([
     countActiveEditorialUsers(db),
     db.prepare("SELECT COUNT(*) AS total FROM users").first(),
     db.prepare("SELECT COUNT(*) AS total FROM editorial_groups").first(),
@@ -2070,6 +2164,7 @@ export async function getAdminDashboard(db) {
     db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status NOT IN ('failed','blocked','not-found') THEN 1 ELSE 0 END) AS healthy, SUM(CASE WHEN item_count>0 THEN 1 ELSE 0 END) AS with_content FROM source_state").first(),
     db.prepare("SELECT area, SUM(active_ms) AS active_ms, COUNT(DISTINCT user_id) AS users FROM usage_daily_users WHERE day=? GROUP BY area ORDER BY active_ms DESC").bind(day).all(),
     getCarouselReliabilitySummary(db,{hours:24}),
+    getReliabilitySummary(db,{hours:24}),
   ]);
   const dayMap = Object.fromEntries((dayMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
   const hourMap = Object.fromEntries((hourMetrics?.results||[]).map(row=>[row.metric,metricRow(row)]));
@@ -2092,6 +2187,7 @@ export async function getAdminDashboard(db) {
     health: { sources:{total:Number(sourceRows?.total)||0,healthy:Number(sourceRows?.healthy)||0,withContent:Number(sourceRows?.with_content)||0}, jobs:statuses(jobRows), runs:statuses(runRows) },
     resources: { carouselCache:Number(cacheRows?.carousels)||0, articleCache:Number(cacheRows?.articles)||0, articleReadAttempts:Number(articleRows?.attempts)||0, articleReadSuccesses:Number(articleRows?.successes)||0 },
     carouselReliability,
+    reliabilityCore,
     navigation: (navigationRows?.results||[]).map(row=>({ area:row.area, activeMs:Number(row.active_ms)||0, users:Number(row.users)||0 })),
     note: 'Recursos são métricas internas do aplicativo; faturamento/CPU/rows da Cloudflare não são estimados aqui.'
   };

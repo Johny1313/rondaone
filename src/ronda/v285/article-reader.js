@@ -2,6 +2,9 @@ import { decodeEntities, plainText, stableHash } from "./parser.js";
 import { extractArticleVisualsFromHtml } from "../article-visuals.js";
 
 export const ARTICLE_ANALYSIS_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export const ARTICLE_SECONDARY_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+export const ARTICLE_TERTIARY_MODEL = "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b";
+export const CAROUSEL_QUALITY_GATE_THRESHOLD = 88;
 export const ARTICLE_READER_LIMIT = 1;
 const MAX_HTML_BYTES = 4_000_000;
 const MAX_ARTICLE_CHARS = 20_000;
@@ -1586,6 +1589,60 @@ function validateSlides(slides, fallbackSlides, facts, article) {
   };
 }
 
+
+function clampScore(value){return Math.max(0,Math.min(100,Math.round(Number(value)||0)));}
+
+function carouselQualityGate(validation, readQuality, facts, slides, {model=null,role='deterministic'}={}) {
+  const report=validation?.report||{};
+  const issueCount=(report.issues||[]).length;
+  const finalProblemCount=(report.finalProblems||[]).length;
+  const coverage=Number(report.evidenceCoverage)||0;
+  const informative=Math.max(1,Number(report.informativeSlides)||slides.filter(slide=>slide?.role!=='CTA').length||1);
+  const distinct=Math.min(informative,Number(report.distinctPrimaryEvidence)||0);
+  const distinctRatio=distinct/informative;
+  const sourceBonus=readQuality?.code==='broad'?4:readQuality?.code==='partial'?0:-6;
+  const evidenceBonus=Math.min(6,Math.max(0,(Number(facts?.length)||0)-informative));
+  const score=clampScore(96+sourceBonus+evidenceBonus-issueCount*4-finalProblemCount*22-(1-coverage)*16-(1-distinctRatio)*18);
+  return {
+    score,
+    threshold:CAROUSEL_QUALITY_GATE_THRESHOLD,
+    passed:Boolean(report.passed&&score>=CAROUSEL_QUALITY_GATE_THRESHOLD),
+    role,
+    model,
+    issueCount,
+    finalProblemCount,
+    evidenceCoverage:Number(coverage.toFixed(2)),
+    distinctEvidenceRatio:Number(distinctRatio.toFixed(2)),
+    correctedSlides:report.correctedSlides||[],
+    problems:(report.finalProblems||[]).slice(0,12),
+  };
+}
+
+function carouselConfidence(validation, facts, slides, readQuality) {
+  const issueBySlide=new Map();
+  for(const issue of validation?.report?.issues||[]){const n=Number(issue.slide)||0;if(n)issueBySlide.set(n,(issueBySlide.get(n)||0)+1);}
+  const perSlide=slides.map((slide,index)=>{
+    if(slide?.role==='CTA')return {slide:index+1,score:92,label:'alta',evidenceIds:[]};
+    const refs=(slide?.evidenceIds||[]).map(id=>facts.find(f=>f.id===id)).filter(Boolean);
+    let base=refs.length?refs.reduce((sum,f)=>sum+(f.confidence==='high'?96:f.confidence==='medium'?84:70),0)/refs.length:62;
+    if(readQuality?.code==='partial')base-=5;else if(readQuality?.code==='limited')base-=12;
+    base-=Math.min(18,(issueBySlide.get(index+1)||0)*6);
+    const score=clampScore(base);return {slide:index+1,score,label:score>=90?'alta':score>=78?'média':'revisar',evidenceIds:refs.map(f=>f.id)};
+  });
+  const informative=perSlide.filter((_,i)=>slides[i]?.role!=='CTA');
+  const score=clampScore(informative.length?informative.reduce((s,x)=>s+x.score,0)/informative.length:0);
+  return {score,label:score>=90?'alta':score>=78?'média':'revisar',perSlide};
+}
+
+function evaluateCarouselCandidate(rawSlides, sourceAnalysis, facts, slideCount, article, readQuality, meta={}){
+  const fallback=normalizeSlides({slides:sourceAnalysis.slides},sourceAnalysis,facts,slideCount);
+  const normalized=normalizeSlides(rawSlides,sourceAnalysis,facts,slideCount);
+  const validation=validateSlides(normalized,fallback,facts,article);
+  const qualityGate=carouselQualityGate(validation,readQuality,facts,validation.slides,meta);
+  const confidence=carouselConfidence(validation,facts,validation.slides,readQuality);
+  return {slides:validation.slides,validation,qualityGate,confidence,...meta};
+}
+
 function evidenceCarouselPrompt(topic, article, facts, slideCount, writingStyle = null) {
   const plan = carouselSlidePlan(slideCount);
   const styleText = writingStyle?.prompt || writingStyle?.instructions || "";
@@ -1673,6 +1730,8 @@ export function intelligentCarouselCacheKey(runId, topic, { slideCount = DEFAULT
 export async function buildIntelligentCarousel(topic, {
   ai,
   model = ARTICLE_ANALYSIS_MODEL,
+  models = null,
+  multiAiMode = "failover",
   fetcher = fetch,
   liveReading = true,
   onProgress = null,
@@ -1834,47 +1893,53 @@ export async function buildIntelligentCarousel(topic, {
     entities: sourceAnalysis.entities,
     facts: sourceAnalysis.facts,
   };
-  let slideSource = { slides: sourceAnalysis.slides };
+  const modelCandidates=[...(Array.isArray(models)?models:[]),model].map(value=>String(value||'').trim()).filter(Boolean).filter((value,index,list)=>list.indexOf(value)===index);
+  if(!modelCandidates.length)modelCandidates.push(ARTICLE_ANALYSIS_MODEL);
   let analysisMode = "source-extraction";
   let aiError = null;
-  const aiStartedAt = Date.now();
-  if (ai?.run) {
-    try {
-      await reportProgress(onProgress, 76, "analysis", `Redigindo ${effectiveSlideCount} slides somente com as evidências extraídas do site.`);
-      const generated = await runAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, effectiveSlideCount, writingStyle);
-      if (!generated?.slides) throw new Error("A IA não retornou os slides em JSON válido");
-      slideSource = generated;
-      analysisMode = "ai-redaction-from-source-evidence";
-      await reportProgress(onProgress, 88, "analysis", "Conferindo cada slide contra as evidências da matéria.");
-    } catch (error) {
-      aiError = error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
-      slideSource = { slides: sourceAnalysis.slides };
-      await reportProgress(onProgress, 88, "analysis", "IA indisponível ou lenta; usando redação determinística baseada nas frases da matéria.");
-    }
-  }
-  const aiDurationMs = Date.now() - aiStartedAt;
-  const normalizedFallbackSlides = normalizeSlides({ slides: sourceAnalysis.slides }, sourceAnalysis, factAnalysis.facts, effectiveSlideCount);
-  let normalizedSlides = normalizeSlides(slideSource, sourceAnalysis, factAnalysis.facts, effectiveSlideCount);
-  let validated = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
+  let selectedModel = null;
+  let selectedRole = "deterministic";
   let coherenceRepairApplied = false;
-  const coherenceIssues = (validated.report.issues || []).filter((issue) => ["incoherent-language", "repeated-slide", "title-repeats-subtitle"].includes(issue.code));
-  if (ai?.run && coherenceIssues.length && analysisMode.startsWith("ai-")) {
-    try {
-      await reportProgress(onProgress, 90, "analysis", "Revisando coerência e completude das frases sem alterar os fatos.");
-      const repaired = await repairAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, effectiveSlideCount, writingStyle, normalizedSlides, coherenceIssues);
-      if (repaired?.slides) {
-        normalizedSlides = normalizeSlides(repaired, sourceAnalysis, factAnalysis.facts, effectiveSlideCount);
-        const repairedValidation = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
-        if (repairedValidation.report.passed || repairedValidation.report.finalProblems.length < validated.report.finalProblems.length) {
-          validated = repairedValidation;
-          coherenceRepairApplied = true;
-          analysisMode = "ai-redaction-source-evidence-coherence-repair";
+  const aiTrace=[];
+  const aiStartedAt = Date.now();
+  const deterministicCandidate=evaluateCarouselCandidate({slides:sourceAnalysis.slides},sourceAnalysis,factAnalysis.facts,effectiveSlideCount,collected[0],quality,{role:'deterministic',model:null});
+  let bestCandidate=deterministicCandidate;
+  if (ai?.run) {
+    const roles=['primary','secondary','tertiary'];
+    const maximum=multiAiMode==='single'?1:Math.min(3,modelCandidates.length);
+    for(let index=0;index<maximum;index+=1){
+      const candidateModel=modelCandidates[index];const role=roles[index]||`fallback-${index+1}`;const attemptStarted=Date.now();
+      try{
+        await reportProgress(onProgress,76+Math.min(8,index*4),'analysis',index===0?`Redigindo ${effectiveSlideCount} slides com a IA principal.`:`Quality Gate pediu nova tentativa; acionando IA ${index===1?'secundária':'terciária'}.`);
+        const generated=await runAiCarouselFromEvidence(ai,candidateModel,topic,collected[0],factAnalysis.facts,effectiveSlideCount,writingStyle);
+        if(!generated?.slides)throw new Error('A IA não retornou os slides em JSON válido');
+        let candidate=evaluateCarouselCandidate(generated,sourceAnalysis,factAnalysis.facts,effectiveSlideCount,collected[0],quality,{role,model:candidateModel});
+        const coherenceIssues=(candidate.validation.report.issues||[]).filter(issue=>['incoherent-language','repeated-slide','title-repeats-subtitle'].includes(issue.code));
+        if(coherenceIssues.length&&candidate.qualityGate.score<96){
+          try{
+            const repaired=await repairAiCarouselFromEvidence(ai,candidateModel,topic,collected[0],factAnalysis.facts,effectiveSlideCount,writingStyle,candidate.slides,coherenceIssues);
+            if(repaired?.slides){const repairedCandidate=evaluateCarouselCandidate(repaired,sourceAnalysis,factAnalysis.facts,effectiveSlideCount,collected[0],quality,{role,model:candidateModel});if(repairedCandidate.qualityGate.score>candidate.qualityGate.score){candidate=repairedCandidate;coherenceRepairApplied=true;}}
+          }catch{}
         }
-      }
-    } catch (error) {
-      aiError = aiError || (error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180));
+        aiTrace.push({role,model:candidateModel,status:candidate.qualityGate.passed?'passed':'rejected',score:candidate.qualityGate.score,confidence:candidate.confidence.score,durationMs:Date.now()-attemptStarted,issues:candidate.qualityGate.issueCount});
+        if(candidate.qualityGate.score>bestCandidate.qualityGate.score || (candidate.qualityGate.score===bestCandidate.qualityGate.score&&candidate.confidence.score>bestCandidate.confidence.score))bestCandidate=candidate;
+        if(candidate.qualityGate.passed){bestCandidate=candidate;break;}
+      }catch(error){const detail=error instanceof Error?error.message.slice(0,180):String(error).slice(0,180);aiError=aiError||detail;aiTrace.push({role,model:candidateModel,status:'error',score:0,confidence:0,durationMs:Date.now()-attemptStarted,error:detail});}
     }
   }
+  // O motor determinístico continua sendo a rede final. Uma IA só vence quando passa no gate
+  // ou quando sua nota é claramente melhor que a composição determinística sem introduzir problemas finais.
+  if(bestCandidate.role!=='deterministic' && (bestCandidate.qualityGate.passed || (bestCandidate.validation.report.passed&&bestCandidate.qualityGate.score>=Math.max(82,deterministicCandidate.qualityGate.score-3)))){
+    selectedModel=bestCandidate.model;selectedRole=bestCandidate.role;analysisMode=`multi-ai-${selectedRole}-source-evidence`;
+  }else{
+    bestCandidate=deterministicCandidate;selectedRole='deterministic';selectedModel=null;analysisMode=aiTrace.length?'deterministic-quality-gate-fallback':'source-extraction';
+  }
+  const normalizedSlides=bestCandidate.slides;
+  const validated=bestCandidate.validation;
+  const qualityGate={...bestCandidate.qualityGate,selectedRole,selectedModel,modelsTried:aiTrace.map(item=>item.model),failoverUsed:aiTrace.length>1,deterministicFallback:selectedRole==='deterministic'&&aiTrace.length>0};
+  const confidence=bestCandidate.confidence;
+  await reportProgress(onProgress,88,'analysis',qualityGate.passed?`Quality Gate aprovado: ${qualityGate.score}/100 · confiança ${confidence.score}/100.`:`Resultado seguro por fallback: qualidade ${qualityGate.score}/100 · confiança ${confidence.score}/100.`);
+  const aiDurationMs = Date.now() - aiStartedAt;
   const editorialGate = {
     status: quality.copyAllowed && validated.report.passed ? "ready" : "review-required",
     copyAllowed: Boolean(quality.copyAllowed && validated.report.passed),
@@ -1915,8 +1980,11 @@ export async function buildIntelligentCarousel(topic, {
     language: "pt-BR",
     generatedAt: new Date().toISOString(),
     analysisMode,
-    model: analysisMode.startsWith("ai-") ? model : null,
+    model: selectedModel,
     aiError,
+    aiTrace,
+    qualityGate,
+    confidence,
     voiceTone: writingStyle?.profile?.tone || writingStyle?.tone || "Jornalístico, factual e explicativo",
     postModel: `Instagram · ${effectiveSlideCount} slides · título + subtítulo${effectiveSlideCount < requestedSlideCount ? ` · ajustado de ${requestedSlideCount}` : ""}`,
     slideCount: effectiveSlideCount,
@@ -1934,6 +2002,10 @@ export async function buildIntelligentCarousel(topic, {
       fastPath: Boolean(selectedRecord.cacheHit),
       publisherAttempts: attemptedSources.length,
       coherenceRepairApplied,
+      multiAiAttempts: aiTrace.length,
+      failoverUsed: aiTrace.length > 1,
+      qualityScore: qualityGate.score,
+      confidenceScore: confidence.score,
       evidenceCount: factAnalysis.facts.length,
       requestedSlideCount,
       effectiveSlideCount,

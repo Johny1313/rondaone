@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const read=p=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8');
+const worker=read('src/ronda/v285/index.js');
+const db=read('src/ronda/v285/database.js');
+const admin=read('public/admin/admin.js');
+const platform=read('src/index.js');
+assert.match(worker,/runOperationalWatchdog/);
+assert.match(worker,/autoReplayRetryableFailedJobs/);
+assert.match(worker,/adminReplayMatch/);
+assert.match(worker,/\/api\/admin\/source-health/);
+assert.match(worker,/\/api\/admin\/cost-monitor/);
+assert.match(db,/CREATE TABLE IF NOT EXISTS watchdog_events/);
+assert.match(db,/getCostMonitor/);
+assert.match(admin,/IA e custo|costPanel/);
+assert.match(admin,/Watchdog|watchdog/);
+assert.match(platform,/operationsV0943/);
+console.log('RONDA ONE v0.9.4.3 Watchdog + Replay + Saúde + Custos: OK');

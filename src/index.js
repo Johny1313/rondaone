@@ -6,6 +6,8 @@ import { handleFreeImagesApi } from './ronda/free-images.js';
 import { handleRegisteredNewsSearchApi } from './ronda/search-news.js';
 import { handleEditorialEventsApi } from './ronda/editorial-events.js';
 import { handleAdminLoginHotfix } from './ronda/admin-auth-hotfix.js';
+import { handleAssetProxyApi } from './ronda/asset-proxy.js';
+import { cleanupReliabilityActions, getReliabilitySummary } from './reliability/core.js';
 
 async function noStoreAsset(request,env){
   const response=await env.ASSETS.fetch(request);
@@ -39,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.2.1',
+      version:'0.9.5',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.2',
+        editorialVersion:'2.9.5',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:false,
@@ -51,7 +53,9 @@ export default {
         projects:!!env.DB,
         queues:{
           round:!!env.ROUND_JOBS_QUEUE,
-          intelligent:!!env.INTELLIGENT_JOBS_QUEUE
+          intelligent:!!env.INTELLIGENT_JOBS_QUEUE,
+          carouselDedicated:!!env.CAROUSEL_JOBS_QUEUE,
+          articleReadDedicated:!!env.ARTICLE_READ_QUEUE
         }
       },
       billingMode:'workers-paid-carousel-first',
@@ -89,7 +93,7 @@ export default {
       carouselStabilityV083:{ intelligentQueueConcurrency:2, queueRetries:5, queuedStaleMinutes:5, runningStaleMinutes:3, terminalStateImmutable:true, cacheRecovery:true, duplicateLockRetry:true, adaptivePolling:true },
       smartTemplates:{
         enabled:true,
-        engineVersion:'1.0.0',
+        engineVersion:'1.2.0',
         contentContract:'ronda-content-model-v1',
         semanticSlots:['TITLE','SUBTITLE','BODY','ROLE','SOURCE','IMAGE','IMAGE_CREDIT','CTA','SLIDE_NUMBER','EDITORIA'],
         autoFit:true,
@@ -191,6 +195,12 @@ export default {
         directSourceAuditLinks:true,
         legacyEventsDecoratedOnRead:true
       },
+      reliabilityCoreV093:{enabled:true,states:['queued','fetching','reading','analyzing','generating','rendering','completed','completed_partial','completed_fallback','failed_input','failed_final'],roundTracking:true,articleTracking:true,carouselTracking:true,deterministicAiFallback:true,feedPartialReadFallback:true,optionalDedicatedQueues:true},
+      productionHardeningV094:{enabled:true,templatePreflight:true,defaultTemplateFallback:true,assetProxyCache:true,externalFailureIsolation:true,reliabilityEndpoint:'/api/reliability/status',cacheApi:true},
+      multiAiCarouselV0941:{enabled:true,mode:'failover',primary:'llama-3.3-70b-fast',secondary:'llama-3.1-8b-fast',tertiaryOptional:true,qualityGate:true,confidenceScore:true,deterministicFinalFallback:true},
+      carouselVersioningV0942:{enabled:true,automaticGeneratedVersion:true,formaRevisions:true,restore:true,contentLock:true,contentLockScope:'semantic-field'},
+      operationsV0943:{enabled:true,watchdog:true,automaticReplay:true,manualReplay:true,sourceHealthScore:true,costMonitor:true,costEstimateOnly:true},
+      workflowV095:{enabled:true,statuses:['draft','in_review','approved','published','rejected'],roles:['editor','reviewer','publisher','admin'],auditTrail:true,groups:true,formaSubmitForReview:true},
       sourceRecovery:{
         cronMinutes:1,
         fullRoundMinutes:3,
@@ -224,7 +234,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.2-0921-admin-login'
+        assetCacheBust:'2.9.5-workflow-multi-ai'
       },
       navigation:{
         ronda:'/ronda',
@@ -261,6 +271,12 @@ export default {
       if(adminResponse) return adminResponse;
     }
 
+    if(url.pathname==='/api/reliability/status' && request.method==='GET'){
+      if(!env.DB) return json({ok:false,error:'Banco D1 não configurado.'},503);
+      return json({ok:true,summary:await getReliabilitySummary(env.DB,{hours:Number(url.searchParams.get('hours'))||24})});
+    }
+    if(url.pathname==='/api/assets/proxy'){const proxied=await handleAssetProxyApi(request,env);if(proxied)return proxied;}
+
     if(url.pathname.startsWith('/api/editorial-')) return handleEditorialEventsApi(request,env);
     if(url.pathname.startsWith('/api/search-news')) return handleRegisteredNewsSearchApi(request,env);
     if(url.pathname.startsWith('/api/free-images')) return handleFreeImagesApi(request,env);
@@ -288,6 +304,7 @@ export default {
   },
 
   async scheduled(controller,env,ctx){
+    if(env.DB) ctx.waitUntil(cleanupReliabilityActions(env.DB,{days:30,maxRows:5000}).catch(()=>null));
     return runRondaSchedule(controller,env,ctx);
   }
 };
