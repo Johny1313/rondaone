@@ -1,5 +1,0 @@
-RONDA ONE v0.8.4 — pacote completo.
-
-Substitua o conteúdo do repositório por este pacote.
-Depois execute npm install, npm run check, npm run verify:084, npm run test:regression e npm run deploy.
-Leia ATUALIZAR-PARA-084.txt para ativar o primeiro acesso do administrador sem expor senha no GitHub.
