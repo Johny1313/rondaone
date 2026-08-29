@@ -39,10 +39,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.0',
+      version:'0.9.2',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.0',
+        editorialVersion:'2.9.2',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:false,
@@ -156,6 +156,36 @@ export default {
         sourceDiagnosticsRecovery:true,
         renewableRoundLockMinutes:3
       },
+      unifiedMainV091:{
+        enabled:true,
+        fastLaneFeedsMainCollection:true,
+        editorialEventsMainOverlay:true,
+        overlayHours:24,
+        eventTopicsKeepMainActions:true,
+        eventTopicCarousel:true,
+        fastLaneEventSync:true,
+        heavyEventEnrichmentFullRoundOnly:true
+      },
+      carouselQueueOwnershipV091:{
+        enabled:true,
+        queueSingleOwner:true,
+        httpRescueNeverCompetesWithQueue:true,
+        jobHeartbeatSeconds:25,
+        queuedStaleSeconds:45,
+        runningStaleSeconds:90,
+        staleGetIsNonTerminal:true,
+        legacyLockJobRecovery:true
+      },
+      editorialDeskV092:{
+        enabled:true,
+        sourceHealthPanel:true,
+        sourceDiagnosticsEndpoint:'/api/sources/diagnostics',
+        editorialDecision:['PAUTAR AGORA','ACOMPANHAR','VALIDAR','OBSERVAR'],
+        reportingQuality:['AMPLA','PARCIAL','LIMITADA'],
+        eventOperationalHistory:true,
+        directSourceAuditLinks:true,
+        legacyEventsDecoratedOnRead:true
+      },
       sourceRecovery:{
         cronMinutes:1,
         fullRoundMinutes:3,
@@ -189,7 +219,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.0-090-fast-news-engine'
+        assetCacheBust:'2.9.2-092-editorial-desk'
       },
       navigation:{
         ronda:'/ronda',
@@ -205,7 +235,12 @@ export default {
         relevanceAndTraction:true,
         eventTimeline:true,
         eventProduction:true,
-        nonBlockingEnrichment:true
+        nonBlockingEnrichment:true,
+        editorialDecision:true,
+        reportingQuality:true,
+        sourceHealth:true,
+        operationalHistory:true,
+        directAuditLinks:true
       },
       imageEngine:{
         mode:'non-generative',

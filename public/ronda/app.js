@@ -136,7 +136,7 @@ function itemMatchesSource(item) {
 function itemRadarTime(item) {
   // Em janelas de tempo curto importa quando a redação descobriu a notícia,
   // não apenas quando o portal declarou a publicação no RSS.
-  if (state.period <= 60) return item.firstSeenAt || item.discoveredAt || item.publishedAt;
+  if (state.period <= 60) return item.radarAt || item.firstSeenAt || item.discoveredAt || item.publishedAt;
   return item.publishedAt || item.firstSeenAt || item.discoveredAt;
 }
 
@@ -500,13 +500,13 @@ function render() {
   }));
 }
 
-function applyRound(payload) {
+function applyRound(payload, { preserveExpansion = false } = {}) {
   if (!payload?.ok || !Array.isArray(payload.topics)) return;
   state.data = payload;
   state.lastRunId = payload.runId || state.lastRunId;
   state.attemptDiagnostics = null;
   state.lastAttemptId = null;
-  state.expanded.clear();
+  if (!preserveExpansion) state.expanded.clear();
   document.getElementById("lastUpdate").textContent = `Última coleta: ${formatDate(payload.collectedAt)}`;
   renderSourceHealth();
   renderPortalCards();
@@ -518,9 +518,13 @@ async function loadLatest({ quiet = false, force = false } = {}) {
   try {
     const response = await conditionalApi("/api/latest", force ? "" : state.latestEtag);
     if (response.notModified) return state.data;
+    const previousRunId = state.lastRunId;
     state.latestEtag = response.etag;
     const payload = response.payload?.data;
-    if (payload?.ok && (!state.data || !state.lastRunId || payload.runId !== state.lastRunId || force)) applyRound(payload);
+    // Um 200 com o mesmo runId ainda pode conter atualização da Fast Lane/Mesa.
+    // O ETag do /api/latest inclui a revisão do overlay editorial, portanto
+    // todo payload novo precisa alimentar a página principal.
+    if (payload?.ok) applyRound(payload, { preserveExpansion: Boolean(state.data && previousRunId && payload.runId === previousRunId && !force) });
     return payload;
   } catch (error) {
     if (!quiet) renderSourceHealth(error.message);
@@ -1435,6 +1439,9 @@ async function pollStatus({ force = false } = {}) {
         setStatus("ok", "Serviço online", status.lastSuccessAt ? `Última ronda ${relativeTime(status.lastSuccessAt)}` : "Aguardando primeira ronda");
       }
     }
+    // A Mesa pode receber enriquecimentos entre duas rondas. /api/latest possui
+    // ETag próprio do overlay editorial; esta leitura é barata quando nada mudou.
+    if (!state.serverRunning) await loadLatest({ quiet: true });
 
   } catch (error) {
     if (!state.running) setStatus("warn", "Atualização temporariamente indisponível", error.message);

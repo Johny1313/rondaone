@@ -320,6 +320,91 @@ function confirmationLevel(items,divergences){
   };
 }
 
+function apuracaoQuality({sources=[],materials=[],reading={},confirmation={},divergences=[]}={}){
+  const sourceCount=new Set((sources||[]).map(source=>normalizeText(source?.sourceName||'')).filter(Boolean)).size;
+  const materialCount=Array.isArray(materials)?materials.length:0;
+  const complete=Math.max(0,Number(reading?.completas)||0);
+  const partial=Math.max(0,Number(reading?.parciais)||0);
+  const failed=Math.max(0,Number(reading?.falhas)||0);
+  const official=Boolean(confirmation?.officialSourceFound||(sources||[]).some(source=>source?.official));
+  const confirmationLevel=String(confirmation?.level||'BAIXO').toUpperCase();
+  let score=0;
+  score+=Math.min(42,sourceCount*12);
+  score+=Math.min(30,complete*15);
+  score+=Math.min(10,partial*5);
+  if(official)score+=10;
+  if(confirmationLevel==='ALTO')score+=12;
+  else if(confirmationLevel==='MÉDIO')score+=6;
+  score-=Math.min(18,failed*4);
+  score-=Math.min(12,(Array.isArray(divergences)?divergences.length:0)*4);
+  score=clamp(Math.round(score),0,100);
+
+  let level='LIMITADA';
+  if(sourceCount>=3&&complete>=2&&confirmationLevel!=='BAIXO')level='AMPLA';
+  else if(sourceCount>=4&&confirmationLevel==='ALTO')level='AMPLA';
+  else if(sourceCount>=2||complete>=1||official)level='PARCIAL';
+  if(level==='AMPLA')score=Math.max(score,75);
+  else if(level==='PARCIAL')score=clamp(Math.max(score,45),45,74);
+  else score=Math.min(score,44);
+
+  const reasons=[
+    `${sourceCount} ${sourceCount===1?'fonte independente':'fontes independentes'} no evento`,
+    complete?`${complete} ${complete===1?'matéria lida por completo':'matérias lidas por completo'}`:'Nenhuma leitura completa concluída ainda',
+    official?'Há fonte oficial vinculada':'Sem fonte oficial vinculada até agora',
+  ];
+  if(failed)reasons.push(`${failed} ${failed===1?'leitura falhou':'leituras falharam'}`);
+  if(divergences?.length)reasons.push(`${divergences.length} divergência(s) ainda exigem validação`);
+  return {level,score,sourceCount,materialCount,completeReads:complete,partialReads:partial,failedReads:failed,officialSourceFound:official,reasons};
+}
+
+function editorialAction({status='ESTÁVEL',relevance=0,traction={},confirmation={},divergences=[],apuracao={}}={}){
+  const level=String(confirmation?.level||'BAIXO').toUpperCase();
+  const quality=String(apuracao?.level||'LIMITADA').toUpperCase();
+  const growth=Number(traction?.growth30m)||0;
+  const tractionScore=Number(traction?.score)||0;
+  const score=Number(relevance)||0;
+  const hasDivergence=Array.isArray(divergences)&&divergences.length>0;
+  let action='OBSERVAR';
+  let reason='Evento sem sinal suficiente para mobilização imediata da redação.';
+
+  if(hasDivergence&&(score>=55||status==='BREAKING')){
+    action='VALIDAR';
+    reason='Há divergência entre fontes; confirme a informação principal antes de ampliar ou publicar.';
+  }else if((status==='BREAKING'||score>=82)&&(level!=='BAIXO'||quality==='AMPLA')){
+    action='PAUTAR AGORA';
+    reason='Alta relevância com base suficiente para mobilização editorial imediata.';
+  }else if((status==='BREAKING'||score>=72)&&level==='BAIXO'){
+    action='VALIDAR';
+    reason='O potencial editorial é alto, mas a confirmação ainda é baixa.';
+  }else if(status==='EM ALTA'||status==='EM DESENVOLVIMENTO'||tractionScore>=55||growth>=100||score>=62){
+    action='ACOMPANHAR';
+    reason='O acontecimento está evoluindo ou ganhou tração e deve permanecer em acompanhamento ativo.';
+  }
+
+  return {action,reason,generatedAt:nowIso(),signals:{status,relevance:score,traction:tractionScore,growth30m:growth,confirmation:level,apuracao:quality,divergences:divergences?.length||0}};
+}
+
+function ensureOperationalFields(event){
+  if(!event||typeof event!=='object')return event;
+  const quality=apuracaoQuality({
+    sources:event.fontes||[],
+    materials:event.materias||[],
+    reading:event.leitura||{},
+    confirmation:event.nivelConfirmacao||{},
+    divergences:event.divergencias||[],
+  });
+  event.qualidadeApuracao=quality;
+  event.acaoEditorial=editorialAction({
+    status:event.status,
+    relevance:event.relevancia,
+    traction:event.tracao||{},
+    confirmation:event.nivelConfirmacao||{},
+    divergences:event.divergencias||[],
+    apuracao:quality,
+  });
+  return event;
+}
+
 function sourceSummary(items=[]){
   const ordered=[...items].sort((a,b)=>Date.parse(a?.publishedAt||0)-Date.parse(b?.publishedAt||0));
   return ordered.map((item,index)=>({
@@ -452,6 +537,13 @@ export function buildEditorialEvent(topic,{previous=null,monitoringTerms=[],runI
   const sources=sourceSummary(items);
   const materials=materialList(items);
   const monitoredTerms=matchTerms(items,monitoringTerms);
+  const reading={
+    total:materials.length,
+    completas:Number(previous?.leitura?.completas)||0,
+    parciais:Number(previous?.leitura?.parciais)||0,
+    falhas:Number(previous?.leitura?.falhas)||0,
+    ultimaLeitura:previous?.leitura?.ultimaLeitura||null,
+  };
   const firstPublishedAt=materials.map(x=>x.publishedAt).filter(Boolean).sort()[0]||safeDate(topic?.lastPublishedAt)||nowIso(now);
   const lastPublishedAt=materials.map(x=>x.publishedAt).filter(Boolean).sort().at(-1)||safeDate(topic?.lastPublishedAt)||nowIso(now);
   const isNew=!previous;
@@ -492,13 +584,7 @@ export function buildEditorialEvent(topic,{previous=null,monitoringTerms=[],runI
     pontosEmAberto:[],
     sugestoesPauta:[],
     termosMonitorados:monitoredTerms,
-    leitura:{
-      total:materials.length,
-      completas:Number(previous?.leitura?.completas)||0,
-      parciais:Number(previous?.leitura?.parciais)||0,
-      falhas:Number(previous?.leitura?.falhas)||0,
-      ultimaLeitura:previous?.leitura?.ultimaLeitura||null,
-    },
+    leitura:reading,
     imagens:Array.isArray(previous?.imagens)?previous.imagens:[],
     resumoEditorial:null,
     mudouDesdeUltimaRonda:newFacts.length>0,
@@ -507,6 +593,7 @@ export function buildEditorialEvent(topic,{previous=null,monitoringTerms=[],runI
   };
   event.pontosEmAberto=openQuestions(classification,confirmation,divergences);
   event.sugestoesPauta=pautaSuggestions(event);
+  ensureOperationalFields(event);
   event.resumoEditorial={
     oQueAconteceu:event.resumo,
     quemEstaEnvolvido:entities.length?entities.slice(0,6).map(x=>x.name):[],
@@ -850,6 +937,7 @@ async function refreshEventReadState(db,eventId,article,item){
     if(!['BREAKING','EM ALTA'].includes(event.status))event.status='EM DESENVOLVIMENTO';
   }
   event.leitura={total:rows.length,completas:complete,parciais:partial,falhas:failed,ultimaLeitura:nowIso()};
+  ensureOperationalFields(event);
   const visualCandidates=[article?.images?.primary,...(article?.images?.alternatives||[])].filter(image=>image?.url);
   if(visualCandidates.length){
     const imageMap=new Map((event.imagens||[]).map(image=>[image.url,image]));
@@ -927,7 +1015,7 @@ export async function listEditorialEvents(db,params={}){
   const explicitTo=safeDate(params.to);
   const cutoff=explicitFrom||new Date(Date.now()-hours*3600000).toISOString();
   const rows=await all(db,'SELECT payload_json FROM editorial_events WHERE updated_at >= ? ORDER BY relevance DESC, traction DESC, updated_at DESC LIMIT ?',[cutoff,clamp(params.limit||100,1,300)]);
-  let events=rows.map(row=>parsePayload(row.payload_json)).filter(Boolean);
+  let events=rows.map(row=>ensureOperationalFields(parsePayload(row.payload_json))).filter(Boolean);
   if(explicitTo)events=events.filter(event=>Date.parse(event.atualizadoEm||event.ultimaAtualizacao||0)<=Date.parse(explicitTo));
   const q=normalizeText(params.q||'');
   if(params.status)events=events.filter(event=>event.status===params.status);
@@ -945,7 +1033,7 @@ export async function listEditorialEvents(db,params={}){
 
 export async function getEditorialEvent(db,eventId){
   await ensureEditorialEventSchema(db);
-  const event=await storedEvent(db,eventId);if(!event)return null;
+  const event=ensureOperationalFields(await storedEvent(db,eventId));if(!event)return null;
   const articles=await all(db,'SELECT article_key,url,source_name,title,published_at,read_status,read_mode,word_count,error,updated_at FROM editorial_event_articles WHERE event_id=? ORDER BY published_at ASC',[eventId]);
   const updates=await all(db,'SELECT update_type,summary,source_url,source_name,published_at,created_at FROM editorial_event_updates WHERE event_id=? ORDER BY created_at DESC LIMIT 60',[eventId]);
   return {...event,articleReadings:articles,updates};

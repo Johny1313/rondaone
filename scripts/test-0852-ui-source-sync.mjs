@@ -8,7 +8,7 @@ assert.match(collector,/function effectiveNextCheckAt/);
 // v0.9.0 reduz somente a Fast Lane para 1 min; o mecanismo de recuperação permanece.
 assert.match(collector,/Math\.max\((?:1|3), Number\(feed\.refreshMinutes\) \|\| 5\)/);
 assert.match(collector,/Math\.min\(15, retryBackoffMinutes/);
-assert.match(app,/!state\.data \|\| !state\.lastRunId/); assert.match(app,/loadLatest\(\{ quiet: true, force: true \}\)/); assert.match(app,/function syncLatestRound/);
+assert.match(app,/conditionalApi\("\/api\/latest"/); assert.match(app,/if \(payload\?\.ok\) applyRound/); assert.match(app,/loadLatest\(\{ quiet: true, force: true \}\)/); assert.match(app,/function syncLatestRound/);
 assert.match(index,/oneSourcePerRound:false/);
 const payload={ok:true,items:[{id:"w1",title:"International headline",description:"International description",sourceName:"BBC News",collectorName:"BBC News",region:"Mundo",kind:"portal",publishedAt:new Date().toISOString(),url:"https://example.test/a"}],sources:[{id:"bbc",name:"BBC News",region:"Mundo",ok:true,count:1,error:null,warning:null}]};
 const translated=await translateRoundPayload(payload,{ai:null,db:null}); const bbc=translated.sources.find(s=>s.id==="bbc");

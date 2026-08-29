@@ -21,7 +21,7 @@ assert.match(app,/state\.query = ""/);
 
 // Última ronda continua sendo forçada no boot.
 assert.match(app,/loadLatest\(\{ quiet: true, force: true \}\)/);
-assert.match(app,/!state\.data \|\| !state\.lastRunId/);
+assert.match(app,/if \(payload\?\.ok\) applyRound/);
 
 // App principal agora faz parte do npm check.
 assert.match(pkg.scripts.check,/node --check public\/ronda\/app\.js/);

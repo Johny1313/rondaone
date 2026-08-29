@@ -34,6 +34,7 @@ import {
   queueRun,
   markRunStarted,
   touchRun,
+  touchIntelligentJob,
   preflightCoreStorage,
   setMonitoringTermActive,
   updateIntelligentJob,
@@ -124,9 +125,10 @@ import {
   writingStylePrompt,
 } from "./profile.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
-import { enqueueEditorialEnrichmentJobs, syncEditorialEvents } from "../editorial-events.js";
+import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
+import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
 
-const VERSION = "2.9.0";
+const VERSION = "2.9.2";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -536,13 +538,14 @@ function createProgressReporter(db, jobId, lock) {
     const changedStage = message && message !== lastMessage;
     const advanced = safeProgress - lastProgress >= 8;
     if (!changedStage && !advanced && now - lastWriteAt < 4_000) return;
+    const renewed = await renewLock(db, lock, INTELLIGENT_JOB_LOCK_TTL_MS).catch(() => null);
+    if (!renewed) throw jobLockBusyError(jobId);
     await updateIntelligentJob(db, {
       jobId,
       status: "running",
       progress: safeProgress,
       message,
     });
-    await renewLock(db, lock, INTELLIGENT_JOB_LOCK_TTL_MS).catch(() => null);
     lastProgress = safeProgress;
     lastMessage = message || "";
     lastWriteAt = now;
@@ -593,6 +596,19 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
 
   const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, INTELLIGENT_JOB_LOCK_TTL_MS);
   if (!jobLock) throw jobLockBusyError(job.jobId);
+  let leaseLost = false;
+  let heartbeatBusy = false;
+  const heartbeatTimer = globalThis.setInterval?.(async () => {
+    if (heartbeatBusy || leaseLost) return;
+    heartbeatBusy = true;
+    try {
+      const renewed = await renewLock(db, jobLock, INTELLIGENT_JOB_LOCK_TTL_MS).catch(() => null);
+      if (!renewed) { leaseLost = true; return; }
+      await touchIntelligentJob(db, job.jobId).catch(() => null);
+    } finally {
+      heartbeatBusy = false;
+    }
+  }, 25_000);
   try {
     const cachedAfterLock = await getIntelligentCarousel(db, job.cacheKey).catch(() => null);
     if (cachedAfterLock?.slides?.length) {
@@ -650,6 +666,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       writingStyle,
       styleKey: options.styleKey || "default",
     });
+    if (leaseLost) throw jobLockBusyError(job.jobId);
     const selectedSource = data?.reading?.selectedSource;
     if (selectedSource?.liveAttempted) {
       try {
@@ -734,6 +751,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
     structuredLog("intelligent_job_failed", { jobId: job.jobId, detail, stage:carouselFailureStage(error) });
     return null;
   } finally {
+    if (heartbeatTimer) globalThis.clearInterval?.(heartbeatTimer);
     try { await releaseLock(db, jobLock); } catch (error) {
       console.error("Não foi possível remover o lock terminal da leitura", error);
     }
@@ -742,10 +760,11 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
 
 
 async function resolveTopicForIntelligentJob(env, job) {
-  const directTopic = job?.request?.topic;
-  if (job?.request?.mode === "direct-article-url" && directTopic?.id && Array.isArray(directTopic?.items)) {
-    return directTopic;
-  }
+  const requestTopic = job?.request?.topic;
+  // Todo job pode carregar um snapshot imutável do assunto. Isso impede que
+  // mudanças da ronda, limpeza de histórico ou eventos editoriais removam a
+  // matéria enquanto a Queue ainda está trabalhando.
+  if (requestTopic?.id && Array.isArray(requestTopic?.items)) return requestTopic;
 
   const db = requireDatabase(env);
   let payload;
@@ -881,43 +900,78 @@ async function rescueIntelligentCarouselJob(env, jobId, { userId = null } = {}) 
     return { status: "succeeded", job, data: cached, recovered: true };
   }
 
-  const topic = await resolveTopicForIntelligentJob(env, job);
-
-  try {
-    const data = await processIntelligentCarouselJob(env, job, topic, {
-      userId,
-      slideCount: null,
-      writingProfile: null,
-      styleKey: "rescue",
-      recoveryMode: true,
-    });
-
-    job = await getIntelligentJob(db, jobId);
-
-    if (job?.status === "succeeded" && (job.payload?.slides?.length || data?.slides?.length)) {
+  // Quando existe Queue, o HTTP nunca vira um segundo consumidor. Enquanto o
+  // heartbeat estiver ativo, o resgate apenas acompanha. Só um job realmente
+  // órfão é reenfileirado, preservando o mesmo jobId e o mesmo cacheKey.
+  if (env.INTELLIGENT_JOBS_QUEUE?.send) {
+    if (!job.stale) {
       return {
-        status: "succeeded",
+        status: job.status || "running",
         job,
-        data: job.payload || data,
-        recovered: true,
+        data: null,
+        recovered: false,
+        queueOwned: true,
       };
     }
 
-    if (job?.status === "failed") {
-      return { status: "failed", job, data: null, recovered: false };
+    const recoveryUserId = userId || job?.request?.createdByUserId || null;
+    const writingProfile = recoveryUserId ? await getWritingProfile(db, recoveryUserId).catch(() => null) : null;
+    const slideCount = validateSlideCount(job?.request?.slideCount ?? DEFAULT_SLIDE_COUNT, DEFAULT_SLIDE_COUNT);
+    const styleKey = job?.request?.styleKey || (recoveryUserId ? `${recoveryUserId}:${writingProfile?.updatedAt || "default"}:recovery` : "recovery");
+    job = await updateIntelligentJob(db, {
+      jobId,
+      status: "queued",
+      progress: Math.max(3, Math.min(88, Number(job.progress) || 3)),
+      message: "Job sem heartbeat detectado. Reenfileirando com segurança, sem duplicar o processamento.",
+      error: null,
+    });
+    try {
+      await env.INTELLIGENT_JOBS_QUEUE.send({
+        type: "intelligent",
+        mode: job?.request?.mode || "recovery",
+        jobId,
+        runId: job.runId,
+        topicId: job.topicId,
+        slideCount,
+        userId: recoveryUserId,
+        writingProfile,
+        styleKey,
+        recoveryMode: true,
+      });
+    } catch (error) {
+      await updateIntelligentJob(db, {
+        jobId,
+        status: "queued",
+        progress: Math.max(3, Number(job.progress) || 3),
+        message: "Recuperação aguardando a Queue ficar disponível.",
+        error: null,
+      }).catch(() => null);
+      throw new HttpError(503, "Fila de recuperação temporariamente indisponível.", error instanceof Error ? error.message : String(error));
     }
+    job = await getIntelligentJob(db, jobId);
+    return { status: "queued", job, data: null, recovered: false, requeued: true, queueOwned: true };
+  }
 
+  // Ambiente sem Queue: só então o resgate HTTP pode assumir o job.
+  const topic = await resolveTopicForIntelligentJob(env, job);
+  try {
+    const data = await processIntelligentCarouselJob(env, job, topic, {
+      userId,
+      slideCount: job?.request?.slideCount || null,
+      writingProfile: userId ? await getWritingProfile(db, userId).catch(() => null) : null,
+      styleKey: job?.request?.styleKey || "rescue",
+      recoveryMode: true,
+    });
+    job = await getIntelligentJob(db, jobId);
+    if (job?.status === "succeeded" && (job.payload?.slides?.length || data?.slides?.length)) {
+      return { status: "succeeded", job, data: job.payload || data, recovered: true };
+    }
+    if (job?.status === "failed") return { status: "failed", job, data: null, recovered: false };
     return { status: job?.status || "running", job, data: null, recovered: false };
   } catch (error) {
     if (error?.code === "JOB_LOCK_BUSY") {
       job = await getIntelligentJob(db, jobId);
-      return {
-        status: job?.status || "running",
-        job,
-        data: job?.status === "succeeded" ? job.payload : null,
-        recovered: false,
-        lockBusy: true,
-      };
+      return { status: job?.status || "running", job, data: job?.status === "succeeded" ? job.payload : null, recovered: false, lockBusy: true };
     }
     throw error;
   }
@@ -1069,30 +1123,26 @@ async function performRound(env, triggerType, options = {}) {
       payload.schemaVersion = 7;
       payload.catalog = { version: CATALOG_VERSION, portals: FEEDS.length };
 
-      // A Fast Lane só descobre e normaliza conteúdo. A ronda completa mantém
-      // o enriquecimento editorial pesado a cada 3 minutos.
-      if (mode === "fast") {
+      // Toda coleta, inclusive Fast Lane, atualiza o mesmo índice de eventos.
+      // O que continua limitado à ronda completa é a leitura/enriquecimento
+      // pesado das matérias. Assim Mesa e página principal compartilham o
+      // mesmo estado sem triplicar o custo externo.
+      try {
+        const editorialSync = await syncEditorialEvents(db, payload.topics || [], {
+          monitoringTerms,
+          runId,
+          at: payload.collectedAt || new Date(),
+        });
+        const queueResult = mode === "full"
+          ? await enqueueEditorialEnrichmentJobs(env, db, editorialSync.enrichmentCandidates || [])
+          : { queued: 0, available: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send) };
         payload.editorialEvents = {
-          ok: true,
-          mode: "fast-lane-deferred",
-          enrichmentQueued: 0,
-          enrichmentQueueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
+          ...(editorialSync.summary || {}),
+          enrichmentQueued: queueResult.queued || 0,
+          enrichmentQueueReady: Boolean(queueResult.available),
+          mode: mode === "fast" ? "fast-lane-unified-no-heavy-enrichment" : "event-centric-incremental",
         };
-      } else {
-        try {
-          const editorialSync = await syncEditorialEvents(db, payload.topics || [], {
-            monitoringTerms,
-            runId,
-            at: payload.collectedAt || new Date(),
-          });
-          const queueResult = await enqueueEditorialEnrichmentJobs(env, db, editorialSync.enrichmentCandidates || []);
-          payload.editorialEvents = {
-            ...(editorialSync.summary || {}),
-            enrichmentQueued: queueResult.queued || 0,
-            enrichmentQueueReady: Boolean(queueResult.available),
-            mode: "event-centric-incremental",
-          };
-        } catch (error) {
+      } catch (error) {
           payload.editorialEvents = {
             ok: false,
             mode: "event-centric-incremental",
@@ -1103,7 +1153,6 @@ async function performRound(env, triggerType, options = {}) {
             runId,
             detail: payload.editorialEvents.error,
           });
-        }
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
@@ -1777,9 +1826,14 @@ async function handleApi(request, env, url, ctx) {
   }
 
   if (url.pathname === "/api/latest" && request.method === "GET") {
-    const latest = await getLatestRound(requireDatabase(env));
-    const data = withEditorias(latest);
-    return conditionalJson(request, { ok: true, data }, `latest-${data?.runId || "empty"}`);
+    const db = requireDatabase(env);
+    const latest = withEditorias(await getLatestRound(db));
+    const editorialEvents = latest
+      ? await listEditorialEvents(db, { hours: 24, limit: 140 }).catch(() => [])
+      : [];
+    const data = mergeEditorialEventsIntoRound(latest, editorialEvents);
+    const overlayRevision = `${data?.editorialOverlay?.updatedAt || "none"}-${data?.editorialOverlay?.eventsConsidered || 0}-${data?.editorialOverlay?.addedTopics || 0}`;
+    return conditionalJson(request, { ok: true, data }, `latest-${data?.runId || "empty"}-${overlayRevision}`);
   }
 
   if (url.pathname === "/api/history" && request.method === "GET") {
@@ -1862,19 +1916,9 @@ async function handleApi(request, env, url, ctx) {
           payload: cached,
         });
         await finishCarouselReliabilityAttempt(db,{jobId:job.jobId,status:"succeeded",recovered:true}).catch(()=>null);
-      } else {
-        job = await updateIntelligentJob(db, {
-          jobId: job.jobId,
-          status: "failed",
-          progress: 100,
-          message: "O processamento ficou sem progresso e foi encerrado com segurança.",
-          error: `A tarefa ultrapassou ${INTELLIGENT_JOB_STALE_LABEL}.`,
-        });
-        await finishCarouselReliabilityAttempt(db,{
-          jobId:job.jobId,status:"failed",failureStage:"queue",errorCode:"JOB_STALE",
-          errorDetail:`A tarefa ultrapassou ${INTELLIGENT_JOB_STALE_LABEL}.`,
-        }).catch(()=>null);
       }
+      // Sem cache, o GET não encerra mais a tarefa. O cliente chama /rescue,
+      // que reenfileira o mesmo job somente se o heartbeat realmente expirou.
     }
     return json({
       ok: true,
@@ -1945,6 +1989,8 @@ async function handleApi(request, env, url, ctx) {
         mode: "direct-article-url",
         articleUrl,
         topic,
+        slideCount,
+        styleKey,
         createdByUserId: user.id,
         createdAt: new Date().toISOString(),
       },
@@ -1993,10 +2039,21 @@ async function handleApi(request, env, url, ctx) {
           throw new HttpError(503,"Fila de carrossel indisponível.",detail);
         }
       } else {
-        const data = await processIntelligentCarouselJob(env, queued.job, topic, {
-          slideCount, writingProfile, styleKey, userId:user.id,
-        });
-        return json({ ok:true, cached:false, status:"succeeded", data });
+        try {
+          const data = await processIntelligentCarouselJob(env, queued.job, topic, {
+            slideCount, writingProfile, styleKey, userId:user.id,
+          });
+          if (data?.slides?.length) return json({ ok:true, cached:false, status:"succeeded", data });
+          const current = await getIntelligentJob(db, queued.job.jobId);
+          if (current?.status === "failed") throw new HttpError(422, current.error || current.message || "A leitura da matéria não pôde ser concluída.");
+          return json({ ok:true, queued:true, status:current?.status || "running", job:publicIntelligentJob(current || queued.job), pollAfterMs:1500 },202);
+        } catch (error) {
+          if (error?.code === "JOB_LOCK_BUSY") {
+            const current = await getIntelligentJob(db, queued.job.jobId);
+            return json({ ok:true, queued:true, status:current?.status || "running", job:publicIntelligentJob(current || queued.job), pollAfterMs:1500 },202);
+          }
+          throw error;
+        }
       }
     }
 
@@ -2044,8 +2101,12 @@ async function handleApi(request, env, url, ctx) {
     }
     if (!payload?.ok || !Array.isArray(payload.topics)) throw new HttpError(409, "Não há uma ronda válida disponível para análise.");
     const topicId = intelligentCarouselRoute[1];
-    const topic = payload.topics.find((item) => item?.id === topicId);
-    if (!topic) throw new HttpError(404, "Assunto não encontrado nesta ronda.");
+    let topic = payload.topics.find((item) => item?.id === topicId);
+    if (!topic) {
+      const editorialEvent = await getEditorialEvent(db, topicId).catch(() => null);
+      topic = editorialEvent ? topicFromEditorialEvent(editorialEvent) : null;
+    }
+    if (!topic) throw new HttpError(404, "Assunto não encontrado nesta ronda nem na Mesa Editorial.");
     const cacheKey = intelligentCarouselCacheKey(runId, topic, { slideCount, styleKey });
     if (!body?.force) {
       const cached = await getIntelligentCarousel(db, cacheKey);
@@ -2057,6 +2118,14 @@ async function handleApi(request, env, url, ctx) {
       runId,
       topicId,
       replaceCompleted: Boolean(body?.force),
+      requestPayload: {
+        mode: topic?.editorialEvent?.eventId ? "editorial-event" : "round-topic",
+        topic,
+        slideCount,
+        createdByUserId: user?.id || null,
+        styleKey,
+        createdAt: new Date().toISOString(),
+      },
     });
     if (queued.job.status === "succeeded" && queued.job.payload) {
       return json({ ok: true, cached: true, status: "succeeded", data: queued.job.payload });
@@ -2102,9 +2171,19 @@ async function handleApi(request, env, url, ctx) {
           throw new HttpError(503, "Fila de leitura indisponível.", detail);
         }
       } else {
-        const data = await processIntelligentCarouselJob(env, queued.job, topic, { slideCount, writingProfile, styleKey, userId: user?.id || null });
-        if (data) return json({ ok: true, cached: false, status: "succeeded", data });
-        throw new HttpError(503, "A leitura inteligente não foi concluída.", "Configure o binding INTELLIGENT_JOBS_QUEUE para processamento assíncrono estável.");
+        try {
+          const data = await processIntelligentCarouselJob(env, queued.job, topic, { slideCount, writingProfile, styleKey, userId: user?.id || null });
+          if (data?.slides?.length) return json({ ok: true, cached: false, status: "succeeded", data });
+          const current = await getIntelligentJob(db, queued.job.jobId);
+          if (current?.status === "failed") throw new HttpError(422, current.error || current.message || "A leitura inteligente não pôde ser concluída.");
+          return json({ ok:true, queued:true, status:current?.status || "running", job:publicIntelligentJob(current || queued.job), pollAfterMs:1500 },202);
+        } catch (error) {
+          if (error?.code === "JOB_LOCK_BUSY") {
+            const current = await getIntelligentJob(db, queued.job.jobId);
+            return json({ ok:true, queued:true, status:current?.status || "running", job:publicIntelligentJob(current || queued.job), pollAfterMs:1500 },202);
+          }
+          throw error;
+        }
       }
     }
     return json({

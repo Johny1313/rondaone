@@ -5,8 +5,8 @@ const db=fs.readFileSync(new URL("../src/ronda/v285/database.js",import.meta.url
 const wrangler=fs.readFileSync(new URL("../wrangler.jsonc",import.meta.url),"utf8");
 const client=fs.readFileSync(new URL("../public/ronda/ronda-one-integration.js",import.meta.url),"utf8");
 assert.match(wrangler,/"queue": "ronda-one-intelligent-jobs"[\s\S]*?"max_retries": 5[\s\S]*?"max_concurrency": 2/);
-assert.match(db,/row\.status === "queued"[\s\S]*?5 \* 60 \* 1000/);
-assert.match(db,/row\.status === "running"[\s\S]*?3 \* 60 \* 1000/);
+assert.match(db,/row\.status === "queued"[\s\S]*?45 \* 1000/);
+assert.match(db,/row\.status === "running"[\s\S]*?90 \* 1000/);
 assert.match(db,/status NOT IN \('succeeded','failed'\)/);
 assert.match(worker,/intelligent_job_recovered_from_cache/);
 assert.match(worker,/JOB_LOCK_BUSY/);

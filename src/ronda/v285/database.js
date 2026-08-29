@@ -1001,9 +1001,9 @@ function parseIntelligentJob(row) {
   const active = row.status === "queued" || row.status === "running";
   const updatedMs = Date.parse(updatedAt || "");
   const staleAfterMs = row.status === "queued"
-    ? 5 * 60 * 1000
+    ? 45 * 1000
     : row.status === "running"
-      ? 3 * 60 * 1000
+      ? 90 * 1000
       : 0;
   const stale = active && (!Number.isFinite(updatedMs) || Date.now() - updatedMs > staleAfterMs);
   return {
@@ -1049,12 +1049,9 @@ export async function createIntelligentJob(db, {
     .bind(cacheKey)
     .first();
   const existing = parseIntelligentJob(existingRow);
-  const existingAge = existing?.updatedAt ? Date.now() - Date.parse(existing.updatedAt) : Number.POSITIVE_INFINITY;
-  const activeReuseMs = existing?.status === "running"
-    ? Math.min(Number(staleMs) || 5 * 60 * 1000, 3 * 60 * 1000)
-    : Number(staleMs) || 5 * 60 * 1000;
+  const legacyLockConflict = existing && /JOB_LOCK_BUSY|outro consumidor|processada por outro consumidor/i.test(`${existing.message || ""} ${existing.error || ""}`);
   if (existing && (
-    (["queued", "running"].includes(existing.status) && existingAge <= activeReuseMs)
+    (["queued", "running"].includes(existing.status) && !existing.stale && !legacyLockConflict)
     || (!replaceCompleted && existing.status === "succeeded" && existing.payload)
   )) {
     return { created: false, job: existing };
@@ -1105,6 +1102,19 @@ export async function createIntelligentJob(db, {
       stale: false,
     },
   };
+}
+
+
+export async function touchIntelligentJob(db, jobId, ttlMinutes = 120) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(15, Number(ttlMinutes) || 120) * 60 * 1000).toISOString();
+  await db.prepare(`
+    UPDATE intelligent_jobs
+    SET updated_at = ?, expires_at = ?
+    WHERE job_id = ? AND status IN ('queued','running')
+  `).bind(updatedAt, expiresAt, jobId).run();
+  return getIntelligentJob(db, jobId);
 }
 
 export async function updateIntelligentJob(db, {

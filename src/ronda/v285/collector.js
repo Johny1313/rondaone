@@ -1033,7 +1033,7 @@ export async function collectRound({
       operational: {
         mode,
         portalConcurrency: fastMode ? 6 : 8,
-        sourceRecovery: "0.9.0-rss-scrape-fallback-cache",
+        sourceRecovery: "0.9.2-rss-scrape-editorial-desk-cache",
         healthyMaxRefreshMinutes: fastMode ? 1 : 5,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1086,7 +1086,7 @@ export async function collectRound({
         mode: "fast",
         fastLane: true,
         portalConcurrency: 6,
-        sourceRecovery: "0.9.0-rss-scrape-fallback-cache",
+        sourceRecovery: "0.9.2-rss-scrape-editorial-desk-cache",
         healthyMaxRefreshMinutes: 1,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1129,7 +1129,7 @@ export async function collectRound({
     operational: {
       mode: "full",
       portalConcurrency: 8,
-      sourceRecovery: "0.9.0-rss-scrape-fallback-cache",
+      sourceRecovery: "0.9.2-rss-scrape-editorial-desk-cache",
       healthyMaxRefreshMinutes: 5,
       failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,

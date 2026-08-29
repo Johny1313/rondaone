@@ -1,8 +1,8 @@
 (()=>{
   'use strict';
 
-  const VERSION='0.8.5.5';
-  const BUILD='carousel-recovery-native';
+  const VERSION='0.9.2';
+  const BUILD='editorial-desk-operations';
   const JOB_KEY='rondaOne.intelligentJob';
   const MAX_LOCAL_JOB_AGE_MS=12*60*1000;
   const RECOVERY_COOLDOWN_MS=10*1000;

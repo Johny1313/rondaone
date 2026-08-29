@@ -9,6 +9,7 @@
   let changes=[];
   let radar=[];
   let alerts=[];
+  let sourceDiagnostics=[];
   let lastLoad=0;
   let lastLoadedAt=null;
   const filterRules=window.RondaMesaFilters;
@@ -27,7 +28,7 @@
   oldSummary?.classList.add('event-legacy-hidden');
   oldLayout?.classList.add('event-legacy-hidden');
   const heading=view.querySelector('.newsroom-heading h2');if(heading)heading.textContent='Mesa Editorial';
-  const headingP=view.querySelector('.newsroom-heading p:last-child');if(headingP)headingP.textContent='Eventos, mudanças, confirmação, divergências, relevância e tração em uma única visão.';
+  const headingP=view.querySelector('.newsroom-heading p:last-child');if(headingP)headingP.textContent='Eventos, decisão editorial, qualidade da apuração, saúde das fontes, divergências, relevância e tração em uma única visão.';
 
   const host=document.createElement('section');
   host.className='event-mesa';
@@ -39,12 +40,13 @@
       <div class="event-mesa-toolbar-side"><span class="event-filter-meta" id="eventFilterMeta">Todos os eventos</span><button class="event-legacy-toggle" id="eventLegacyToggle" type="button">Mostrar operação clássica</button></div>
     </div>
     <section class="event-summary" id="eventSummary">
-      <div><strong>0</strong><span>eventos ativos</span></div><div class="warn"><strong>0</strong><span>breaking</span></div><div class="hot"><strong>0</strong><span>em alta</span></div><div><strong>0</strong><span>mudaram</span></div><div><strong>0</strong><span>divergências</span></div>
+      <div><strong>0</strong><span>eventos ativos</span></div><div class="warn"><strong>0</strong><span>breaking</span></div><div class="hot"><strong>0</strong><span>em alta</span></div><div class="decision"><strong>0</strong><span>pautar agora</span></div><div class="validate"><strong>0</strong><span>validar</span></div><div><strong>0</strong><span>mudaram</span></div><div><strong>0</strong><span>divergências</span></div>
     </section>
     <div class="event-intelligence-grid">
       <section class="event-panel"><div class="event-panel-head"><div><h3>Desde a última ronda</h3><p>Somente mudanças editoriais relevantes.</p></div></div><div class="event-change-list" id="eventChanges"><div class="event-empty"><div><strong>Carregando mudanças</strong><span>Aguarde a leitura da Mesa.</span></div></div></div></section>
       <section class="event-panel"><div class="event-panel-head"><div><h3>Assuntos em aceleração</h3><p>Crescimento em 30 min, não apenas volume.</p></div></div><div class="event-radar-list" id="eventRadar"><div class="event-empty"><div><strong>Calculando tração</strong></div></div></div></section>
     </div>
+    <section class="event-panel event-source-health-panel"><div class="event-panel-head"><div><h3>Saúde das fontes</h3><p>Última coleta por portal, rota usada e fontes que exigem atenção.</p></div><button class="event-health-open" id="eventSourceHealthOpen" type="button">Abrir Fontes</button></div><div class="event-source-health-summary" id="eventSourceHealthSummary"><div class="event-empty"><div><strong>Carregando diagnóstico</strong></div></div></div><div class="event-source-health-list" id="eventSourceHealthList"></div></section>
     <section class="event-panel"><div class="event-panel-head"><div><h3>Alertas editoriais</h3><p>Breaking, atualização importante, tendência e divergência — sem alertas genéricos.</p></div></div><div class="event-alert-list" id="eventAlerts"><div class="event-empty"><div><strong>Carregando alertas</strong></div></div></div></section>
     <div class="event-panel"><div class="event-panel-head"><div><h3>Eventos editoriais</h3><p>Um card por acontecimento; abra para ver matérias e evidências.</p></div><span id="eventUpdated" style="font-size:9px;color:#76817b">—</span></div><div class="event-grid" id="eventGrid"></div></div>`;
   const insertAfter=view.querySelector('.background-note')||view.querySelector('.newsroom-heading');
@@ -82,7 +84,9 @@
       changed:list.filter(event=>event.mudouDesdeUltimaRonda).length,
       divergences:list.filter(event=>event.divergencias?.length).length,
     };
-    const values=[data.events||0,data.breaking||0,data.hot||0,data.changed||0,data.divergences||0];
+    const pautar=list.filter(event=>event.acaoEditorial?.action==='PAUTAR AGORA').length;
+    const validar=list.filter(event=>event.acaoEditorial?.action==='VALIDAR').length;
+    const values=[data.events||0,data.breaking||0,data.hot||0,pautar,validar,data.changed||0,data.divergences||0];
     document.querySelectorAll('#eventSummary strong').forEach((node,index)=>node.textContent=String(values[index]||0));
   }
 
@@ -105,6 +109,7 @@
     renderChanges(linkedItems(changes));
     renderRadar(linkedItems(radar));
     renderAlerts(linkedItems(alerts));
+    renderSourceHealth();
     updateFilterButtons();
 
     const meta=document.getElementById('eventFilterMeta');
@@ -120,6 +125,62 @@
     }
   }
 
+  function healthClass(source){
+    const status=String(source?.status||source?.errorCode||'').toLowerCase();
+    const fail=/failed|blocked|not-found|timeout|rate-limited|error/.test(status);
+    const successAt=Date.parse(source?.lastSuccessAt||'');
+    const ageMinutes=Number.isFinite(successAt)?Math.max(0,(Date.now()-successAt)/60000):Infinity;
+    if(fail||ageMinutes>30)return 'error';
+    if(source?.route==='cache'||status==='degraded'||Number(source?.failureCount)>0||ageMinutes>10)return 'warn';
+    return 'ok';
+  }
+
+  function renderSourceHealth(){
+    const summary=document.getElementById('eventSourceHealthSummary');
+    const list=document.getElementById('eventSourceHealthList');
+    if(!summary||!list)return;
+    const rows=Array.isArray(sourceDiagnostics)?sourceDiagnostics:[];
+    if(!rows.length){
+      summary.innerHTML='<div class="event-health-empty"><strong>Sem diagnóstico persistido</strong><span>Execute uma ronda para preencher a saúde das fontes.</span></div>';
+      list.innerHTML='';
+      return;
+    }
+    const states=rows.map(source=>({source,state:healthClass(source)}));
+    const ok=states.filter(item=>item.state==='ok').length;
+    const warn=states.filter(item=>item.state==='warn').length;
+    const error=states.filter(item=>item.state==='error').length;
+    const collected=rows.filter(source=>Number(source.itemCount)>0).length;
+    summary.innerHTML=`<div><strong>${ok}/${rows.length}</strong><span>saudáveis</span></div><div><strong>${collected}</strong><span>com conteúdo</span></div><div class="warn"><strong>${warn}</strong><span>atenção</span></div><div class="error"><strong>${error}</strong><span>falhando</span></div>`;
+    const attention=states.filter(item=>item.state!=='ok').sort((a,b)=>Date.parse(a.source?.lastSuccessAt||0)-Date.parse(b.source?.lastSuccessAt||0)).slice(0,10);
+    const display=attention.length?attention:states.slice(0,8);
+    list.innerHTML=display.map(({source,state})=>`<div class="event-health-row ${state}"><span class="event-health-dot"></span><div><strong>${esc(source.name||source.sourceId||'Fonte')}</strong><small>${esc(source.region||'')} · ${esc(source.route||source.status||'rota não informada')} · sucesso ${esc(relative(source.lastSuccessAt))}</small></div><span>${Number(source.itemCount)||0} itens</span></div>`).join('');
+  }
+
+  function bestApuracaoSource(event){
+    const sources=(event?.fontes||[]).filter(source=>source?.url);
+    if(!sources.length)return null;
+    return sources.find(source=>source.official)||[...sources].sort((a,b)=>Date.parse(b.publishedAt||0)-Date.parse(a.publishedAt||0))[0]||sources[0];
+  }
+
+  function decisionLabel(event){return event?.acaoEditorial?.action||'OBSERVAR';}
+  function qualityLabel(event){return event?.qualidadeApuracao?.level||'LIMITADA';}
+
+  function eventHistoryRows(event){
+    const rows=[];
+    if(event?.criadoEm)rows.push({at:event.criadoEm,type:'DETECTADO',detail:'Evento editorial detectado pelo Ronda One',sourceName:'RONDA ONE'});
+    for(const entry of event?.timeline||[])rows.push({at:entry.at,type:entry.label||'PUBLICAÇÃO',detail:entry.detail,sourceName:entry.sourceName,url:entry.url});
+    for(const update of event?.updates||[])rows.push({at:update.created_at||update.published_at,type:String(update.update_type||'ATUALIZAÇÃO').replace(/_/g,' ').toUpperCase(),detail:update.summary,sourceName:update.source_name,url:update.source_url});
+    const seen=new Set();
+    return rows.filter(row=>{const key=`${row.at}|${row.type}|${row.detail}|${row.url||''}`;if(seen.has(key))return false;seen.add(key);return true;})
+      .sort((a,b)=>Date.parse(a.at||0)-Date.parse(b.at||0));
+  }
+
+  function renderEventHistory(event){
+    const rows=eventHistoryRows(event);
+    if(!rows.length)return '<div class="event-detail-item">Nenhum marco editorial registrado ainda.</div>';
+    return `<div class="event-storyline">${rows.map(row=>`<div class="event-storyline-row"><time>${esc(fmtDate(row.at))}</time><span>${esc(row.type)}</span><div><strong>${esc(row.sourceName||'Evento')}</strong><p>${esc(row.detail||'Atualização editorial')}</p>${row.url?`<a href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">Abrir fonte ↗</a>`:''}</div></div>`).join('')}</div>`;
+  }
+
   function renderEvents(list=filteredEvents()){
     const grid=document.getElementById('eventGrid');
     if(!list.length){
@@ -130,13 +191,18 @@
     grid.innerHTML=list.slice(0,80).map(event=>{
       const info=event.informacoesNovas?.[0]?.text||'';
       const growth=Number(event.tracao?.growth30m)||0;
-      return `<article class="event-card" data-status="${esc(event.status)}">
+      const source=bestApuracaoSource(event);
+      const decision=decisionLabel(event);
+      const quality=qualityLabel(event);
+      return `<article class="event-card" data-status="${esc(event.status)}" data-decision="${esc(decision)}" data-quality="${esc(quality)}">
         <div class="event-card-top"><span class="event-status">● ${esc(event.status)}</span><span class="event-editoria">${esc(event.editoria)}</span></div>
+        <div class="event-decision-row"><span class="event-decision">${esc(decision)}</span><span class="event-quality">BASE ${esc(quality)}</span></div>
         <h3>${esc(event.titulo)}</h3>
         <div class="event-card-meta"><span><b>${event.fontes?.length||0}</b> fontes</span><span><b>${event.materias?.length||0}</b> matérias</span><span>atualizado ${esc(relative(event.ultimaAtualizacao))}</span></div>
         <div class="event-metrics"><div class="event-metric"><strong>${event.relevancia||0}</strong><span>relevância</span></div><div class="event-metric"><strong>${event.tracao?.score||0}</strong><span>tração</span></div><div class="event-metric"><strong>${esc(event.nivelConfirmacao?.level||'—')}</strong><span>confirmação</span></div></div>
         ${info?`<div class="event-new"><strong>Nova informação</strong>${esc(info)}</div>`:''}
-        <div class="event-card-actions"><small>${growth>0?`↑ ${growth}% em 30 min`:event.divergencias?.length?`${event.divergencias.length} divergência(s)`:event.subeditoria||event.tema||''}</small><button type="button" data-open-event="${esc(event.eventId)}">Abrir evento →</button></div>
+        <div class="event-decision-reason">${esc(event.acaoEditorial?.reason||'Acompanhe os sinais editoriais do evento.')}</div>
+        <div class="event-card-actions"><small>${growth>0?`↑ ${growth}% em 30 min`:event.divergencias?.length?`${event.divergencias.length} divergência(s)`:event.subeditoria||event.tema||''}</small><div class="event-card-action-buttons">${source?`<a class="event-apurar" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Apurar ↗</a>`:''}<button type="button" data-open-event="${esc(event.eventId)}">Abrir evento →</button></div></div>
       </article>`;
     }).join('');
     grid.querySelectorAll('[data-open-event]').forEach(button=>button.addEventListener('click',()=>openEvent(button.dataset.openEvent)));
@@ -159,10 +225,11 @@
   function renderRadar(items){
     const host=document.getElementById('eventRadar');
     if(!items?.length){host.innerHTML='<div class="event-empty"><div><strong>Sem aceleração relevante</strong><span>Aguardando crescimento mensurável.</span></div></div>';return;}
-    host.innerHTML=items.slice(0,8).map(item=>`<div class="event-radar-item"><div><strong>${esc(item.titulo)}</strong><small>${esc(item.editoria)} · tração ${item.tracao?.score||0}</small></div><span class="event-growth">${Number(item.tracao?.growth30m)>0?`↑ ${item.tracao.growth30m}%`:'—'}</span></div>`).join('');
+    host.innerHTML=items.slice(0,8).map(item=>`<button class="event-radar-item" data-radar-event="${esc(item.eventId)}" type="button"><div><strong>${esc(item.titulo)}</strong><small>${esc(item.editoria)} · tração ${item.tracao?.score||0}</small></div><span class="event-growth">${Number(item.tracao?.growth30m)>0?`↑ ${item.tracao.growth30m}%`:'—'}</span></button>`).join('');
+    host.querySelectorAll('[data-radar-event]').forEach(button=>button.addEventListener('click',()=>openEvent(button.dataset.radarEvent)));
   }
 
-  function sourceRows(event){return (event.fontes||[]).map(source=>`<div class="event-source-row"><span class="event-source-role">${esc(source.role)}</span><div><strong>${esc(source.sourceName)}</strong><br><small>${esc(source.title||'')}</small></div>${source.url?`<a href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Abrir ↗</a>`:''}</div>`).join('');}
+  function sourceRows(event){return (event.fontes||[]).map(source=>`<div class="event-source-row"><span class="event-source-role">${esc(source.role)}</span><div><strong>${esc(source.sourceName)}</strong><br><small>${source.publishedAt?`${esc(fmtDate(source.publishedAt))} · `:''}${esc(source.title||'')}</small></div>${source.url?`<a href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Abrir para apuração ↗</a>`:''}</div>`).join('');}
 
   async function produce(eventId,type){
     const output=document.getElementById('eventProductionOutput');
@@ -183,19 +250,24 @@
     detail.innerHTML='<div class="event-detail-body"><div class="event-empty"><div><strong>Carregando evento</strong><span>Lendo timeline, fontes e evidências.</span></div></div></div>';
     try{
       const {event}=await request(`/api/editorial-events/${encodeURIComponent(eventId)}`);
+      const decision=decisionLabel(event);
+      const quality=qualityLabel(event);
+      const apuracaoSource=bestApuracaoSource(event);
       detail.innerHTML=`
-        <header class="event-detail-head"><div><span class="event-status">${esc(event.status)} · ${esc(event.editoria)} / ${esc(event.subeditoria)}</span><h2>${esc(event.titulo)}</h2></div><button class="event-detail-close" type="button" aria-label="Fechar">×</button></header>
+        <header class="event-detail-head"><div><span class="event-status">${esc(event.status)} · ${esc(event.editoria)} / ${esc(event.subeditoria)}</span><h2>${esc(event.titulo)}</h2><div class="event-detail-decision"><span class="event-decision">${esc(decision)}</span><span class="event-quality">BASE ${esc(quality)}</span>${apuracaoSource?`<a href="${esc(apuracaoSource.url)}" target="_blank" rel="noopener noreferrer">Abrir apuração principal ↗</a>`:''}</div></div><button class="event-detail-close" type="button" aria-label="Fechar">×</button></header>
         <div class="event-detail-body">
-          <div class="event-detail-stats"><div class="event-detail-stat"><strong>${event.relevancia||0}</strong><span>Relevância</span></div><div class="event-detail-stat"><strong>${event.tracao?.score||0}</strong><span>Tração</span></div><div class="event-detail-stat"><strong>${esc(event.nivelConfirmacao?.level||'—')}</strong><span>Confirmação</span></div><div class="event-detail-stat"><strong>${event.fontes?.length||0}</strong><span>Fontes</span></div><div class="event-detail-stat"><strong>${event.leitura?.completas||0}/${event.leitura?.total||event.materias?.length||0}</strong><span>Leituras completas</span></div></div>
+          <div class="event-detail-stats"><div class="event-detail-stat"><strong>${event.relevancia||0}</strong><span>Relevância</span></div><div class="event-detail-stat"><strong>${event.tracao?.score||0}</strong><span>Tração</span></div><div class="event-detail-stat"><strong>${esc(event.nivelConfirmacao?.level||'—')}</strong><span>Confirmação</span></div><div class="event-detail-stat"><strong>${esc(quality)}</strong><span>Base de apuração</span></div><div class="event-detail-stat"><strong>${event.fontes?.length||0}</strong><span>Fontes</span></div><div class="event-detail-stat"><strong>${event.leitura?.completas||0}/${event.leitura?.total||event.materias?.length||0}</strong><span>Leituras completas</span></div></div>
+          <section class="event-detail-section wide event-action-panel"><h3>Ação editorial recomendada</h3><div class="event-action-call"><strong>${esc(decision)}</strong><p>${esc(event.acaoEditorial?.reason||'Acompanhe o evento e confirme os dados nas fontes vinculadas.')}</p></div></section>
           <section class="event-detail-section wide"><h3>Resumo</h3><div class="event-detail-item">${esc(event.resumoEditorial?.oQueAconteceu||event.resumo)}</div></section>
           <div class="event-detail-sections">
-            <section class="event-detail-section"><h3>O que há de novo</h3><div class="event-detail-list">${event.informacoesNovas?.length?event.informacoesNovas.map(info=>`<div class="event-detail-item">${esc(info.text)}</div>`).join(''):'<div class="event-detail-item">SEM INFORMAÇÃO NOVA</div>'}</div></section>
+            <section class="event-detail-section"><h3>Qualidade da apuração</h3><div class="event-quality-detail"><strong>${esc(quality)} · ${event.qualidadeApuracao?.score||0}/100</strong><div class="event-detail-list">${(event.qualidadeApuracao?.reasons||[]).map(text=>`<div class="event-detail-item">${esc(text)}</div>`).join('')}</div></div></section>
             <section class="event-detail-section"><h3>Nível de confirmação</h3><div class="event-detail-list">${(event.nivelConfirmacao?.reasons||[]).map(text=>`<div class="event-detail-item">${esc(text)}</div>`).join('')}</div></section>
-            <section class="event-detail-section"><h3>Timeline</h3><div class="event-detail-list">${(event.timeline||[]).map(entry=>`<div class="event-detail-item"><b>${esc(fmtDate(entry.at))}</b> · ${esc(entry.sourceName)}<br>${esc(entry.detail)}</div>`).join('')}</div></section>
+            <section class="event-detail-section"><h3>O que há de novo</h3><div class="event-detail-list">${event.informacoesNovas?.length?event.informacoesNovas.map(info=>`<div class="event-detail-item">${esc(info.text)}</div>`).join(''):'<div class="event-detail-item">SEM INFORMAÇÃO NOVA</div>'}</div></section>
             <section class="event-detail-section"><h3>Divergências</h3><div class="event-detail-list">${event.divergencias?.length?event.divergencias.map(div=>`<div class="event-detail-item"><b>${esc(div.description)}</b><br>${(div.values||[]).map(value=>`${esc(value.value)} — ${esc(value.sources?.join(', '))}`).join('<br>')}</div>`).join(''):'<div class="event-detail-item">Nenhuma divergência numérica objetiva detectada.</div>'}</div></section>
+            <section class="event-detail-section wide"><h3>Histórico do evento</h3>${renderEventHistory(event)}</section>
             <section class="event-detail-section"><h3>Pontos em aberto</h3><div class="event-detail-list">${(event.pontosEmAberto||[]).map(text=>`<div class="event-detail-item">• ${esc(text)}</div>`).join('')}</div></section>
             <section class="event-detail-section"><h3>Sugestões de pauta</h3><div class="event-detail-list">${(event.sugestoesPauta||[]).map(text=>`<div class="event-detail-item">• ${esc(text)}</div>`).join('')}</div></section>
-            <section class="event-detail-section wide"><h3>Fontes e matérias</h3>${sourceRows(event)}</section>
+            <section class="event-detail-section wide"><h3>Fontes e matérias · apuração</h3>${sourceRows(event)}</section>
             <section class="event-detail-section wide"><h3>Leitura das matérias</h3><div class="event-detail-list">${event.articleReadings?.length?event.articleReadings.map(read=>`<div class="event-detail-item"><b>${esc(read.source_name||'Fonte')}</b> · ${esc(read.read_status||'descoberta')} ${read.word_count?`· ${read.word_count} palavras`:''}${read.error?`<br>${esc(read.error)}`:''}</div>`).join(''):'<div class="event-detail-item">Aguardando enriquecimento incremental.</div>'}</div></section>
             <section class="event-detail-section wide"><h3>Produção editorial</h3><div class="event-produce"><button class="primary" data-produce="carousel" type="button">Carrossel</button><button data-produce="resumo" type="button">Resumo</button><button data-produce="titulo" type="button">Título</button><button data-produce="breaking" type="button">Breaking News</button><button data-produce="social" type="button">Redes sociais</button><button data-produce="roteiro" type="button">Roteiro</button><button data-produce="timeline" type="button">Linha do tempo</button><button data-produce="qa" type="button">Perguntas e respostas</button></div><pre class="event-output" id="eventProductionOutput">Selecione um formato. Todo conteúdo será produzido apenas com dados vinculados ao evento.</pre></section>
           </div>
@@ -210,16 +282,18 @@
     lastLoad=Date.now();
     const updated=document.getElementById('eventUpdated');if(updated)updated.textContent='Atualizando…';
     try{
-      const [eventData,changesData,radarData,alertsData]=await Promise.all([
+      const [eventData,changesData,radarData,alertsData,sourceData]=await Promise.all([
         request('/api/editorial-events?hours=72&limit=140'),
         request('/api/editorial-changes?hours=8&limit=50'),
         request('/api/editorial-radar?hours=6&limit=20'),
         request('/api/editorial-alerts?hours=8&limit=40'),
+        request('/api/sources/diagnostics').catch(()=>({diagnostics:[]})),
       ]);
       events=eventData.events||[];
       changes=changesData.items||[];
       radar=radarData.items||[];
       alerts=alertsData.items||[];
+      sourceDiagnostics=sourceData.diagnostics||[];
       lastLoadedAt=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
       renderFilteredMesa();
     }catch(error){
@@ -237,6 +311,10 @@
     const hidden=oldSummary?.classList.contains('event-legacy-hidden');
     oldSummary?.classList.toggle('event-legacy-hidden',!hidden);oldLayout?.classList.toggle('event-legacy-hidden',!hidden);
     event.currentTarget.textContent=hidden?'Ocultar operação clássica':'Mostrar operação clássica';
+  });
+  document.getElementById('eventSourceHealthOpen')?.addEventListener('click',()=>{
+    document.getElementById('navSources')?.click();
+    setTimeout(()=>document.getElementById('sourcesView')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
   });
   nav.addEventListener('click',()=>setTimeout(()=>load(false),30));
   document.getElementById('refreshNewsroom')?.addEventListener('click',()=>load(true));
@@ -301,5 +379,5 @@
   document.getElementById('eventHistorySearch')?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();loadEventHistory();}});
   for(const id of ['eventHistorySource','eventHistoryTerm'])document.getElementById(id)?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();loadEventHistory();}});
   for(const id of ['eventHistoryEditoria','eventHistoryRelevance','eventHistoryTraction'])document.getElementById(id)?.addEventListener('change',()=>{if(!eventHistoryPane?.hidden)loadEventHistory();});
-  console.info('RONDA ONE Mesa Editorial 0.8.0 loaded');
+  console.info('RONDA ONE Mesa Editorial 0.9.2 · operational desk loaded');
 })();

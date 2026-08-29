@@ -20,7 +20,7 @@ assert.match(worker,/requestPayload:/);
 assert.match(worker,/validateArticleUrl/);
 assert.match(worker,/INTELLIGENT_JOBS_QUEUE\.send/);
 assert.match(worker,/startCarouselReliabilityAttempt/);
-assert.match(worker,/directTopic = job\?\.request\?\.topic/);
+assert.match(worker,/requestTopic = job\?\.request\?\.topic/);
 assert.match(worker,/articleVisuals: data\?\.reading\?\.selectedSource\?\.images/);
 
 assert.match(reader,/selectedRecord\?\.title/);
