@@ -1482,14 +1482,43 @@ async function handleApi(request, env, url, ctx) {
         if (stored?.payload) payload = withEditorias({ ...stored.payload, runId:stored.id, triggerType:stored.triggerType });
       }
       if (!payload) payload = withEditorias(await getLatestRound(db));
-      let topic = payload?.topics?.find((item)=>item?.id===sourceRef) || null;
+      let topic = null;
+      let editorialEvent = null;
+      // Pautas abertas diretamente pelo Kanban devem usar o evento persistido da Mesa
+      // como fonte primária de contexto. A leitura externa vira enriquecimento, não pré-requisito.
+      if (sourceType === "event") {
+        editorialEvent = await getEditorialEvent(db,sourceRef).catch(()=>null);
+        topic = editorialEvent ? topicFromEditorialEvent(editorialEvent) : null;
+      }
+      if (!topic) topic = payload?.topics?.find((item)=>item?.id===sourceRef) || null;
       if (!topic) {
-        const editorialEvent = await getEditorialEvent(db,sourceRef).catch(()=>null);
+        editorialEvent = editorialEvent || await getEditorialEvent(db,sourceRef).catch(()=>null);
         topic = editorialEvent ? topicFromEditorialEvent(editorialEvent) : null;
       }
       if (!topic) throw new HttpError(404,"Assunto não encontrado na Ronda ou na Mesa Editorial.");
-      input = { topic, runId:body?.runId||payload?.runId||null, editoria:topic.editoria||body?.editoria||"Notícias" };
-      sourceType = topic?.editorialEvent?.eventId ? "event" : "topic";
+      const editorialEventContext = editorialEvent ? {
+        eventId:editorialEvent.eventId,
+        title:editorialEvent.titulo||topic.title||"Evento editorial",
+        summary:editorialEvent.resumoEditorial||editorialEvent.resumo||"",
+        editoria:editorialEvent.editoria||topic.editoria||"Notícias",
+        subeditoria:editorialEvent.subeditoria||"",
+        status:editorialEvent.status||"",
+        confirmation:editorialEvent.nivelConfirmacao||null,
+        quality:editorialEvent.qualidadeApuracao||null,
+        newInformation:(editorialEvent.informacoesNovas||[]).map(item=>typeof item==='string'?item:item?.text).filter(Boolean).slice(0,24),
+        openPoints:(editorialEvent.pontosEmAberto||[]).map(item=>typeof item==='string'?item:item?.text||item).filter(Boolean).slice(0,16),
+        timeline:(editorialEvent.timeline||[]).slice(-30),
+        sources:(editorialEvent.fontes||editorialEvent.materias||[]).map(item=>({
+          sourceName:item?.sourceName||item?.name||"Fonte",
+          title:item?.title||"",
+          url:item?.url||null,
+          publishedAt:item?.publishedAt||null,
+          role:item?.role||null,
+          summary:item?.description||item?.summary||item?.resumo||"",
+        })).slice(0,30),
+      } : null;
+      input = { topic, editorialEventContext, runId:body?.runId||payload?.runId||null, editoria:topic.editoria||body?.editoria||"Notícias" };
+      sourceType = editorialEventContext || topic?.editorialEvent?.eventId ? "event" : "topic";
     } else if (sourceType === "text") {
       const text = plainText(body?.text);
       if (text.length < 120) throw new HttpError(400,"O texto próprio precisa ter conteúdo suficiente para gerar um carrossel.");

@@ -468,6 +468,8 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
       if(!evidencePtBrReady(pack))throw new Error("A tradução da matéria para português do Brasil não pôde ser concluída.");
     }else if(job.sourceType==="topic"||job.sourceType==="event"){
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
+      // Gestão de Produção não altera leitura. A pauta segue pelo mesmo scraping completo
+      // usado antes do Kanban/Newsroom OS; status é apenas metadata operacional.
       const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
       evidenceResult=await scrapeTopicToEvidence(topic,{
         timeoutMs:retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500),slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,
