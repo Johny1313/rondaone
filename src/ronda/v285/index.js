@@ -2108,7 +2108,7 @@ async function handleApi(request, env, url, ctx) {
     const { user } = await requireEditorialUser(request, env);
     const body = await readJsonBody(request);
     try {
-      const item = await updateEditorialProductionTracking(requireDatabase(env),editorialProductionRoute[1],{action:String(body?.action||""),userId:user.id});
+      const item = await updateEditorialProductionTracking(requireDatabase(env),editorialProductionRoute[1],{action:String(body?.action||""),userId:user.id,payload:body?.payload&&typeof body.payload==='object'?body.payload:{}});
       return json({ ok:true, item });
     } catch (error) {
       throw new HttpError(409,error instanceof Error?error.message:"Não foi possível atualizar a produção editorial.");

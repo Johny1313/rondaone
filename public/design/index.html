@@ -126,7 +126,7 @@
       <div class="brand-wrap">
         <div class="brand-mark">F</div>
         <div>
-          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.4.9</b></div>
+          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.4.12</b></div>
           <div class="brand-sub">Editor visual integrado à Ronda Editorial</div>
         </div>
       </div>
@@ -140,7 +140,8 @@
         <button class="secondary-btn" id="saveProjectBtn">Salvar projeto</button>
         <span id="legacyWorkflowControls" hidden aria-hidden="true"><button id="saveRevisionBtn" type="button">Salvar versão</button><button id="versionsBtn" type="button">Versões</button><button id="submitReviewBtn" type="button">Enviar revisão</button></span>
         <button class="secondary-btn" id="saveTemplateBtn">Salvar template</button>
-        <button class="primary-btn" id="exportBtn">Exportar PNG</button>
+        <button class="secondary-btn" id="exportAllBtn">Baixar todos os slides</button>
+        <button class="primary-btn" id="exportBtn">Baixar slide</button>
       </div>
     </header>
 
@@ -1155,7 +1156,23 @@
   async function blobToDataUrl(blob){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});}
   async function removeBgForElement(el,button){
     const src=el?.src;if(!src){showToast('Este elemento ainda não tem imagem');return;}button.classList.add('busy');button.disabled=true;const old=button.textContent;button.textContent='Processando…';try{const blob=await dataUrlToBlob(src),form=new FormData();form.append('image_file',blob,'imagem.png');form.append('size','auto');const response=await fetch('/api/remove-bg',{method:'POST',credentials:'same-origin',body:form});if(!response.ok){let detail='';try{const j=await response.json();detail=j?.error||j?.detail||'';}catch{}throw new Error(detail||`Erro ${response.status}`);}const out=await response.blob(),data=await blobToDataUrl(out);el.src=data;if(el.type==='mask')await setMaskImage(el,data);state.uploads.unshift({name:'remove-bg.png',src:data});pushHistory();renderAll();showToast('Fundo removido');}catch(err){showToast(`Remover fundo: ${err.message||'falha na requisição'}`,3200);}finally{button.classList.remove('busy');button.disabled=false;button.textContent=old;}}
-  async function saveProjectToProjects(){
+  async function buildDeskProjectPreview(){
+    try{
+      syncActiveArtboard();ensureArtboards();const board=clone(state.artboards.find(b=>b.id===state.activeArtboardId)||state.artboards[0]||currentBoardData());
+      const source=await renderBoardCanvas(board);const max=180,scale=Math.min(1,max/Math.max(source.width,source.height));const preview=document.createElement('canvas');preview.width=Math.max(1,Math.round(source.width*scale));preview.height=Math.max(1,Math.round(source.height*scale));preview.getContext('2d').drawImage(source,0,0,preview.width,preview.height);return preview.toDataURL('image/jpeg',.52);
+    }catch{return null;}
+  }
+  let deskFormaSync={projectId:null,signature:null,at:0,promise:null};
+  function deskPreviewSignature(projectId){syncActiveArtboard();const board=state.artboards?.find(b=>b.id===state.activeArtboardId)||state.artboards?.[0];const visible=(board?.elements||[]).filter(e=>e.visible!==false);return `${projectId}|${board?.id||''}|${visible.length}|${visible.map(e=>`${e.id}:${e.x}:${e.y}:${e.w}:${e.h}:${e.text||''}:${String(e.src||'').slice(-32)}`).join('|')}`.slice(0,12000);}
+  async function linkFormaProjectToDesk(projectId,{force=false}={}){
+    const eventId=state.platformMeta?.editorialEventId||null;if(!eventId||!projectId)return null;
+    const signature=deskPreviewSignature(projectId);
+    if(!force&&deskFormaSync.projectId===projectId&&deskFormaSync.signature===signature&&Date.now()-deskFormaSync.at<120000)return null;
+    if(deskFormaSync.promise)return deskFormaSync.promise;
+    deskFormaSync.promise=(async()=>{const previewDataUrl=await buildDeskProjectPreview();const started=performance.now();const response=await fetch(`/api/newsroom/event-production/${encodeURIComponent(eventId)}`,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'link_forma_project',payload:{projectId,previewDataUrl}})});const data=await response.json().catch(()=>({}));if(!response.ok||!data.ok)throw new Error(data.error||'Não foi possível devolver o projeto à Mesa.');deskFormaSync={projectId,signature,at:Date.now(),promise:null};if(performance.now()-started>1500)console.warn('RONDA ONE: sincronização FORMA → Mesa acima de 1,5 s');return data.item||null;})();
+    try{return await deskFormaSync.promise;}finally{if(deskFormaSync.promise)deskFormaSync.promise=null;}
+  }
+  async function saveProjectToProjects({silent=false}={}){
     syncActiveArtboard();ensureArtboards();
     const currentId=state.platformMeta?.projectId||null;
     const snapshot=projectSnapshot();
@@ -1169,12 +1186,13 @@
     state.platformMeta={...(state.platformMeta||{}),projectId,source:state.platformMeta?.source||'forma-design'};
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     const next=new URL(location.href);next.search='';next.searchParams.set('project',projectId);history.replaceState({},'',next.pathname+next.search);
-    markSaved();showToast('Projeto salvo na aba Projetos');return projectId;
+    try{await linkFormaProjectToDesk(projectId);}catch(error){if(!silent)showToast(error.message||'Projeto salvo, mas a Mesa não recebeu o preview.',3200);}
+    markSaved();if(!silent)showToast('Projeto salvo na aba Projetos · Mesa atualizada');return projectId;
   }
   $('#saveProjectBtn').onclick=async()=>{const button=$('#saveProjectBtn'),old=button.textContent;button.disabled=true;button.textContent='Salvando…';try{await saveProjectToProjects();}catch(error){showToast(error.message||'Não foi possível salvar o projeto',3600);}finally{button.disabled=false;button.textContent=old;}};
   $('#saveRevisionBtn').onclick=async()=>{try{const out=await saveCloudRevision('Versão salva no FORMA');if(out){markSaved();showToast(`Versão ${out.version?.versionNumber||''} salva no RONDA`);}}catch(error){showToast(error.message||'Não foi possível salvar a versão',3200);}};
   $('#versionsBtn').onclick=async()=>{try{const meta=state.platformMeta||{};if(!meta.jobId&&!meta.topicId){showToast('Projeto sem histórico de versões');return;}const q=meta.jobId?`jobId=${encodeURIComponent(meta.jobId)}`:`topicId=${encodeURIComponent(meta.topicId)}`;const res=await fetch('/api/carousel-versions?'+q,{cache:'no-store',credentials:'same-origin'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Falha ao carregar versões');const list=out.versions||[];if(!list.length){showToast('Nenhuma versão salva ainda');return;}const text=list.slice(0,12).map(v=>`v${v.versionNumber} · ${new Date(v.createdAt).toLocaleString('pt-BR')} · ${v.kind}`).join('\n');const choice=prompt(`VERSÕES DO CARROSSEL\n\n${text}\n\nDigite o número da versão para restaurar:`);if(!choice)return;const v=list.find(x=>String(x.versionNumber)===String(choice).trim());if(!v?.payload?.artboards){showToast('Esta versão não contém snapshot visual do FORMA');return;}const parsed=v.payload;state.artboards=clone(parsed.artboards);state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||state.docTitle;state.platformMeta={...(parsed.platformMeta||{}),versionId:v.id,versionNumber:v.versionNumber};state.rondaContentModel=parsed.rondaContentModel||state.rondaContentModel;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;renderAll();markDirty();showToast(`Versão ${v.versionNumber} restaurada`);}catch(error){showToast(error.message||'Falha ao abrir versões',3200);}};
-  $('#submitReviewBtn').onclick=async()=>{try{let workflowId=state.platformMeta?.workflowId;if(!workflowId){const saved=await saveCloudRevision('Versão enviada para revisão');workflowId=saved?.workflow?.id;}if(!workflowId)throw new Error('Não foi possível criar o fluxo de aprovação.');const res=await fetch('/api/workflow/'+encodeURIComponent(workflowId),{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',note:'Enviado pelo FORMA Design'})}),out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta.workflowStatus=out.item?.status||'in_review';try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}showToast('Versão enviada para revisão editorial');}catch(error){showToast(error.message||'Falha ao enviar para revisão',3600);}};
+  $('#submitReviewBtn').onclick=async()=>{try{let workflowId=state.platformMeta?.workflowId;if(!workflowId){const saved=await saveCloudRevision('Versão enviada para revisão');workflowId=saved?.workflow?.id;}if(!workflowId)throw new Error('Não foi possível criar o fluxo de aprovação.');const res=await fetch('/api/workflow/'+encodeURIComponent(workflowId),{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',note:'Enviado pelo FORMA Design'})}),out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta.workflowStatus=out.item?.status||'in_review';try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}if(state.platformMeta?.editorialEventId){fetch(`/api/newsroom/event-production/${encodeURIComponent(state.platformMeta.editorialEventId)}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'mark_review'})}).catch(()=>null);}showToast('Versão enviada para revisão editorial');}catch(error){showToast(error.message||'Falha ao enviar para revisão',3600);}};
   function loadProject(){try{const raw=localStorage.getItem(LS_PROJECT)||localStorage.getItem('rondaDesign.project.v1');if(!raw)return false;const parsed=JSON.parse(raw);if(Array.isArray(parsed.artboards)&&parsed.artboards.length){state.artboards=parsed.artboards.map((b,i)=>{const d=migrateSnapshot(b);return {...b,...d,id:b.id||('board_'+Date.now()+'_'+i),name:b.name||`Prancheta ${i+1}`};});state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||'Sem título';state.platformMeta=parsed.platformMeta||null;state.rondaContentModel=parsed.rondaContentModel||parsed.platformMeta?.rondaContentModel||null;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));return true;}const d=migrateSnapshot(parsed);if(!d)return false;state.width=d.width;state.height=d.height;state.bg=d.bg;state.bgMode=d.bgMode;state.gradient=normalizeGradientData(d.gradient,d.bg);state.elements=clone(d.elements);state.docTitle=d.docTitle||'Sem título';return true;}catch{return false;}}
   $('#saveTemplateBtn').onclick=()=>{$('#templateName').value=state.docTitle==='Sem título'?'':state.docTitle;openModal('templateModal');setTimeout(()=>$('#templateName').focus(),20);};
   function smartEngine(){if(!window.RondaSmartTemplates)throw new Error('Motor de templates não carregado. Atualize a página.');return window.RondaSmartTemplates;}
@@ -1416,7 +1434,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.4.9',
+      sourceVersion:'0.9.7.4.12',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
@@ -1528,28 +1546,45 @@
   function starPath(ctx,w,h,points=5,innerPct=44){points=Math.round(clamp(points,3,24));const cx=w/2,cy=h/2,outer=Math.min(w,h)/2,inner=outer*clamp(innerPct,5,95)/100;ctx.beginPath();for(let i=0;i<points*2;i++){const a=-Math.PI/2+i*Math.PI/points,r=i%2===0?outer:inner,x=cx+Math.cos(a)*r,y=cy+Math.sin(a)*r;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.closePath();}
   function canvasGradient(ctx,w,h,gdata){const gd=normalizeGradientData(gdata||state.gradient),a=(Number(gd.angle)||0)*Math.PI/180,vx=Math.sin(a),vy=-Math.cos(a),len=Math.abs(w*vx)+Math.abs(h*vy),cx=w/2,cy=h/2,g=ctx.createLinearGradient(cx-vx*len/2,cy-vy*len/2,cx+vx*len/2,cy+vy*len/2);[...gd.stops].sort((x,y)=>x.pos-y.pos).forEach(st=>g.addColorStop(clamp(st.pos,0,100)/100,hexToRgba(st.color,gradientStopAlpha(st))));return g;}
   function paintBackground(ctx){if(state.bgMode!=='gradient'){ctx.fillStyle=state.bg;ctx.fillRect(0,0,state.width,state.height);return;}ctx.fillStyle=canvasGradient(ctx,state.width,state.height,state.gradient);ctx.fillRect(0,0,state.width,state.height);}
-  async function markEditorialProductionComplete(){
+  async function markEditorialProductionComplete({silent=false}={}){
     const eventId=state.platformMeta?.editorialEventId||null;if(!eventId)return null;
     const response=await fetch(`/api/newsroom/event-production/${encodeURIComponent(eventId)}`,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'complete'})});
-    const data=await response.json().catch(()=>({}));if(!response.ok||!data.ok)throw new Error(data.error||'Não foi possível registrar a conclusão na Mesa.');return data.item||null;
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok||!data.ok){const error=new Error(data.error||'Não foi possível registrar a conclusão na Mesa.');if(silent)return {ok:false,error};throw error;}
+    return data.item||null;
   }
-  async function exportPNG(){
-    try{await document.fonts.ready;}catch{}const canvas=document.createElement('canvas');canvas.width=state.width;canvas.height=state.height;const ctx=canvas.getContext('2d');paintBackground(ctx);for(const e of state.elements){if(!e.visible)continue;ctx.save();ctx.globalAlpha=(e.opacity??100)/100;const cx=e.x+e.w/2,cy=e.y+e.h/2;ctx.translate(cx,cy);ctx.rotate((e.rotation||0)*Math.PI/180);ctx.translate(-e.w/2,-e.h/2);
+  function normalizeExportBaseName(value){const cleaned=String(value||'forma-design').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9_-]+/g,'_').replace(/^_+|_+$/g,'');return cleaned||'forma-design';}
+  function boardExportName(board,index,total){const base=normalizeExportBaseName(state.docTitle||'forma-design');const label=normalizeExportBaseName(board?.name||`slide_${index+1}`);return total>1?`${base}_${String(index+1).padStart(2,'0')}_${label}.png`:`${base}.png`;}
+  function boardBackgroundPaint(ctx,board){if((board?.bgMode||'solid')!=='gradient'){ctx.fillStyle=board?.bg||'#ffffff';ctx.fillRect(0,0,board?.width||state.width,board?.height||state.height);return;}ctx.fillStyle=canvasGradient(ctx,board?.width||state.width,board?.height||state.height,board?.gradient||state.gradient);ctx.fillRect(0,0,board?.width||state.width,board?.height||state.height);}
+  async function renderBoardCanvas(board){
+    const safeBoard=board||currentBoardData();
+    try{await document.fonts.ready;}catch{}
+    const canvas=document.createElement('canvas');canvas.width=safeBoard.width||state.width;canvas.height=safeBoard.height||state.height;const ctx=canvas.getContext('2d');boardBackgroundPaint(ctx,safeBoard);
+    for(const e of (safeBoard.elements||[])){if(!e.visible)continue;ctx.save();ctx.globalAlpha=(e.opacity??100)/100;const cx=e.x+e.w/2,cy=e.y+e.h/2;ctx.translate(cx,cy);ctx.rotate((e.rotation||0)*Math.PI/180);ctx.translate(-e.w/2,-e.h/2);
       if(e.type==='text'){ctx.fillStyle=e.textColor||'#111';ctx.font=`${e.fontWeight||400} ${e.fontSize||32}px ${familyCss(e.fontFamily)}, Arial, sans-serif`;ctx.textBaseline='top';if('letterSpacing' in ctx)ctx.letterSpacing=(e.letterSpacing||0)+'px';drawText(ctx,e.text,e.w,(e.fontSize||32)*(e.lineHeight||1.05),e.textAlign||'left');}
       else if(e.type==='image'){try{const img=await loadImage(e.src);drawImageFit(ctx,img,e.w,e.h,e.objectFit||'cover');}catch{}}
       else if(e.type==='mask'){maskPath(ctx,e);ctx.clip();if(e.src){try{const img=await loadImage(e.src);drawMaskedImage(ctx,img,e);}catch{}}else{ctx.fillStyle='#ddd';ctx.fillRect(0,0,e.w,e.h);}if(e.borderWidth){ctx.restore();ctx.save();ctx.globalAlpha=(e.opacity??100)/100;ctx.translate(cx,cy);ctx.rotate((e.rotation||0)*Math.PI/180);ctx.translate(-e.w/2,-e.h/2);ctx.strokeStyle=e.borderColor||'#fff';ctx.lineWidth=e.borderWidth*2;maskPath(ctx,e);ctx.stroke();}}
       else{ensureShapePaint(e);ctx.fillStyle=e.fillMode==='gradient'?canvasGradient(ctx,e.w,e.h,e.fillGradient):e.fill;shapePath(ctx,e);ctx.fill();if(e.strokeWidth>0){ctx.strokeStyle=e.strokeColor||'#000';ctx.lineWidth=e.strokeWidth;ctx.lineJoin='round';ctx.lineCap='round';shapePath(ctx,e);ctx.stroke();}}ctx.restore();}
-    canvas.toBlob(async blob=>{
-      try{await markEditorialProductionComplete();}
-      catch(error){showToast(error.message||'Não foi possível registrar a conclusão.',4200);return;}
-      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(state.docTitle||'forma-design').replace(/[^\w\-]+/g,'_')+'.png';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);showToast(state.platformMeta?.editorialEventId?'PNG exportado · pauta concluída na Mesa':'PNG exportado');
-    },'image/png');
+    return canvas;
   }
+  async function boardPngBlob(board){const canvas=await renderBoardCanvas(board);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Não foi possível gerar o PNG.');return blob;}
+  function triggerBlobDownload(blob,fileName){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1600);}
+  async function ensureFormaProjectReturnedToDesk(){
+    const eventId=state.platformMeta?.editorialEventId||null;if(!eventId)return null;
+    let projectId=state.platformMeta?.projectId||null;
+    try{if(!projectId)projectId=await saveProjectToProjects({silent:true});else await linkFormaProjectToDesk(projectId);}catch(error){showToast(error.message||'A arte será baixada, mas o vínculo com a Mesa não foi atualizado.',3600);}
+    return projectId;
+  }
+  async function finalizeEditorialCompletionAfterDownload(){if(!state.platformMeta?.editorialEventId)return false;const result=await markEditorialProductionComplete({silent:true});if(result&&result.ok===false){showToast(result.error?.message||'Não foi possível atualizar a Mesa, mas o download foi liberado.',4200);return false;}return true;}
+  async function exportCurrentBoard(){syncActiveArtboard();ensureArtboards();await ensureFormaProjectReturnedToDesk();const total=state.artboards?.length||1;const board=clone(state.artboards.find(b=>b.id===state.activeArtboardId)||currentBoardData());const boardIndex=(state.artboards||[]).findIndex(b=>b.id===board.id);const safeIndex=boardIndex>=0?boardIndex:0;const blob=await boardPngBlob(board);triggerBlobDownload(blob,boardExportName(board,safeIndex,total));const completed=await finalizeEditorialCompletionAfterDownload();showToast(completed?'Slide exportado · pauta concluída na Mesa':'Slide exportado');}
+  async function exportAllBoards(){syncActiveArtboard();ensureArtboards();await ensureFormaProjectReturnedToDesk();const boards=(state.artboards||[]).map(b=>clone(b));if(!boards.length){showToast('Nenhuma prancheta disponível para exportar');return;}let count=0;for(let i=0;i<boards.length;i+=1){const board=boards[i];const blob=await boardPngBlob(board);triggerBlobDownload(blob,boardExportName(board,i,boards.length));count+=1;if(i<boards.length-1)await new Promise(resolve=>setTimeout(resolve,120));}const completed=await finalizeEditorialCompletionAfterDownload();showToast(completed?`${count} slides exportados · pauta concluída na Mesa`:`${count} slides exportados`);}
+  async function exportPNG(){try{await exportCurrentBoard();}catch(error){showToast(error.message||'Falha ao exportar o slide',4200);}}
   function loadImage(src){return new Promise((res,rej)=>{const raw=String(src||''),safe=proxyExternalAsset(raw),i=new Image();i.onload=()=>res(i);i.onerror=()=>{if(safe!==raw){const retry=new Image();retry.crossOrigin='anonymous';retry.onload=()=>res(retry);retry.onerror=rej;retry.src=raw;}else rej(new Error('Imagem indisponível'));};i.src=safe;});}
   function drawImageFit(ctx,img,w,h,fit){const ir=img.width/img.height,br=w/h;let sw=img.width,sh=img.height,sx=0,sy=0,dx=0,dy=0,dw=w,dh=h;if(fit==='cover'){if(ir>br){sw=img.height*br;sx=(img.width-sw)/2;}else{sh=img.width/br;sy=(img.height-sh)/2;}ctx.drawImage(img,sx,sy,sw,sh,0,0,w,h);}else{if(ir>br){dh=w/ir;dy=(h-dh)/2;}else{dw=h*ir;dx=(w-dw)/2;}ctx.drawImage(img,0,0,img.width,img.height,dx,dy,dw,dh);}}
   function drawMaskedImage(ctx,img,e){const aspect=img.width/img.height,br=e.w/e.h;let bw,bh;if(aspect>br){bh=e.h;bw=bh*aspect;}else{bw=e.w;bh=bw/aspect;}const scale=clamp(e.imageScale||100,25,500)/100;bw*=scale;bh*=scale;const dx=(clamp(e.imageX||0,-200,200)/100)*(e.w/2),dy=(clamp(e.imageY||0,-200,200)/100)*(e.h/2);ctx.drawImage(img,e.w/2+dx-bw/2,e.h/2+dy-bh/2,bw,bh);}
   function drawText(ctx,text,w,lineH,align){const paragraphs=String(text).split('\n'),lines=[];paragraphs.forEach((p,pi)=>{const words=p.split(/\s+/).filter(Boolean);if(!words.length){lines.push('');return;}let line='';for(const word of words){const test=line?line+' '+word:word;if(ctx.measureText(test).width>w&&line){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);if(pi<paragraphs.length-1&&p==='')lines.push('');});ctx.textAlign=align==='center'?'center':align==='right'?'right':'left';const x=align==='center'?w/2:align==='right'?w:0;lines.forEach((l,i)=>ctx.fillText(l,x,i*lineH));}
-  $('#exportBtn').onclick=exportPNG;
+  $('#exportBtn').onclick=()=>{exportCurrentBoard().catch(error=>showToast(error.message||'Falha ao exportar o slide',4200));};
+  $('#exportAllBtn').onclick=()=>{exportAllBoards().catch(error=>showToast(error.message||'Falha ao exportar os slides',4200));};
 
   $$('[data-close-modal]').forEach(b=>b.onclick=()=>closeModal(b.dataset.closeModal));$$('.modal-backdrop').forEach(m=>m.addEventListener('pointerdown',e=>{if(e.target!==m)return;if(m.id==='slideCountModal')cancelSlideCountChoice();else closeModal(m.id);}));
   window.addEventListener('resize',()=>placeArtboard());
@@ -1685,7 +1720,7 @@
   function applyRondaProject(project,id=''){
     if(!project?.slides?.length)return false;
     const boards=buildRondaBoards(project);if(!boards.length)return false;
-    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;const applyTemplateButton=$('#directArticleApplyTemplate');if(applyTemplateButton)applyTemplateButton.disabled=false;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editorialEventId:project.editorialEventId||project.platformMeta?.editorialEventId||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1'};
+    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;const applyTemplateButton=$('#directArticleApplyTemplate');if(applyTemplateButton)applyTemplateButton.disabled=false;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editorialEventId:project.editorialEventId||project.platformMeta?.editorialEventId||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1',editorialEventSnapshot:project.editorialEventSnapshot||project.platformMeta?.editorialEventSnapshot||null};
     loadBoardToState(boards[0]);$('#docTitle').value=state.docTitle;state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>fitZoom());markDirty();setPlatformImportStatus('Importado da Ronda','ok');
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     if(!project?.articleVisuals?.primary && !project?.articleVisuals?.alternatives?.length){const q=document.getElementById('freeBankQuery');if(q&&!q.value)q.value=project.title||'';}return true;
@@ -1697,10 +1732,11 @@
       const slideCount=await requestCarouselSlideCount();
       if(!slideCount){setDirectArticleStatus('Pauta aguardando quantidade de slides. Nenhuma leitura ou IA foi iniciada.','',0);return true;}
       setDirectArticleStatus(`Quantidade confirmada: ${slideCount} slides. Iniciando leitura da fonte principal…`,'',2);
-      const data=await startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount});
+      const editorialEventId=params.get('editorialEvent')||null;
+      const [data,eventBundle]=await Promise.all([startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount}),editorialEventId?fetch(`/api/editorial-events/${encodeURIComponent(editorialEventId)}`,{cache:'no-store',credentials:'same-origin'}).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)]);
       const articleUrl=data?.verificationLinks?.[0]?.url||data?.evidencePack?.canonicalUrl||'';
       const project=await buildDirectArticleProject(data,articleUrl);
-      project.source='forma-production-topic';project.topicId=topicId;project.editorialEventId=params.get('editorialEvent')||null;renderProductionProvenance(data);
+      project.source='forma-production-topic';project.topicId=topicId;project.editorialEventId=editorialEventId;project.editorialEventSnapshot=eventBundle?.event?{eventId:eventBundle.event.eventId,title:eventBundle.event.titulo,resumo:eventBundle.event.resumoEditorial||eventBundle.event.resumo,editoria:eventBundle.event.editoria,subeditoria:eventBundle.event.subeditoria,updates:eventBundle.event.informacoesNovas||[],sources:(eventBundle.event.fontes||[]).map(source=>({name:source.name,url:source.url,official:source.official||false,publishedAt:source.publishedAt||null})),timeline:eventBundle.event.timeline||[]}:null;renderProductionProvenance(data);
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas da pauta.');
       $('#directArticleApplyTemplate').disabled=false;
       setProductionRetryVisible(false);setDirectArticleStatus(`Pauta produzida no FORMA · conteúdo neutro PT-BR · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100. Escolha o template depois.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;

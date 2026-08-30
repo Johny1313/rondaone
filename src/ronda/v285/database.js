@@ -2,7 +2,7 @@ import { getReliabilitySummary } from "../../reliability/core.js";
 import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.9.7.4.9";
+export const DATABASE_SCHEMA_VERSION = "2.9.7.4.12";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -553,6 +553,21 @@ async function ensureCarouselReliabilitySchema(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_carousel_reliability_status ON carousel_reliability(status, completed_at DESC)").run();
 }
 
+async function ensureEditorialProductionTrackingColumns(db) {
+  const info = await db.prepare("PRAGMA table_info(editorial_production_tracking)").all();
+  const columns = new Set((info?.results || []).map((row) => row.name));
+  const additions = [
+    ["review_by_user_id", "TEXT"],
+    ["review_at", "TEXT"],
+    ["forma_project_id", "TEXT"],
+    ["forma_preview_data_url", "TEXT"],
+    ["forma_project_updated_at", "TEXT"],
+  ];
+  for (const [name,type] of additions) {
+    if (!columns.has(name)) await db.prepare(`ALTER TABLE editorial_production_tracking ADD COLUMN ${name} ${type}`).run();
+  }
+}
+
 export async function ensureSchema(db) {
   if (!db) throw new Error("Binding D1 'DB' não configurado.");
   if (initializedBindings.has(db)) return;
@@ -565,6 +580,7 @@ export async function ensureSchema(db) {
     await ensureIntelligentJobRequestColumn(db);
     await ensureSourceStateHotfixColumns(db);
     await ensureCarouselReliabilitySchema(db);
+    await ensureEditorialProductionTrackingColumns(db);
     if (version !== DATABASE_SCHEMA_VERSION) {
       const now = new Date().toISOString();
       await db.prepare(`
@@ -1748,10 +1764,15 @@ function editorialProductionRow(row) {
     pautaBy: row.pauta_by_user_id ? { id:row.pauta_by_user_id, name:row.pauta_by_name || "Redação" } : null,
     productionBy: row.production_by_user_id ? { id:row.production_by_user_id, name:row.production_by_name || "Redação" } : null,
     formaBy: row.forma_by_user_id ? { id:row.forma_by_user_id, name:row.forma_by_name || "Redação" } : null,
+    reviewBy: row.review_by_user_id ? { id:row.review_by_user_id, name:row.review_by_name || "Redação" } : null,
     completedBy: row.completed_by_user_id ? { id:row.completed_by_user_id, name:row.completed_by_name || "Redação" } : null,
     startedAt: row.started_at || null,
     formaAt: row.forma_at || null,
+    reviewAt: row.review_at || null,
     completedAt: row.completed_at || null,
+    formaProjectId: row.forma_project_id || null,
+    formaPreviewDataUrl: row.forma_preview_data_url || null,
+    formaProjectUpdatedAt: row.forma_project_updated_at || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
   };
@@ -1762,11 +1783,13 @@ const EDITORIAL_PRODUCTION_SELECT = `
     pauta.display_name AS pauta_by_name,
     prod.display_name AS production_by_name,
     forma.display_name AS forma_by_name,
+    review.display_name AS review_by_name,
     done.display_name AS completed_by_name
   FROM editorial_production_tracking t
   LEFT JOIN users pauta ON pauta.id=t.pauta_by_user_id
   LEFT JOIN users prod ON prod.id=t.production_by_user_id
   LEFT JOIN users forma ON forma.id=t.forma_by_user_id
+  LEFT JOIN users review ON review.id=t.review_by_user_id
   LEFT JOIN users done ON done.id=t.completed_by_user_id
 `;
 
@@ -1784,7 +1807,7 @@ export async function getEditorialProductionTracking(db, eventId, { includeHisto
   const id = String(eventId || "").trim();
   if (!id) return null;
   const row = await db.prepare(`${EDITORIAL_PRODUCTION_SELECT} WHERE t.event_id=? LIMIT 1`).bind(id).first();
-  const item = editorialProductionRow(row) || { eventId:id, status:"available", pautaBy:null, productionBy:null, formaBy:null, completedBy:null, startedAt:null, formaAt:null, completedAt:null, createdAt:null, updatedAt:null };
+  const item = editorialProductionRow(row) || { eventId:id, status:"available", pautaBy:null, productionBy:null, formaBy:null, reviewBy:null, completedBy:null, startedAt:null, formaAt:null, reviewAt:null, completedAt:null, formaProjectId:null, formaPreviewDataUrl:null, formaProjectUpdatedAt:null, createdAt:null, updatedAt:null };
   if (includeHistory) {
     const result = await db.prepare(`SELECT e.*,u.display_name FROM editorial_production_events e LEFT JOIN users u ON u.id=e.user_id WHERE e.event_id=? ORDER BY e.created_at DESC LIMIT 80`).bind(id).all();
     item.history = (result?.results || []).map(event => ({
@@ -1796,7 +1819,7 @@ export async function getEditorialProductionTracking(db, eventId, { includeHisto
   return item;
 }
 
-export async function updateEditorialProductionTracking(db, eventId, { action, userId } = {}) {
+export async function updateEditorialProductionTracking(db, eventId, { action, userId, payload = {} } = {}) {
   await ensureSchema(db);
   const id = String(eventId || "").trim();
   if (!id) throw new Error("Evento editorial inválido.");
@@ -1804,25 +1827,49 @@ export async function updateEditorialProductionTracking(db, eventId, { action, u
   const current = await getEditorialProductionTracking(db,id,{includeHistory:false});
   const fromStatus = current?.status || "available";
   const now = new Date().toISOString();
-  const allowed = new Set(["start","send_to_forma","complete","reopen"]);
+  const allowed = new Set(["start","send_to_forma","mark_review","complete","reopen","link_forma_project"]);
   if (!allowed.has(action)) throw new Error("Ação de produção inválida.");
+
+  const activeOwnerId=current?.productionBy?.id||null;
+  const activeOwnerName=current?.productionBy?.name||"outro profissional";
+  if (["start","send_to_forma"].includes(action) && ["production","forma","review"].includes(fromStatus) && activeOwnerId && activeOwnerId!==userId) {
+    throw new Error(`Esta pauta já está em produção por ${activeOwnerName}. Reabra ou faça a passagem de responsabilidade antes de assumir.`);
+  }
 
   let toStatus = fromStatus;
   let pautaBy = current?.pautaBy?.id || null;
-  let productionBy = current?.productionBy?.id || null;
+  let productionBy = activeOwnerId;
   let formaBy = current?.formaBy?.id || null;
+  let reviewBy = current?.reviewBy?.id || null;
   let completedBy = current?.completedBy?.id || null;
   let startedAt = current?.startedAt || null;
   let formaAt = current?.formaAt || null;
+  let reviewAt = current?.reviewAt || null;
   let completedAt = current?.completedAt || null;
+  let formaProjectId = current?.formaProjectId || null;
+  let formaPreviewDataUrl = current?.formaPreviewDataUrl || null;
+  let formaProjectUpdatedAt = current?.formaProjectUpdatedAt || null;
+
+  // Hardening v0.9.7.4.12: ações idempotentes não geram UPDATE + histórico redundantes.
+  if (action === "start" && fromStatus === "production" && activeOwnerId === userId) return current;
+  if (action === "send_to_forma" && fromStatus === "forma" && activeOwnerId === userId) return current;
+  if (action === "mark_review" && fromStatus === "review" && current?.reviewBy?.id === userId) return current;
+  if (action === "complete" && fromStatus === "completed") return current;
+  if (action === "reopen" && fromStatus === "production" && activeOwnerId === userId) return current;
+  if (action === "link_forma_project") {
+    const nextProjectId=String(payload?.projectId||"").trim()||null;
+    const nextPreview=String(payload?.previewDataUrl||"");
+    const sameProject=Boolean(nextProjectId)&&nextProjectId===formaProjectId;
+    const samePreview=!nextPreview||nextPreview===formaPreviewDataUrl;
+    if (sameProject&&samePreview&&fromStatus==="forma") return current;
+  }
 
   if (action === "start") {
     toStatus = "production";
     pautaBy = pautaBy || userId;
     productionBy = userId;
     startedAt = startedAt || now;
-    completedBy = null;
-    completedAt = null;
+    reviewBy = null; reviewAt = null; completedBy = null; completedAt = null;
   } else if (action === "send_to_forma") {
     toStatus = "forma";
     pautaBy = pautaBy || userId;
@@ -1830,8 +1877,14 @@ export async function updateEditorialProductionTracking(db, eventId, { action, u
     formaBy = userId;
     startedAt = startedAt || now;
     formaAt = now;
-    completedBy = null;
-    completedAt = null;
+    reviewBy = null; reviewAt = null; completedBy = null; completedAt = null;
+  } else if (action === "mark_review") {
+    toStatus = "review";
+    pautaBy = pautaBy || userId;
+    productionBy = productionBy || userId;
+    reviewBy = userId;
+    reviewAt = now;
+    completedBy = null; completedAt = null;
   } else if (action === "complete") {
     toStatus = "completed";
     pautaBy = pautaBy || userId;
@@ -1843,23 +1896,36 @@ export async function updateEditorialProductionTracking(db, eventId, { action, u
     toStatus = "production";
     productionBy = userId;
     startedAt = startedAt || now;
-    completedBy = null;
-    completedAt = null;
+    reviewBy = null; reviewAt = null; completedBy = null; completedAt = null;
+  } else if (action === "link_forma_project") {
+    pautaBy = pautaBy || userId;
+    productionBy = productionBy || userId;
+    formaBy = formaBy || userId;
+    if (fromStatus === "available" || fromStatus === "production") toStatus = "forma";
+    formaAt = formaAt || now;
+    formaProjectId = String(payload?.projectId || formaProjectId || "").trim() || null;
+    const preview = String(payload?.previewDataUrl || "");
+    if (preview.startsWith("data:image/") && preview.length <= 180000) formaPreviewDataUrl = preview;
+    formaProjectUpdatedAt = now;
   }
 
   await db.prepare(`INSERT INTO editorial_production_tracking (
-      event_id,desk_status,pauta_by_user_id,production_by_user_id,forma_by_user_id,completed_by_user_id,
-      started_at,forma_at,completed_at,created_at,updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      event_id,desk_status,pauta_by_user_id,production_by_user_id,forma_by_user_id,review_by_user_id,completed_by_user_id,
+      started_at,forma_at,review_at,completed_at,forma_project_id,forma_preview_data_url,forma_project_updated_at,created_at,updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(event_id) DO UPDATE SET
       desk_status=excluded.desk_status,pauta_by_user_id=excluded.pauta_by_user_id,
       production_by_user_id=excluded.production_by_user_id,forma_by_user_id=excluded.forma_by_user_id,
-      completed_by_user_id=excluded.completed_by_user_id,started_at=excluded.started_at,forma_at=excluded.forma_at,
-      completed_at=excluded.completed_at,updated_at=excluded.updated_at`).bind(
-        id,toStatus,pautaBy,productionBy,formaBy,completedBy,startedAt,formaAt,completedAt,current?.createdAt || now,now
+      review_by_user_id=excluded.review_by_user_id,completed_by_user_id=excluded.completed_by_user_id,
+      started_at=excluded.started_at,forma_at=excluded.forma_at,review_at=excluded.review_at,
+      completed_at=excluded.completed_at,forma_project_id=excluded.forma_project_id,
+      forma_preview_data_url=excluded.forma_preview_data_url,forma_project_updated_at=excluded.forma_project_updated_at,
+      updated_at=excluded.updated_at`).bind(
+        id,toStatus,pautaBy,productionBy,formaBy,reviewBy,completedBy,startedAt,formaAt,reviewAt,completedAt,
+        formaProjectId,formaPreviewDataUrl,formaProjectUpdatedAt,current?.createdAt || now,now
       ).run();
   await db.prepare(`INSERT INTO editorial_production_events (id,event_id,event_type,from_status,to_status,user_id,payload_json,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-    .bind(crypto.randomUUID(),id,action,fromStatus,toStatus,userId,JSON.stringify({source:"ronda-one-desk"}),now).run();
+    .bind(crypto.randomUUID(),id,action,fromStatus,toStatus,userId,JSON.stringify({source:"ronda-one-desk",projectId:formaProjectId||null}),now).run();
   return getEditorialProductionTracking(db,id,{includeHistory:true});
 }
 

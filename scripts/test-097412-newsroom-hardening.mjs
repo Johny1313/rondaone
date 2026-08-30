@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const read=p=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8');
+const mesa=read('public/ronda/editorial-mesa.js');
+const db=read('src/ronda/v285/database.js');
+const design=read('public/design/index.html');
+const platform=read('src/index.js');
+const shell=read('src/ronda/shell.js');
+
+assert.match(mesa,/let loadPromise=null/);
+assert.match(mesa,/SOURCE_DIAGNOSTICS_TTL_MS=180000/);
+assert.match(mesa,/requestAnimationFrame\(renderFilteredMesaNow\)/);
+assert.match(mesa,/if\(loadPromise\)return loadPromise/);
+assert.match(db,/ações idempotentes não geram UPDATE/);
+assert.match(db,/action === "complete" && fromStatus === "completed"/);
+assert.match(db,/sameProject&&samePreview/);
+assert.match(design,/const max=180/);
+assert.match(design,/toDataURL\('image\/jpeg',\.52\)/);
+assert.match(design,/let deskFormaSync=/);
+assert.match(design,/Date\.now\(\)-deskFormaSync\.at<120000/);
+assert.match(platform,/newsroomOperatingSystemHardeningV097412/);
+assert.match(shell,/0\.9\.7\.4\.12-newsroom-os-hardening/);
+console.log('RONDA ONE v0.9.7.4.12 Newsroom OS Hardening: OK');
