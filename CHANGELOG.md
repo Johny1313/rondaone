@@ -1,3 +1,27 @@
+# v0.9.7.5 — Produção leve + scraping restaurado + tarefas unificadas
+
+## Arquitetura
+- Kanban/Mesa deixa de participar de scraping, Evidence Pack, IA e geração;
+- nova aba **Produção** atua apenas como gerenciamento de status;
+- pauta enviada da Ronda ao FORMA entra em Produção sem alterar o pipeline de leitura;
+- leitura de pautas da Ronda volta ao `sourceType=topic` e ao scraping completo;
+- tarefas geradas diretamente no FORMA também entram automaticamente em Produção.
+
+## Fluxo
+- Produção → Aprovação → Finalização → Concluído;
+- download final conclui automaticamente a tarefa;
+- envio para revisão move para Aprovação;
+- aprovação move para Finalização;
+- cards mostram título e quem gerou/assumiu a tarefa.
+
+## Comentários
+- cada card possui campo de comentários;
+- comentário é persistência leve no D1 e não dispara scraping, leitura, IA ou geração.
+
+## Scraping
+- `scraper.js`, `collector.js`, `article-reader.js` e `production/scraping-engine.js` permanecem idênticos à build consolidada 0.9.7.4.12;
+- removido o Event-First do Kanban que podia pular a leitura completa e reduzir qualidade.
+
 # v0.9.7.5 — Adaptive Retry No Repeat
 
 - corrige repetição de tentativas idênticas na leitura de matéria;

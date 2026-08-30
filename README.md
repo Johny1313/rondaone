@@ -1,14 +1,25 @@
-# RONDA ONE Cloud v0.9.7.5 — Adaptive Retry No Repeat
+# RONDA ONE Cloud v0.9.7.5 — Produção leve + Adaptive Retry
 
-Correção de regressão na recuperação de leitura do FORMA. Mantém o mesmo job, mas cada nova tentativa muda automaticamente a estratégia para não repetir a mesma rota que acabou de falhar.
+Build consolidada sobre a 0.9.7.4.12 com duas correções principais: retry adaptativo sem repetição cega e separação completa entre gerenciamento de produção e pipeline editorial.
+
+## Produção leve
+- nova aba **Produção**: Produção → Aprovação → Finalização → Concluído;
+- serve somente para mover/indicar status das tarefas;
+- não executa scraping, diagnóstico de fontes, Evidence Pack, IA ou geração;
+- tarefas vindas da Ronda entram em Produção ao serem enviadas ao FORMA;
+- tarefas geradas diretamente no FORMA também entram em Produção;
+- cards exibem título, responsável/quem gerou e comentários;
+- comentários não disparam processamento editorial;
+- download final conclui a tarefa.
+
+## Qualidade de leitura restaurada
+- pautas da Ronda voltam ao pipeline completo `topic → scraping → Evidence Pack → geração`;
+- o gerenciamento da Produção não fornece conteúdo substituto para a leitura;
+- núcleos `scraper`, `collector`, `article-reader` e `production/scraping-engine` são idênticos aos da 0.9.7.4.12.
 
 ## Retry adaptativo
-- 1ª nova tentativa: troca o transporte preferido;
-- 2ª nova tentativa: leitura profunda com janela maior e Browser Run primeiro quando disponível;
-- 3ª e seguintes: recupera snapshot/cache e reaplica todas as rotas disponíveis;
-- preserva o mesmo job e Evidence Pack;
-- registra retryNumber, retryMode e avoidRepeat no histórico operacional;
-- a interface informa que a nova tentativa está usando uma rota diferente.
+- preserva o mesmo job e o Evidence Pack válido;
+- cada retry muda de estratégia em vez de repetir cegamente a rota que falhou.
 
 # RONDA ONE Cloud v0.9.7.4.12 — Newsroom Operating System Hardening
 
