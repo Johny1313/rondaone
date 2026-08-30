@@ -262,7 +262,7 @@
     if(typeof waitForIntelligentJob==='function' && !waitForIntelligentJob.__rondaNativeResilient){
       waitForIntelligentJob=async function(jobId,requestSerial,pollAfterMs=1500){
         const startedAt=Date.now();
-        const hardDeadline=startedAt+(8*60*1000);
+        const hardDeadline=startedAt+(90*1000);
         let transientErrors=0;
         let lastUiUpdateAt=0;
         const updateUi=(callback,minGap=1200)=>{
@@ -330,7 +330,7 @@
           if(/processamento foi encerrado|ciclo|tarefa/i.test(String(error?.message||'')))throw error;
         }
         try{state.carouselLoading=false}catch{}
-        throw new Error('O carrossel ainda não retornou conclusão após 8 minutos. A tela foi liberada; ao tentar novamente, o RONDA reaproveita o mesmo job ou o resultado já salvo, sem duplicar processamento.');
+        throw new Error('O carrossel ainda não retornou conclusão dentro do limite operacional. A tela foi liberada; ao tentar novamente, o RONDA reaproveita o mesmo job ou o resultado já salvo, sem duplicar processamento.');
       };
     }
   }catch(error){

@@ -775,6 +775,7 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
     await recordUsageMetric(db, 'topics_generated', { value:Number(totals.topics)||0, samples:1, at:new Date(completedAt) }).catch(() => null);
     await recordUsageMetric(db, 'items_collected', { value:Number(totals.items)||0, samples:1, at:new Date(completedAt) }).catch(() => null);
   }
+  await clearRoundPreview(db,id).catch(()=>null);
   return { id, status, completedAt };
 }
 
@@ -814,19 +815,39 @@ export async function saveCachedTranslations(db, entries = []) {
   }
 }
 
+
+export async function saveRoundPreview(db,{runId,triggerType="scheduled",payload}={}){
+  await ensureSchema(db);if(!runId||!payload||typeof payload!=="object")return null;
+  const updatedAt=new Date().toISOString();
+  const value=JSON.stringify({runId,triggerType,payload,updatedAt});
+  await db.prepare(`INSERT INTO app_state(key,value,updated_at) VALUES('latest_round_preview',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(value,updatedAt).run();
+  return {runId,updatedAt};
+}
+
+export async function clearRoundPreview(db,runId=null){
+  await ensureSchema(db);
+  if(!runId){await db.prepare("DELETE FROM app_state WHERE key='latest_round_preview'").run();return true;}
+  const row=await db.prepare("SELECT value FROM app_state WHERE key='latest_round_preview' LIMIT 1").first();
+  try{const parsed=JSON.parse(row?.value||"{}");if(parsed?.runId&&parsed.runId!==runId)return false;}catch{}
+  await db.prepare("DELETE FROM app_state WHERE key='latest_round_preview'").run();return true;
+}
+
+async function getRoundPreview(db){
+  const row=await db.prepare("SELECT value,updated_at FROM app_state WHERE key='latest_round_preview' LIMIT 1").first();
+  if(!row?.value)return null;try{const parsed=JSON.parse(row.value);const updatedMs=Date.parse(parsed?.updatedAt||row.updated_at||"");if(!parsed?.payload||!Number.isFinite(updatedMs)||Date.now()-updatedMs>10*60*1000)return null;return {...parsed,updatedAt:parsed.updatedAt||row.updated_at};}catch{return null;}
+}
+
 export async function getLatestRound(db) {
   await ensureSchema(db);
-  const row = await db
-    .prepare("SELECT id, trigger_type, completed_at, payload_json FROM runs WHERE status = 'success' ORDER BY completed_at DESC LIMIT 1")
-    .first();
-  if (!row?.payload_json) return null;
-  try {
-    const payload = JSON.parse(row.payload_json);
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-    return { ...payload, runId: row.id, triggerType: row.trigger_type, storedAt: row.completed_at };
-  } catch {
-    throw new Error("A última ronda armazenada está corrompida.");
-  }
+  const [row,preview] = await Promise.all([
+    db.prepare("SELECT id, trigger_type, completed_at, payload_json FROM runs WHERE status = 'success' ORDER BY completed_at DESC LIMIT 1").first(),
+    getRoundPreview(db).catch(()=>null),
+  ]);
+  let stored=null;
+  if(row?.payload_json){try{const payload=JSON.parse(row.payload_json);if(payload&&typeof payload==="object"&&!Array.isArray(payload))stored={...payload,runId:row.id,triggerType:row.trigger_type,storedAt:row.completed_at};}catch{throw new Error("A última ronda armazenada está corrompida.");}}
+  const previewMs=Date.parse(preview?.updatedAt||"");const storedMs=Date.parse(stored?.storedAt||stored?.collectedAt||"");
+  if(preview?.payload&&Number.isFinite(previewMs)&&(!Number.isFinite(storedMs)||previewMs>storedMs)){return {...preview.payload,runId:preview.runId,triggerType:preview.triggerType,storedAt:preview.updatedAt,preview:true};}
+  return stored;
 }
 
 export async function getRunHistory(db, limit = 30, { includeFastLane = false, includeTechnical = false } = {}) {

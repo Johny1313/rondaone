@@ -1,6 +1,53 @@
-# RONDA ONE Cloud v0.9.7.2.1 — Mandatory Slide Count
+# RONDA ONE Cloud v0.9.7.4 — Performance Engine
 
-A v0.9.7.2.1 é cumulativa e mantém toda a base da v0.9.7.2: mantém o Production Engine, scraping, Evidence Pack, fast paths e créditos da v0.9.7.1, mas simplifica a produção para **uma fonte principal + um único backup**, normalização editorial em **português do Brasil** e geração **Content First**, na qual o template só é aplicado depois que o conteúdo está pronto.
+A v0.9.7.4 é cumulativa e preserva toda a linha anterior. O foco desta rodada é **latência operacional**: produção manual no FORMA usa um Interactive Fast Path e a Ronda publica um preview útil quando atinge a meta de 25+ fontes disponíveis, enquanto a coleta completa continua até finalizar.
+
+## v0.9.7.4 — Fast Ronda 25+
+
+- mantém as 39 fontes cadastradas;
+- coleta completa sobe para concorrência controlada de até 14 fontes;
+- RSS saudável com volume suficiente encerra a fonte sem obrigar uma segunda consulta HTML;
+- timeout da primeira passada é reduzido para 4,5 s por rota;
+- quando há **25+ fontes disponíveis** e pelo menos 8 respostas frescas na rodada, uma prévia é publicada imediatamente;
+- a prévia em produção mantém somente conteúdo seguro em PT-BR;
+- a coleta continua e substitui a prévia pela ronda final quando terminar;
+- a última ronda final continua preservada se a coleta em andamento falhar;
+- `ROUND_EARLY_SOURCE_TARGET` permite alterar a meta (padrão 25);
+- `ROUND_EARLY_FRESH_MINIMUM` controla o mínimo de respostas frescas antes da prévia (padrão 8).
+
+## v0.9.7.3 — Interactive Fast Path
+
+Para ações manuais no FORMA, Queue deixa de ser caminho obrigatório. O fluxo principal é:
+
+```text
+usuário confirma nº de slides
+        ↓
+leitura direta / cache
+        ↓
+Evidence Pack
+        ↓
+IA principal
+        ↓
+Quality Gate
+        ↓
+carrossel neutro
+```
+
+- `POST /api/production/jobs` tenta concluir diretamente na própria interação por até 12 s;
+- se não concluir nesse intervalo, o mesmo job continua em background e o FORMA acompanha sem criar outro;
+- ARTICLE_READ_QUEUE e CAROUSEL_AI_QUEUE continuam disponíveis para recovery e automações;
+- o carrossel é gerado diretamente do Evidence Pack, sem reconstruir HTML sintético nem reler a matéria;
+- prompt usa somente as evidências necessárias, limitado a aproximadamente 18 itens;
+- IA secundária só entra quando a principal não passa no Quality Gate;
+- matérias estrangeiras usam tradução **evidence-first**: título, subtítulo e evidências necessárias são traduzidos, sem traduzir 20 mil caracteres antes de começar;
+- o texto original continua preservado para auditoria;
+- deadline visível pós-Fast-Path foi reduzido para 20 s; o sistema não volta ao comportamento de espera de minutos.
+
+### Metas de engenharia
+
+- produção nova típica: **5–12 s** quando portal e Workers AI respondem normalmente;
+- cache/Evidence Pack: caminho ainda mais curto;
+- Ronda: primeira visão útil com **25+ fontes** antes da conclusão das 39, sempre que a disponibilidade real permitir.
 
 A divisão operacional passa a ser explícita:
 
@@ -15,17 +62,23 @@ FORMA DESIGN
 A RONDA não é mais o ponto principal de geração. Nos cards, a ação passa a ser **Produzir no FORMA →**. Pautas da RONDA, eventos da Mesa, links externos e texto próprio entram no mesmo Production Engine.
 
 
+## v0.9.7.2.2 — No-Hang Production
+
+- remove o antigo polling de minutos e aplica recuperação automática por etapa;
+- fallback determinístico continua disponível quando o Evidence Pack já existe;
+- jobs parados são recuperados pelo backend sem duplicar a produção;
+- a v0.9.7.4 reduz ainda mais esses limites: 12 s de Fast Path + até 20 s de acompanhamento visível.
+
 ## v0.9.7.2.1 — Mandatory Slide Count
 
 Antes de uma produção nova começar, o FORMA pergunta obrigatoriamente **quantos slides terá o carrossel**. A confirmação acontece antes de scraping, leitura, Evidence Pack ou Multi-AI.
 
 - presets rápidos: 3, 5, 7 e 10 slides;
 - quantidade personalizada entre 3 e 15;
-- vale para pauta da RONDA/Mesa, link externo e qualquer chamada nova ao Production Engine;
-- o backend também rejeita `POST /api/production/jobs` sem `slideCount`, evitando que outro cliente pule a etapa;
+- vale para pauta da RONDA/Mesa, link externo e texto próprio;
+- o backend rejeita produção sem `slideCount`;
 - cancelar a escolha não cria job e não dispara leitura/IA;
-- trocar template ou editar um carrossel já pronto não pergunta novamente, pois não inicia nova geração.
-
+- trocar template ou editar um carrossel já pronto não pergunta novamente.
 
 ## v0.9.7.2 — Single Source + Content First
 

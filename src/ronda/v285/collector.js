@@ -26,14 +26,16 @@ function sourceRefreshMinutes(id) {
   return 5;
 }
 
-export async function runPool(items, concurrency, worker) {
+export async function runPool(items, concurrency, worker, onSettled = null) {
   const list = Array.isArray(items) ? items : [];
   const output = new Array(list.length);
   let cursor = 0;
   async function consume() {
     while (cursor < list.length) {
       const index = cursor++;
-      output[index] = await worker(list[index], index);
+      const value = await worker(list[index], index);
+      output[index] = value;
+      if (typeof onSettled === "function") { try { await onSettled(value, index); } catch {} }
     }
   }
   await Promise.all(Array.from({ length: Math.min(Math.max(1, Number(concurrency) || 1), list.length) }, consume));
@@ -381,7 +383,7 @@ function routeLabel(routeSet) {
   return routeSet.has("cache") ? "cache" : "no-new";
 }
 
-export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null, sourceState = null) {
+export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null, sourceState = null, options = {}) {
   const errors = [];
   let successfulResponses = 0;
   const effectiveCutoff = cutoff;
@@ -408,6 +410,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       reserveExternalRequest(requestBudget, url);
       const response = await fetchWithTimeout(url, fetcher, {
         validator: validators[url],
+        timeoutMs: Number(options.timeoutMs) || 8_000,
         accept: scrape
           ? "text/html,application/xhtml+xml;q=0.9,*/*;q=0.7"
           : "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.7",
@@ -423,7 +426,8 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
           routes.push("cache");
         }
         lastUrl = url;
-        const discoveryRoutesSatisfied = !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
+        const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum);
+        const discoveryRoutesSatisfied = directHealthy || !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
         if (mergedItems.length >= desiredMinimum && discoveryRoutesSatisfied) break;
         continue;
       }
@@ -457,7 +461,8 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
 
       // Em fontes com scraper, uma resposta RSS cheia não encerra a descoberta:
       // ao menos uma página HTML é consultada para reduzir a latência de publicação.
-      const discoveryRoutesSatisfied = !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
+      const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum);
+      const discoveryRoutesSatisfied = directHealthy || !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
       if (mergedItems.length >= desiredMinimum && discoveryRoutesSatisfied) break;
     } catch (error) {
       errors.push(errorDiagnostic(error));
@@ -918,6 +923,11 @@ export function summarizePortalStatuses(statuses = []) {
   };
 }
 
+function optionsFullConcurrency(mode, feedCount){
+  if(mode==="fast")return Math.min(8,Math.max(4,feedCount));
+  return feedCount>=30?14:Math.min(12,Math.max(6,feedCount));
+}
+
 export async function collectRound({
   fetcher = fetch,
   now = new Date(),
@@ -928,6 +938,9 @@ export async function collectRound({
   mode = "full",
   forceRefresh = false,
   externalRequestLimit = PORTAL_SUBREQUEST_LIMIT,
+  earlySourceTarget = 25,
+  earlyFreshMinimum = 8,
+  onEarlySnapshot = null,
 } = {}) {
   const startedAt = Date.now();
   const collectedAt = new Date(now);
@@ -945,9 +958,39 @@ export async function collectRound({
     else portalResults[index] = deferredSourceResult(feed, state, cutoff);
   });
 
-  const dueResults = await runPool(due, fastMode ? 6 : 8, async ({ feed, state }) => (
-    collectFeed(feed, cutoff, portalFetcher, requestBudget, state)
-  ));
+  let earlyPublished = false;
+  const fullConcurrency = Math.max(8, Math.min(16, Number(optionsFullConcurrency(mode, feeds.length)) || 14));
+  const dueConcurrency = fastMode ? 8 : fullConcurrency;
+  const feedOptions = fastMode
+    ? { timeoutMs: 3_500, skipScrapeWhenDirectHealthy: false }
+    : { timeoutMs: 4_500, skipScrapeWhenDirectHealthy: true };
+  const maybePublishEarly = async () => {
+    if (fastMode || earlyPublished || typeof onEarlySnapshot !== "function") return;
+    const interim = portalResults.map((result, index) => {
+      if (result) return result;
+      const feed = feeds[index]; const state = sourceStateFor(sourceStates, feed.id);
+      return deferredSourceResult(feed, state, cutoff);
+    });
+    const available = interim.filter((result) => result?.status?.ok && Number(result?.status?.count) > 0).length;
+    const fresh = interim.filter((result, index) => portalResults[index] && result?.status?.ok && Number(result?.status?.count) > 0 && !result?.status?.cached && result?.status?.route !== "cache").length;
+    if (available < Math.max(1, Number(earlySourceTarget) || 25) || fresh < Math.max(1, Number(earlyFreshMinimum) || 8)) return;
+    earlyPublished = true;
+    const resilient = interim.map((result,index)=>{const feed=feeds[index];const state=sourceStateFor(sourceStates,feed.id);if(result.status.ok)return {...result,status:enrichStatus(result.status,state,feed)};const cached=cachedItemsFromState(state,feed,cutoff);if(!cached.length)return {...result,status:enrichStatus(result.status,state,feed)};return {items:cached,status:enrichStatus({...result.status,ok:true,count:cached.length,error:null,warning:result.status.error,fallback:true,cached:true,degraded:true,route:"cache"},state,feed),operational:result.operational};});
+    const items = uniqueItems(resilient.flatMap((result)=>applyDiscoveryMetadata(result.items, sourceStateFor(sourceStates, result?.status?.id), collectedAt)), 900);
+    const statuses = resilient.map((result)=>result.status);
+    const diagnostics = summarizePortalStatuses(statuses);
+    const topics = buildTopics(items, collectedAt, 80);
+    const sourceCount = new Set(items.map((item)=>item.sourceName).filter(Boolean)).size;
+    await onEarlySnapshot({
+      ok:true,collectionStatus:"partial",degraded:true,mode:"full",earlyPreview:true,collectedAt:collectedAt.toISOString(),windowHours:24,durationMs:Date.now()-startedAt,
+      sources:statuses,diagnostics:{portals:diagnostics},totals:{items:items.length,topics:topics.length,sources:sourceCount,socialItems:0,dedicatedItems:Number(previousRound?.dedicatedMonitoring?.items?.length)||0},
+      items,topics,dedicatedMonitoring:previousRound?.dedicatedMonitoring||{enabled:false,terms:[],items:[],statuses:[],totals:{terms:0,items:0,sources:0}},
+      operational:{mode:"full",earlyPreview:true,sourceTarget:Number(earlySourceTarget)||25,availableSources:available,freshSources:fresh,portalConcurrency:dueConcurrency,externalPortalRequests:requestBudget.used,externalPortalLimit:safeExternalRequestLimit}
+    });
+  };
+  const dueResults = await runPool(due, dueConcurrency, async ({ feed, state }) => (
+    collectFeed(feed, cutoff, portalFetcher, requestBudget, state, feedOptions)
+  ), async (result,index) => { portalResults[due[index].index] = result; await maybePublishEarly(); });
   due.forEach((entry, index) => { portalResults[entry.index] = dueResults[index]; });
 
   let resilientPortalResults = portalResults.map((result, index) => {
@@ -1034,8 +1077,8 @@ export async function collectRound({
       sourceStateUpdates,
       operational: {
         mode,
-        portalConcurrency: fastMode ? 6 : 8,
-        sourceRecovery: "0.9.2-rss-scrape-editorial-desk-cache",
+        portalConcurrency: fastMode ? 8 : dueConcurrency,
+        sourceRecovery: "0.9.7.4-fast-25-plus-rss-first-cache",
         healthyMaxRefreshMinutes: fastMode ? 1 : 5,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1087,8 +1130,8 @@ export async function collectRound({
       operational: {
         mode: "fast",
         fastLane: true,
-        portalConcurrency: 6,
-        sourceRecovery: "0.9.2-rss-scrape-editorial-desk-cache",
+        portalConcurrency: 8,
+        sourceRecovery: "0.9.7.4-fast-25-plus-rss-first-cache",
         healthyMaxRefreshMinutes: 1,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1130,8 +1173,8 @@ export async function collectRound({
     sourceStateUpdates,
     operational: {
       mode: "full",
-      portalConcurrency: 8,
-      sourceRecovery: "0.9.2-rss-scrape-editorial-desk-cache",
+      portalConcurrency: dueConcurrency,
+      sourceRecovery: "0.9.7.4-fast-25-plus-rss-first-cache",
       healthyMaxRefreshMinutes: 5,
       failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,

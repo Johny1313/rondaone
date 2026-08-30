@@ -1119,7 +1119,7 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1500) {
   if (final?.job?.status === "succeeded" && final?.data?.slides?.length) return final.data;
   if (final?.job?.status === "failed") throw new Error(final.job.error || final.job.message || "O processamento foi encerrado.");
 
-  throw new Error("O carrossel não concluiu em 8 minutos. O job permanece rastreável e pode ser retomado sem duplicar processamento.");
+  throw new Error("O carrossel não concluiu dentro do limite operacional. O job permanece rastreável e pode ser retomado sem duplicar processamento.");
 }
 waitForIntelligentJob.__rondaNativeResilient = true;
 

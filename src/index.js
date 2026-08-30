@@ -41,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.7.2.1',
+      version:'0.9.7.4',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.2.1',
+        editorialVersion:'2.9.7.4',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -80,7 +80,7 @@ export default {
       roundPipeline:{
         mode:'workers-paid-full',
         registeredSources:39,
-        sourceConcurrency:8,
+        sourceConcurrency:14,
         requestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||120,
         oneSourcePerRound:false,
         uiForceLatestOnStartup:true,
@@ -150,7 +150,7 @@ export default {
         rescueAfterQueuedSeconds:12,
         rescueUsesJobLock:true,
         nativePolling:true,
-        hardTimeoutMinutes:8,
+        hardTimeoutSeconds:30,
         duplicateProcessingProtected:true
       },
       fastNewsEngineV090:{
@@ -190,7 +190,9 @@ export default {
       scrapingEvidenceEngineV097:{enabled:true,adapters:['g1','cnn-brasil','folha','estadao','oglobo','poder360','agencia-brasil','metropoles','uol','infomoney'],genericExtraction:true,jsonLd:true,embeddedJson:true,ampFallback:true,collectedFallback:true,browserFallbackOptional:false,evidenceCacheDays:7},
       fastCarouselSourceCreditsV0971:{enabled:true,reuseReadyResult:true,readyResultCacheMinutes:{url:30,topicOrEvent:5},evidenceFastPath:true,evidenceCacheMinutes:{url:60,topicOrEvent:10},normalizedUrlIdentity:true,parallelSourceReadWaves:false,sourceReadUrlVisible:true,imageOriginVisible:true,photographerCreditWhenAvailable:true,templateDelete:true,forceReread:true},
       singleSourceContentFirstV0972:{enabled:true,contentFirst:true,templateAfterGeneration:true,templateChangeWithoutAi:true,targetLanguage:'pt-BR',translateForeignEvidence:true,sourceSelection:'primary-plus-single-backup',parallelMultiPublisherReading:false,maximumPublisherReads:2,performanceTelemetry:true},
-      mandatorySlideCountV09721:{enabled:true,requiredBeforeProduction:true,minimum:3,maximum:15,presets:[3,5,7,10],appliesTo:['topic','event','url','text'],backendEnforced:true},
+      mandatorySlideCountV09721:{enabled:true,requiredBeforeProduction:true,noHangProductionV09722:{enabled:true,frontendDeadlineSeconds:30,backendDeadlineSeconds:30,deterministicFallback:true},minimum:3,maximum:15,presets:[3,5,7,10],appliesTo:['topic','event','url','text'],backendEnforced:true},
+      interactiveFastPathV0973:{enabled:true,manualProductionQueueBypass:true,interactiveDeadlineSeconds:12,evidencePackDirectGeneration:true,compactEvidencePrompt:true,maximumPromptEvidence:18,fullArticleRetranslation:false,secondaryAiOnlyOnQualityFailure:true,queueRecoveryFallback:true,targetTypicalSeconds:'5-12'},
+      fastRonda25PlusV0974:{enabled:true,sourceTarget:Number(env.ROUND_EARLY_SOURCE_TARGET)||25,minimumFreshBeforePreview:Number(env.ROUND_EARLY_FRESH_MINIMUM)||8,fullSourceConcurrency:14,fastLaneConcurrency:8,rssFirst:true,skipHtmlWhenRssHealthy:true,earlyPreview:true,finalRecoveryContinues:true,registeredSources:39},
       roundStabilityV0951:{
         enabled:true,
         fastLaneSeparatedFromEditorialHistory:true,
@@ -250,7 +252,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.2.1-mandatory-slide-count'
+        assetCacheBust:'2.9.7.4-performance-engine'
       },
       navigation:{
         ronda:'/ronda',

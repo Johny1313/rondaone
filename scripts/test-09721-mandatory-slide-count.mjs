@@ -5,7 +5,7 @@ const pkg=JSON.parse(read('package.json'));
 const design=read('public/design/index.html');
 const worker=read('src/ronda/v285/index.js');
 const platform=read('src/index.js');
-assert.equal(pkg.version,'0.9.7.2.1');
+assert.match(pkg.version,/^0\.9\.7(?:\.\d+)+$/);
 assert.match(platform,/mandatorySlideCountV09721/);
 assert.match(platform,/requiredBeforeProduction:true/);
 assert.match(design,/Quantos slides terá este carrossel\?/);

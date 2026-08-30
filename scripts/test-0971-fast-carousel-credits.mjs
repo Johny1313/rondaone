@@ -51,7 +51,7 @@ const smart=read('public/design/smart-template-engine.js');
 assert.match(production,/Fast path: Evidence Pack recente reutilizado/);
 assert.match(production,/findReusableProductionJob/);
 assert.match(production,/productionInputFingerprint/);
-assert.match(worker,/engineVersion:"0\.9\.7\.[12]"/);
+assert.match(worker,/engineVersion:"0\.9\.7(?:\.\d+)+"/);
 assert.match(design,/productionSourceLink/);
 assert.match(design,/productionImageCredits/);
 assert.match(design,/deleteTemplateRecord/);

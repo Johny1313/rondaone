@@ -1915,7 +1915,7 @@ export async function buildIntelligentCarousel(topic, {
         if(!generated?.slides)throw new Error('A IA não retornou os slides em JSON válido');
         let candidate=evaluateCarouselCandidate(generated,sourceAnalysis,factAnalysis.facts,effectiveSlideCount,collected[0],quality,{role,model:candidateModel});
         const coherenceIssues=(candidate.validation.report.issues||[]).filter(issue=>['incoherent-language','repeated-slide','title-repeats-subtitle'].includes(issue.code));
-        if(coherenceIssues.length&&candidate.qualityGate.score<96){
+        if(multiAiMode!=='fast-failover'&&coherenceIssues.length&&candidate.qualityGate.score<96){
           try{
             const repaired=await repairAiCarouselFromEvidence(ai,candidateModel,topic,collected[0],factAnalysis.facts,effectiveSlideCount,writingStyle,candidate.slides,coherenceIssues);
             if(repaired?.slides){const repairedCandidate=evaluateCarouselCandidate(repaired,sourceAnalysis,factAnalysis.facts,effectiveSlideCount,collected[0],quality,{role,model:candidateModel});if(repairedCandidate.qualityGate.score>candidate.qualityGate.score){candidate=repairedCandidate;coherenceRepairApplied=true;}}
@@ -2061,3 +2061,195 @@ export async function buildIntelligentCarousel(topic, {
   };
 }
 
+
+
+// v0.9.7.3 — Interactive Fast Path
+// Gera diretamente a partir de um Evidence Pack já persistido. Evita reler/parsing
+// sintético da matéria e reduz o prompt às evidências necessárias para os slides.
+export async function buildCarouselFromEvidencePack(evidence, {
+  ai,
+  model = ARTICLE_ANALYSIS_MODEL,
+  models = null,
+  multiAiMode = "fast-failover",
+  slideCount = DEFAULT_CAROUSEL_SLIDES,
+  writingStyle = null,
+  styleKey = "production-fast",
+  maxEvidence = null,
+} = {}) {
+  const totalStartedAt = Date.now();
+  const requestedSlideCount = carouselSlidePlan(slideCount).length;
+  const sourceFacts = (Array.isArray(evidence?.facts) ? evidence.facts : [])
+    .map((fact, index) => ({
+      id: plainText(fact?.id) || `E${String(index + 1).padStart(2, "0")}`,
+      evidence: editorialClip(fact?.evidence || fact?.text || fact?.claim, 320),
+      claim: editorialClip(fact?.claim || fact?.evidence || fact?.text, 220),
+      confidence: ["high", "medium", "low"].includes(fact?.confidence) ? fact.confidence : "high",
+      angle: fact?.angle || null,
+    }))
+    .filter((fact) => fact.evidence && wordCount(fact.evidence) >= 5);
+  const evidenceLimit = Math.max(requestedSlideCount + 2, Math.min(18, Number(maxEvidence) || requestedSlideCount * 2 + 2));
+  const facts = sourceFacts.slice(0, evidenceLimit);
+  const groundingText = facts.map((fact) => fact.evidence).join("\n\n");
+  const article = {
+    ok: true,
+    url: evidence?.resolvedUrl || evidence?.canonicalUrl || evidence?.url || null,
+    originalUrl: evidence?.url || null,
+    sourceName: evidence?.sourceName || "Fonte",
+    title: evidence?.title || "Notícia sem título",
+    publishedAt: evidence?.publishedAt || null,
+    byline: evidence?.author || null,
+    wordCount: wordCount(groundingText),
+    contentLevel: "article",
+    extractionMethod: "evidence-pack-fast-path",
+    readMode: "evidence-pack",
+    content: groundingText,
+    error: null,
+    cacheHit: true,
+  };
+  if (!facts.length) {
+    const error = new Error("O Evidence Pack não possui evidências suficientes para gerar o carrossel.");
+    error.code = "EVIDENCE_PACK_EMPTY";
+    throw error;
+  }
+
+  const effectiveSlideCount = maximumSupportedSlideCount(article, facts, requestedSlideCount);
+  if (effectiveSlideCount < MIN_CAROUSEL_SLIDES) {
+    const error = new Error(`O Evidence Pack possui apenas ${facts.length} evidência(s) útil(eis), insuficientes para um carrossel seguro.`);
+    error.code = "INSUFFICIENT_DISTINCT_EVIDENCE";
+    throw error;
+  }
+  const sourceAnalysis = fallbackAnalysis({ title: evidence?.title, editoria: evidence?.editoria || "Notícias" }, [article], [], effectiveSlideCount, facts);
+  const quality = readingQuality([article]);
+  const upstreamQuality = Number(evidence?.reading?.quality) || 0;
+  if (upstreamQuality >= 70) {
+    quality.code = "broad";
+    quality.label = "Evidence Pack verificado";
+    quality.generationAllowed = true;
+    quality.copyAllowed = true;
+  } else if (upstreamQuality >= 55) {
+    quality.code = "partial";
+    quality.label = "Evidence Pack parcial verificado";
+    quality.generationAllowed = true;
+  }
+
+  const topic = {
+    id: evidence?.topicId || evidence?.sourceRef || "evidence-pack",
+    title: evidence?.title || "Notícia",
+    editoria: evidence?.editoria || "Notícias",
+    items: [{
+      id: "evidence-pack-item",
+      kind: "portal",
+      url: article.url,
+      title: article.title,
+      sourceName: article.sourceName,
+      collectorName: article.sourceName,
+      publishedAt: article.publishedAt,
+      content: groundingText,
+    }],
+  };
+  const factAnalysis = { questions: sourceAnalysis.questions, entities: sourceAnalysis.entities, facts };
+  const deterministicCandidate = evaluateCarouselCandidate({ slides: sourceAnalysis.slides }, sourceAnalysis, facts, effectiveSlideCount, article, quality, { role: "deterministic", model: null });
+  const modelCandidates = [...(Array.isArray(models) ? models : []), model]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
+  if (!modelCandidates.length) modelCandidates.push(ARTICLE_ANALYSIS_MODEL);
+
+  let bestCandidate = deterministicCandidate;
+  let aiError = null;
+  const aiTrace = [];
+  const aiStartedAt = Date.now();
+  if (ai?.run) {
+    const roles = ["primary", "secondary", "tertiary"];
+    const maximum = multiAiMode === "single" ? 1 : Math.min(3, modelCandidates.length);
+    for (let index = 0; index < maximum; index += 1) {
+      const candidateModel = modelCandidates[index];
+      const role = roles[index] || `fallback-${index + 1}`;
+      const attemptStarted = Date.now();
+      try {
+        const generated = await runAiCarouselFromEvidence(ai, candidateModel, topic, article, facts, effectiveSlideCount, writingStyle);
+        if (!generated?.slides) throw new Error("A IA não retornou slides válidos.");
+        const candidate = evaluateCarouselCandidate(generated, sourceAnalysis, facts, effectiveSlideCount, article, quality, { role, model: candidateModel });
+        aiTrace.push({ role, model: candidateModel, status: candidate.qualityGate.passed ? "passed" : "rejected", score: candidate.qualityGate.score, confidence: candidate.confidence.score, durationMs: Date.now() - attemptStarted, issues: candidate.qualityGate.issueCount });
+        if (candidate.qualityGate.score > bestCandidate.qualityGate.score || (candidate.qualityGate.score === bestCandidate.qualityGate.score && candidate.confidence.score > bestCandidate.confidence.score)) bestCandidate = candidate;
+        if (candidate.qualityGate.passed) { bestCandidate = candidate; break; }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
+        aiError = aiError || detail;
+        aiTrace.push({ role, model: candidateModel, status: "error", score: 0, confidence: 0, durationMs: Date.now() - attemptStarted, error: detail });
+      }
+    }
+  }
+
+  if (bestCandidate.role !== "deterministic" && !(bestCandidate.qualityGate.passed || (bestCandidate.validation.report.passed && bestCandidate.qualityGate.score >= Math.max(82, deterministicCandidate.qualityGate.score - 3)))) bestCandidate = deterministicCandidate;
+  const selectedRole = bestCandidate.role || "deterministic";
+  const selectedModel = bestCandidate.model || null;
+  const qualityGate = { ...bestCandidate.qualityGate, selectedRole, selectedModel, modelsTried: aiTrace.map((item) => item.model), failoverUsed: aiTrace.length > 1, deterministicFallback: selectedRole === "deterministic" && aiTrace.length > 0 };
+  const confidence = bestCandidate.confidence;
+  const aiDurationMs = Date.now() - aiStartedAt;
+  const verificationLinks = article.url ? [{ title: article.title, sourceName: article.sourceName, publishedAt: article.publishedAt, url: article.url, ...(article.originalUrl && article.originalUrl !== article.url ? { originalUrl: article.originalUrl } : {}) }] : [];
+  return {
+    language: "pt-BR",
+    generatedAt: new Date().toISOString(),
+    analysisMode: selectedRole === "deterministic" ? (aiTrace.length ? "deterministic-quality-gate-fallback" : "source-extraction") : `multi-ai-${selectedRole}-evidence-fast-path`,
+    model: selectedModel,
+    aiError,
+    aiTrace,
+    qualityGate,
+    confidence,
+    voiceTone: writingStyle?.profile?.tone || writingStyle?.tone || "Jornalístico, factual e explicativo",
+    postModel: `Instagram · ${effectiveSlideCount} slides · título + subtítulo`,
+    slideCount: effectiveSlideCount,
+    requestedSlideCount,
+    slideCountAdjusted: effectiveSlideCount < requestedSlideCount,
+    slideCountAdjustmentReason: effectiveSlideCount < requestedSlideCount ? `O Evidence Pack sustenta ${effectiveSlideCount} slides distintos com segurança.` : null,
+    writingProfile: writingStyle ? { active: true, updatedAt: writingStyle.updatedAt || null, sampleCount: Number(writingStyle.sampleCount) || 0 } : { active: false },
+    promptVersion: `${CAROUSEL_PROMPT_VERSION}-evidence-fast-v1`,
+    performance: {
+      totalMs: Date.now() - totalStartedAt,
+      readingMs: 0,
+      aiMs: aiDurationMs,
+      fastPath: true,
+      evidencePackFastPath: true,
+      promptEvidenceCount: facts.length,
+      publisherAttempts: 0,
+      multiAiAttempts: aiTrace.length,
+      failoverUsed: aiTrace.length > 1,
+      qualityScore: qualityGate.score,
+      confidenceScore: confidence.score,
+      requestedSlideCount,
+      effectiveSlideCount,
+    },
+    cycle: { status: "completed", terminal: true, released: true, releasedAt: new Date().toISOString(), nextCycleAllowed: true },
+    reading: {
+      basis: "evidence-pack",
+      strategy: "single-source-evidence-pack",
+      cycleMode: "evidence-pack-one-script",
+      cycleComplete: true,
+      cycleStatus: "released",
+      nextCycleAllowed: true,
+      requested: 1,
+      successful: 1,
+      failed: 0,
+      selectedSource: publicArticleRecord(article),
+      attemptedSources: [publicArticleRecord(article)],
+      alternativesAvailable: 0,
+      publisherRequired: true,
+      publisherVerified: true,
+      factsGeneratedByAi: false,
+      totalWords: quality.totalWords,
+      quality: quality.code,
+      qualityLabel: quality.label,
+      sources: [publicArticleRecord(article)],
+    },
+    questions: factAnalysis.questions,
+    entities: factAnalysis.entities,
+    facts,
+    slides: bestCandidate.validation.slides,
+    validation: bestCandidate.validation.report,
+    editorialGate: { status: quality.copyAllowed && bestCandidate.validation.report.passed ? "ready" : "review-required", copyAllowed: Boolean(quality.copyAllowed && bestCandidate.validation.report.passed), reason: quality.copyAllowed ? "Roteiro validado diretamente contra o Evidence Pack." : "Evidence Pack parcial; revise antes de publicar." },
+    verificationLinks,
+    disclaimer: `Roteiro baseado exclusivamente nas evidências extraídas da matéria lida em ${article.sourceName}. Confirme o contexto no link original antes de publicar.`,
+    cacheKey: `evidence-fast-${stableHash(`${evidence?.id || article.url}|${requestedSlideCount}|${styleKey}`)}`,
+  };
+}

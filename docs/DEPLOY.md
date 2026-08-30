@@ -1,8 +1,8 @@
-# Deploy — RONDA ONE v0.9.7.2.1
+# Deploy — RONDA ONE v0.9.7.4
 
 ## 1. Perfil recomendado
 
-Para 39 fontes, scraping, fallbacks, Multi-AI e Queues dedicadas, use **Cloudflare Workers Paid**. A v0.9.7.2 mantém a separação de leitura e geração e acrescenta fast paths seguros; não é recomendável voltar ao orçamento do Workers Free para a operação completa.
+Para 39 fontes, scraping, fallbacks, Multi-AI e Queues dedicadas, use **Cloudflare Workers Paid**. A v0.9.7.4 mantém a separação de leitura e geração, mas a produção manual usa Interactive Fast Path; não é recomendável voltar ao orçamento do Workers Free para a operação completa.
 
 ## 2. Bindings principais
 
@@ -46,7 +46,10 @@ As tabelas da RONDA, Mesa, versões e workflow existentes permanecem intactas.
 
 ```text
 ROUND_EXTERNAL_REQUEST_BUDGET=120
-ARTICLE_READ_TIMEOUT_MS=16000
+ARTICLE_READ_TIMEOUT_MS=5000
+PRODUCTION_INTERACTIVE_DEADLINE_MS=12000
+ROUND_EARLY_SOURCE_TARGET=25
+ROUND_EARLY_FRESH_MINIMUM=8
 ARTICLE_ANALYSIS_MODEL
 ARTICLE_SECONDARY_MODEL
 ARTICLE_TERTIARY_MODEL
@@ -69,6 +72,8 @@ Testes específicos:
 ```bash
 npm run test:096
 npm run test:097
+npm run test:0973
+npm run test:0974
 ```
 
 ## 7. Deploy
@@ -84,8 +89,8 @@ Em GitHub + Cloudflare Workers Builds, substitua a árvore antiga pela árvore C
 Abra `/api/platform/status` e confirme:
 
 ```text
-version: 0.9.7.2.1
-editorialVersion: 2.9.7.2.1
+version: 0.9.7.4
+editorialVersion: 2.9.7.4
 formaProductionEngineV096.enabled: true
 scrapingEvidenceEngineV097.enabled: true
 modules.queues.articleReadDedicated: true
@@ -141,3 +146,11 @@ A normalização de idioma usa Workers AI apenas quando a matéria não estiver 
 ## Gate obrigatório de quantidade de slides — v0.9.7.2.1
 
 Toda chamada nova a `POST /api/production/jobs` deve enviar `slideCount` entre 3 e 15. O FORMA pergunta essa quantidade antes de criar o job; sem ela, a API responde 400 e não inicia scraping, leitura ou IA.
+
+## Interactive Fast Path — v0.9.7.3
+
+Ação manual no FORMA não espera Queue para começar. `POST /api/production/jobs` tenta concluir leitura + Evidence Pack + carrossel diretamente por até 12 s. Se ultrapassar esse deadline curto, o mesmo job continua via `ctx.waitUntil()` e o FORMA acompanha o status. ARTICLE_READ_QUEUE e CAROUSEL_AI_QUEUE permanecem como recovery/automação e não devem ser removidas.
+
+## Fast Ronda 25+ — v0.9.7.4
+
+A coleta completa usa concorrência controlada de até 14 fontes, RSS-first e timeout de primeira passada de 4,5 s. Quando há 25+ fontes disponíveis e o mínimo de respostas frescas configurado, o Worker grava `latest_round_preview`; `/api/latest` pode servir essa prévia enquanto a mesma ronda continua até o resultado final. Não há nova Queue nem nova binding obrigatória nesta versão.

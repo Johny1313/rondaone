@@ -1,3 +1,36 @@
+# RONDA ONE Cloud v0.9.7.4 — Performance Engine
+
+## 0.9.7.4 — Fast Ronda 25+
+
+- mantém as 39 fontes e eleva a concorrência controlada da coleta completa para até 14;
+- RSS suficiente encerra a fonte sem scraper HTML redundante;
+- timeout de primeira passada reduzido;
+- preview de ronda em D1 (`latest_round_preview`) publicado ao atingir 25+ fontes disponíveis e mínimo de respostas frescas;
+- `/api/latest` pode servir a prévia enquanto a mesma ronda ainda finaliza;
+- a ronda final substitui e limpa a prévia automaticamente;
+- parâmetros `ROUND_EARLY_SOURCE_TARGET` e `ROUND_EARLY_FRESH_MINIMUM`.
+
+## 0.9.7.3 — Interactive Fast Path
+
+- produção manual tenta leitura + Evidence Pack + geração diretamente na requisição, sem Queue como caminho obrigatório;
+- deadline interativo padrão de 12 s, com continuação do mesmo job em background quando necessário;
+- geração direta a partir de Evidence Pack, sem parsing sintético intermediário;
+- prompt compacto com até 18 evidências;
+- tradução evidence-first para conteúdo estrangeiro;
+- IA secundária somente quando a principal falha ou é rejeitada pelo Quality Gate;
+- polling visível pós-Fast-Path reduzido para 20 s;
+- Queues dedicadas permanecem como recovery/automação, sem regressão de confiabilidade.
+
+# RONDA ONE Cloud v0.9.7.2.2 — No-Hang Production
+
+- Remove o polling de 8 minutos do FORMA; deadline visual passa a 55 s.
+- Recuperação automática quando leitura ou IA ficam sem progresso.
+- Após 32 s com Evidence Pack pronto, o FORMA aciona fallback determinístico seguro.
+- Backend também detecta jobs parados ao consultar o status e tenta recuperar sem duplicar o conteúdo final.
+- Leitura interativa usa deadlines menores (6–7 s por fonte) e mantém uma única fonte backup.
+- Production Engine usa `fast-failover`: se o Quality Gate passar, não executa uma revisão extra da mesma IA.
+- Primeiro resultado pronto vence; recuperações concorrentes não sobrescrevem um carrossel já concluído.
+
 # Changelog
 
 ## 0.9.7.2.1 — Mandatory Slide Count

@@ -1243,23 +1243,34 @@
       const i=order.indexOf(node.dataset.prodStage);node.style.opacity=i<=index?'1':'.38';node.style.fontWeight=i===index?'800':'500';node.title=i===index?detail:'';
     });
   }
-  async function waitFormaProductionJob(jobId,pollAfterMs=1200){
-    const deadline=Date.now()+8*60*1000;let networkErrors=0;
+  async function waitFormaProductionJob(jobId,pollAfterMs=900){
+    const startedAt=Date.now(),deadline=startedAt+20*1000;let networkErrors=0,lastProgressAt=Date.now(),lastProgress=-1,lastStage='',recoveryCalls=0,fallbackCalled=false;
     while(Date.now()<deadline){
-      await new Promise(resolve=>setTimeout(resolve,Math.max(600,Number(pollAfterMs)||900)));
+      await new Promise(resolve=>setTimeout(resolve,Math.max(500,Number(pollAfterMs)||750)));
       let bundle;
       try{bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);networkErrors=0;}
-      catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',8);await new Promise(r=>setTimeout(r,Math.min(5000,800+networkErrors*500)));continue;}
-      const job=bundle?.job||{};const stage=job.stage||'source';setProductionStage(stage,job.error||'');
+      catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',Math.max(4,lastProgress));await new Promise(r=>setTimeout(r,Math.min(2500,500+networkErrors*350)));continue;}
+      const job=bundle?.job||{};const stage=job.stage||'source';const progress=Math.max(2,Number(job.progress)||2);setProductionStage(stage,job.error||'');
+      if(progress>lastProgress||stage!==lastStage){lastProgressAt=Date.now();lastProgress=progress;lastStage=stage;}
       const evidence=bundle?.evidence;
-      const label=stage==='reading'?'Lendo a matéria e testando as rotas de extração…':stage==='evidence'&&evidence?`Evidence Pack pronto · ${evidence.wordCount||0} palavras · leitura ${Math.round(evidence?.reading?.quality||0)}/100`:stage==='generating'?'Evidence Pack preservado. Multi-AI redigindo e validando os slides…':stage==='ready'?'Conteúdo pronto para composição no FORMA.':job.error||'Processando produção…';
-      setDirectArticleStatus(label,job.status==='failed'?'error':'',Math.max(2,Number(job.progress)||2));
+      const label=stage==='reading'?'Lendo a matéria…':stage==='evidence'&&evidence?`Evidence Pack pronto · ${evidence.wordCount||0} palavras · leitura ${Math.round(evidence?.reading?.quality||0)}/100`:stage==='generating'?'Evidence Pack pronto. IA redigindo os slides…':stage==='fallback'?'IA demorou; finalizando pelo modo seguro baseado nas evidências…':stage==='ready'?'Conteúdo pronto para composição no FORMA.':job.error||'Processando produção…';
+      setDirectArticleStatus(label,job.status==='failed'?'error':'',progress);
       if(job.status==='ready'&&job.result?.slides?.length){setProductionStage('ready');return job.result;}
-      if(job.status==='failed'){
-        const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id;error.productionStage=job.stage;throw error;
+      if(job.status==='failed'){const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id;error.productionStage=job.stage;throw error;}
+
+      const idle=Date.now()-lastProgressAt;const age=Date.now()-startedAt;
+      if(idle>=4000&&recoveryCalls<2){
+        recoveryCalls+=1;lastProgressAt=Date.now();
+        setDirectArticleStatus('Etapa sem progresso detectada. Recuperação automática em andamento…','',progress);
+        try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage:(stage==='generating'||stage==='quality'||stage==='fallback')?'generate':null})});}catch{}
+      }
+      if(!fallbackCalled&&age>=10000&&evidence?.id){
+        fallbackCalled=true;lastProgressAt=Date.now();
+        setDirectArticleStatus('Finalizando pelo modo seguro para não manter a produção em espera…','',Math.max(72,progress));
+        try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/fallback`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch{}
       }
     }
-    throw new Error('A produção não concluiu em 8 minutos. O job foi preservado para replay e diagnóstico.');
+    throw new Error('A produção não concluiu no Fast Path. O job foi preservado para recuperação; tente novamente ou escolha outra fonte.');
   }
   async function startFormaProduction(payload){
     setProductionStage('source');
@@ -1270,7 +1281,7 @@
     return waitFormaProductionJob(jobId,response.pollAfterMs);
   }
   async function waitDirectArticleJob(jobId,pollAfterMs=1500){
-    const startedAt=Date.now(),deadline=startedAt+8*60*1000;let rescueAttempts=0,nextRescueAt=startedAt+12000,errors=0;
+    const startedAt=Date.now(),deadline=startedAt+90*1000;let rescueAttempts=0,nextRescueAt=startedAt+12000,errors=0;
     directArticleState.lastJobId=jobId;
     while(Date.now()<deadline){
       await new Promise(resolve=>setTimeout(resolve,Math.max(1200,Number(pollAfterMs)||1500)));
@@ -1315,7 +1326,7 @@
         }
       }
     }
-    throw new Error('A matéria não concluiu em 8 minutos. O job foi preservado para diagnóstico.');
+    throw new Error('A matéria ultrapassou o limite operacional e foi encerrada sem manter a tela presa.');
   }
   function publisherVisualsFromCarousel(data){
     const visuals=data?.evidencePack?.images||data?.articleVisuals||data?.reading?.selectedSource?.images||null;
@@ -1357,7 +1368,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.2.1',
+      sourceVersion:'0.9.7.4',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),

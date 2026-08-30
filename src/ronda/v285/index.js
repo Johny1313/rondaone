@@ -30,6 +30,7 @@ import {
   saveArticleReadCache,
   saveIntelligentCarousel,
   saveRun,
+  saveRoundPreview,
   saveSourceStates,
   queueRun,
   markRunStarted,
@@ -138,9 +139,9 @@ import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from
 import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
 import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
-import { createProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, listProductionJobs, productionBundle, retryProductionJob, startProductionPipeline } from "../../production/engine.js";
+import { createProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.2.1";
+const VERSION = "2.9.7.4";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1189,6 +1190,19 @@ async function performRound(env, triggerType, options = {}) {
         mode,
         forceRefresh: mode === "fast",
         externalRequestLimit,
+        earlySourceTarget: Number(env.ROUND_EARLY_SOURCE_TARGET) || 25,
+        earlyFreshMinimum: Number(env.ROUND_EARLY_FRESH_MINIMUM) || 8,
+        onEarlySnapshot: mode === "full" ? async (preview) => {
+          let safePreview = portugueseOnlyFallback(preview);
+          safePreview = withEditorias(safePreview);
+          safePreview.schemaVersion = 7;
+          safePreview.catalog = { version: CATALOG_VERSION, portals: FEEDS.length };
+          safePreview.earlyPreview = true;
+          safePreview.operational = { ...(safePreview.operational || {}), fastRonda25Plus: true, finalRecoveryInProgress: true };
+          await saveRoundPreview(db,{runId,triggerType,payload:safePreview});
+          await touchRun(db,runId).catch(()=>null);
+          structuredLog("round_early_preview_published",{runId,sources:Number(safePreview?.totals?.sources)||0,items:Number(safePreview?.totals?.items)||0,durationMs:Number(safePreview?.durationMs)||0});
+        } : null,
       });
       collectedPayload = payload;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -1439,17 +1453,24 @@ async function handleApi(request, env, url, ctx) {
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
       if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.2", job:reusable, pollAfterMs:0 },200);
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4", job:reusable, pollAfterMs:0 },200);
       }
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
-    job = await startProductionPipeline(env,job.id,{force:Boolean(body?.force),ctx});
-    return json({ ok:true, production:true, reused:false, engineVersion:"0.9.7.2", job, pollAfterMs:900 },202);
+    const interactive = await runInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx,deadlineMs:Number(env.PRODUCTION_INTERACTIVE_DEADLINE_MS)||12000});
+    job = interactive.job || await getProductionJob(db,job.id);
+    if(job?.status==="ready"&&job?.result?.slides?.length){
+      return json({ok:true,production:true,reused:false,interactive:true,engineVersion:"0.9.7.4",job,pollAfterMs:0},200);
+    }
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:Boolean(interactive.deferred), engineVersion:"0.9.7.4", job, pollAfterMs:650 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
   if (productionJobMatch && request.method === "GET") {
     const { user } = await requireEditorialUser(request, env);
+    const current = await getProductionJob(requireDatabase(env),productionJobMatch[1]);
+    if (!current) throw new HttpError(404,"Produção não encontrada.");
+    if (!["ready","failed"].includes(current.status)) await recoverStalledProductionJob(env,current.id,{ctx}).catch(()=>null);
     const bundle = await productionBundle(requireDatabase(env),productionJobMatch[1]);
     if (!bundle?.job) throw new HttpError(404,"Produção não encontrada.");
     if (!isAdminUser(user) && bundle.job.createdBy && bundle.job.createdBy !== user.id) throw new HttpError(403,"Esta produção pertence a outro usuário.");
@@ -1464,6 +1485,16 @@ async function handleApi(request, env, url, ctx) {
     if (!isAdminUser(user) && current.createdBy && current.createdBy !== user.id) throw new HttpError(403,"Esta produção pertence a outro usuário.");
     const body = await readJsonBody(request);
     return json({ok:true,job:await retryProductionJob(env,current.id,{ctx,stage:body?.stage||null})},202);
+  }
+
+  const productionFallbackMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})\/fallback$/i.exec(url.pathname);
+  if (productionFallbackMatch && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const db=requireDatabase(env);const current=await getProductionJob(db,productionFallbackMatch[1]);
+    if(!current)throw new HttpError(404,"Produção não encontrada.");
+    if(!isAdminUser(user)&&current.createdBy&&current.createdBy!==user.id)throw new HttpError(403,"Esta produção pertence a outro usuário.");
+    if(!current.evidenceId)throw new HttpError(409,"O Evidence Pack ainda não está pronto para o fallback seguro.");
+    return json({ok:true,job:await recoverStalledProductionJob(env,current.id,{ctx,forceFallback:true})},202);
   }
 
   if (url.pathname === "/api/production/image" && request.method === "POST") {
