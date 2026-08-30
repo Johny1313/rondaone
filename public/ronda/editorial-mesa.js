@@ -285,7 +285,7 @@
     try{
       const [eventData,changesData,radarData,alertsData,sourceData]=await Promise.all([
         request('/api/editorial-events?hours=72&limit=140'),
-        request('/api/editorial-changes?hours=8&limit=50'),
+        request('/api/editorial-changes?sinceLastRound=1&hours=8&limit=50'),
         request('/api/editorial-radar?hours=6&limit=20'),
         request('/api/editorial-alerts?hours=8&limit=40'),
         request('/api/sources/diagnostics').catch(()=>({diagnostics:[]})),

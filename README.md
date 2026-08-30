@@ -1,6 +1,14 @@
-# RONDA ONE Cloud v0.9.7.4 — Performance Engine
+# RONDA ONE Cloud v0.9.7.4.1 — Consistency + Async Fast Path
 
-A v0.9.7.4 é cumulativa e preserva toda a linha anterior. O foco desta rodada é **latência operacional**: produção manual no FORMA usa um Interactive Fast Path e a Ronda publica um preview útil quando atinge a meta de 25+ fontes disponíveis, enquanto a coleta completa continua até finalizar.
+A v0.9.7.4.1 é cumulativa e preserva toda a linha anterior. Ela corrige dois riscos observados em produção: o FORMA passa a iniciar o Fast Path de forma assíncrona para que scraping/IA não derrubem o request HTTP, e a Ronda preserva snapshots de fontes adiadas para nunca encolher silenciosamente para poucas fontes entre ciclos.
+
+
+## v0.9.7.4.1 — estabilidade observada em produção
+
+- POST de produção retorna rapidamente e o processamento direto continua com `waitUntil`; Queue continua como recovery.
+- Retry curto de transporte para 502/503/504 sem duplicação: jobs ativos equivalentes são reaproveitados.
+- Snapshot continuity: fonte não-due usa `source_state` ou ronda anterior; se não existir snapshot, ela vira due imediatamente.
+- “Desde a última ronda” usa o timestamp da última ronda editorial concluída.
 
 ## v0.9.7.4 — Fast Ronda 25+
 

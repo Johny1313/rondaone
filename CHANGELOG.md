@@ -1,4 +1,13 @@
-# RONDA ONE Cloud v0.9.7.4 — Performance Engine
+# RONDA ONE Cloud v0.9.7.4.1 — Consistency + Async Fast Path
+
+## 0.9.7.4.1 — Snapshot Continuity + No-503 Production
+
+- O FORMA não mantém scraping/IA dentro do request POST: cria o job e inicia o Fast Path direto via `waitUntil`, retornando `202` rapidamente.
+- Requisições transitórias `502/503/504` recebem uma reconexão curta no cliente; o backend reaproveita um job ativo equivalente para não duplicar processamento.
+- Fontes adiadas sem snapshot utilizável deixam de ser silenciosamente omitidas: são coletadas imediatamente.
+- Fontes adiadas com snapshot no `source_state` ou na ronda anterior permanecem visíveis até a atualização, evitando a ronda encolher para 1–3 fontes.
+- “Desde a última ronda” agora consulta mudanças realmente posteriores à última ronda editorial concluída, em vez de usar uma janela fixa de 8 horas.
+- Preserva v0.9.7.4 Performance Engine, Fast Ronda 25+, RSS-first, Single Source, Content First, PT-BR, Multi-AI, Quality Gate, No-Hang, créditos e templates.
 
 ## 0.9.7.4 — Fast Ronda 25+
 

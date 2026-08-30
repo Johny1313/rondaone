@@ -10,7 +10,7 @@ assert.match(engine,/runInteractiveProduction/);
 assert.match(engine,/buildCarouselFromEvidencePack/);
 assert.match(engine,/PRODUCTION_INTERACTIVE_DEADLINE_MS = 12_000/);
 assert.match(engine,/mode:"evidence-first"/);
-assert.match(worker,/runInteractiveProduction\(env,job\.id/);
+assert.match(worker,/(?:runInteractiveProduction|launchInteractiveProduction)\(env,job\.id/);
 assert.match(design,/deadline=startedAt\+20\*1000/);
 
 const evidence={

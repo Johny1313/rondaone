@@ -1080,10 +1080,17 @@ export async function editorialRadar(db,{hours=6,limit=20}={}){
   return acceleration;
 }
 
-export async function editorialChanges(db,{hours=8,limit=50}={}){
+export async function editorialChanges(db,{hours=8,limit=50,sinceLastRound=false}={}){
   await ensureEditorialEventSchema(db);
-  const cutoff=new Date(Date.now()-clamp(hours,1,168)*3600000).toISOString();
-  const rows=await all(db,'SELECT event_id,update_type,summary,source_url,source_name,published_at,created_at FROM editorial_event_updates WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?',[cutoff,clamp(limit,1,200)]);
+  let cutoff=new Date(Date.now()-clamp(hours,1,168)*3600000).toISOString();
+  if(sinceLastRound){
+    const lastRound=await first(db,`SELECT completed_at FROM runs
+      WHERE status='success' AND trigger_type <> 'fast-lane' AND completed_at IS NOT NULL AND completed_at <> ''
+      ORDER BY completed_at DESC LIMIT 1`).catch(()=>null);
+    const completedAt=String(lastRound?.completed_at||'');
+    if(Number.isFinite(Date.parse(completedAt)))cutoff=completedAt;
+  }
+  const rows=await all(db,'SELECT event_id,update_type,summary,source_url,source_name,published_at,created_at FROM editorial_event_updates WHERE created_at > ? ORDER BY created_at DESC LIMIT ?',[cutoff,clamp(limit,1,200)]);
   const eventIds=unique(rows.map(row=>row.event_id));
   const titles=new Map();
   for(const id of eventIds){const event=await storedEvent(db,id);if(event)titles.set(id,event.titulo);}
@@ -1135,7 +1142,7 @@ export async function handleEditorialEventsApi(request,env){
   }
 
   if(url.pathname==='/api/editorial-changes'&&request.method==='GET'){
-    return json({ok:true,items:await editorialChanges(db,{hours:url.searchParams.get('hours')||8,limit:url.searchParams.get('limit')||50})});
+    return json({ok:true,items:await editorialChanges(db,{hours:url.searchParams.get('hours')||8,limit:url.searchParams.get('limit')||50,sinceLastRound:url.searchParams.get('sinceLastRound')==='1'})});
   }
 
   const eventRoute=/^\/api\/editorial-events\/([a-z0-9-]{8,140})$/i.exec(url.pathname);

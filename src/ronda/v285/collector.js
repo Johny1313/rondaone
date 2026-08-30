@@ -757,8 +757,10 @@ function sourceIsDue(sourceState, collectedAt, feed) {
   return effectiveNextCheckAt(sourceState, feed, collectedAt.getTime()) <= collectedAt.getTime();
 }
 
-function deferredSourceResult(feed, sourceState, cutoff) {
-  const items = cachedItemsFromState(sourceState, feed, cutoff);
+function deferredSourceResult(feed, sourceState, cutoff, previousRound = null) {
+  const stateItems = cachedItemsFromState(sourceState, feed, cutoff);
+  const previousItems = stateItems.length ? [] : cachedItemsForFeed(previousRound, feed, cutoff);
+  const items = stateItems.length ? stateItems : previousItems;
   return {
     items,
     status: {
@@ -783,6 +785,7 @@ function deferredSourceResult(feed, sourceState, cutoff) {
       nextCheckAt: sourceState ? new Date(effectiveNextCheckAt(sourceState, feed)).toISOString() : null,
       refreshMinutes: feed.refreshMinutes,
       deferred: true,
+      cacheOrigin: stateItems.length ? "source-state" : previousItems.length ? "previous-round" : null,
     },
     operational: {
       validators: sourceState?.validators || {},
@@ -954,8 +957,13 @@ export async function collectRound({
 
   feeds.forEach((feed, index) => {
     const state = sourceStateFor(sourceStates, feed.id);
-    if (forceRefresh || sourceIsDue(state, collectedAt, feed)) due.push({ feed, index, state });
-    else portalResults[index] = deferredSourceResult(feed, state, cutoff);
+    const stateItems = cachedItemsFromState(state, feed, cutoff);
+    const previousItems = stateItems.length ? [] : cachedItemsForFeed(previousRound, feed, cutoff);
+    const hasSafeSnapshot = stateItems.length > 0 || previousItems.length > 0;
+    // Nunca adia uma fonte sem snapshot utilizável. Esse caso causava a ronda
+    // a encolher para apenas as poucas fontes que estavam "due" após um deploy.
+    if (forceRefresh || sourceIsDue(state, collectedAt, feed) || !hasSafeSnapshot) due.push({ feed, index, state });
+    else portalResults[index] = deferredSourceResult(feed, state, cutoff, previousRound);
   });
 
   let earlyPublished = false;
@@ -969,7 +977,7 @@ export async function collectRound({
     const interim = portalResults.map((result, index) => {
       if (result) return result;
       const feed = feeds[index]; const state = sourceStateFor(sourceStates, feed.id);
-      return deferredSourceResult(feed, state, cutoff);
+      return deferredSourceResult(feed, state, cutoff, previousRound);
     });
     const available = interim.filter((result) => result?.status?.ok && Number(result?.status?.count) > 0).length;
     const fresh = interim.filter((result, index) => portalResults[index] && result?.status?.ok && Number(result?.status?.count) > 0 && !result?.status?.cached && result?.status?.route !== "cache").length;
@@ -1078,7 +1086,7 @@ export async function collectRound({
       operational: {
         mode,
         portalConcurrency: fastMode ? 8 : dueConcurrency,
-        sourceRecovery: "0.9.7.4-fast-25-plus-rss-first-cache",
+        sourceRecovery: "0.9.7.4.1-snapshot-continuity-rss-first",
         healthyMaxRefreshMinutes: fastMode ? 1 : 5,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1131,7 +1139,7 @@ export async function collectRound({
         mode: "fast",
         fastLane: true,
         portalConcurrency: 8,
-        sourceRecovery: "0.9.7.4-fast-25-plus-rss-first-cache",
+        sourceRecovery: "0.9.7.4.1-snapshot-continuity-rss-first",
         healthyMaxRefreshMinutes: 1,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1174,7 +1182,7 @@ export async function collectRound({
     operational: {
       mode: "full",
       portalConcurrency: dueConcurrency,
-      sourceRecovery: "0.9.7.4-fast-25-plus-rss-first-cache",
+      sourceRecovery: "0.9.7.4.1-snapshot-continuity-rss-first",
       healthyMaxRefreshMinutes: 5,
       failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,

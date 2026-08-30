@@ -1274,7 +1274,15 @@
   }
   async function startFormaProduction(payload){
     setProductionStage('source');
-    const response=await directArticleApi('/api/production/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const request=()=>directArticleApi('/api/production/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    let response;
+    try{response=await request();}
+    catch(error){
+      if(![502,503,504].includes(Number(error?.status)))throw error;
+      setDirectArticleStatus('Conexão de produção oscilou. Reconectando ao mesmo trabalho…','',2);
+      await new Promise(resolve=>setTimeout(resolve,550));
+      response=await request();
+    }
     const jobId=response?.job?.id;if(!jobId)throw new Error('O Production Engine não retornou um job válido.');
     directArticleState.lastJobId=jobId;directArticleState.lastReused=Boolean(response?.reused);
     if(response?.job?.status==='ready'&&response.job.result?.slides?.length)return response.job.result;
@@ -1368,7 +1376,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.4',
+      sourceVersion:'0.9.7.4.1',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),

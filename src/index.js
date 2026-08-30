@@ -41,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.7.4',
+      version:'0.9.7.4.1',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4',
+        editorialVersion:'2.9.7.4.1',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -193,6 +193,7 @@ export default {
       mandatorySlideCountV09721:{enabled:true,requiredBeforeProduction:true,noHangProductionV09722:{enabled:true,frontendDeadlineSeconds:30,backendDeadlineSeconds:30,deterministicFallback:true},minimum:3,maximum:15,presets:[3,5,7,10],appliesTo:['topic','event','url','text'],backendEnforced:true},
       interactiveFastPathV0973:{enabled:true,manualProductionQueueBypass:true,interactiveDeadlineSeconds:12,evidencePackDirectGeneration:true,compactEvidencePrompt:true,maximumPromptEvidence:18,fullArticleRetranslation:false,secondaryAiOnlyOnQualityFailure:true,queueRecoveryFallback:true,targetTypicalSeconds:'5-12'},
       fastRonda25PlusV0974:{enabled:true,sourceTarget:Number(env.ROUND_EARLY_SOURCE_TARGET)||25,minimumFreshBeforePreview:Number(env.ROUND_EARLY_FRESH_MINIMUM)||8,fullSourceConcurrency:14,fastLaneConcurrency:8,rssFirst:true,skipHtmlWhenRssHealthy:true,earlyPreview:true,finalRecoveryContinues:true,registeredSources:39},
+      consistencyAsyncFastPathV09741:{enabled:true,productionPostAsync:true,transportRetryStatuses:[502,503,504],activeJobDeduplication:true,deferredSourceSnapshotContinuity:true,forceRefreshWhenSnapshotMissing:true,editorialChangesSinceLastCompletedRound:true},
       roundStabilityV0951:{
         enabled:true,
         fastLaneSeparatedFromEditorialHistory:true,
@@ -252,7 +253,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.4-performance-engine'
+        assetCacheBust:'2.9.7.4.1-consistency-no503'
       },
       navigation:{
         ronda:'/ronda',

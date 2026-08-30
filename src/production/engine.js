@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.4";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.1";
 const PRODUCTION_READ_STALE_MS = 10_000;
 const PRODUCTION_GENERATE_STALE_MS = 12_000;
 const PRODUCTION_HARD_DEADLINE_MS = 30_000;
@@ -312,6 +312,24 @@ export async function findReusableProductionJob(db,{sourceType,sourceRef,created
   return null;
 }
 
+export async function findActiveProductionJob(db,{sourceType,sourceRef,createdBy,input={},maxAgeMinutes=3}={}){
+  await ensureProductionSchema(db);
+  if(!sourceType||!sourceRef||!createdBy)return null;
+  const cutoff=new Date(Date.now()-Math.max(1,Number(maxAgeMinutes)||3)*60000).toISOString();
+  const normalizedRef=sourceType==="url"?normalizeArticleIdentity(sourceRef):String(sourceRef);
+  const rows=(await db.prepare("SELECT * FROM production_jobs WHERE source_type=? AND source_ref=? AND created_by=? AND status IN ('queued','running') AND updated_at>=? ORDER BY updated_at DESC LIMIT 8").bind(sourceType,normalizedRef,createdBy,cutoff).all())?.results||[];
+  const slideCount=Number(input?.slideCount)||7;const styleKey=String(input?.styleKey||"");
+  const fingerprint=productionInputFingerprint(input,sourceType,normalizedRef);
+  for(const row of rows){
+    const candidate=jobRow(row);const candidateInput=candidate?.input||{};
+    if((Number(candidateInput.slideCount)||7)!==slideCount)continue;
+    if(styleKey&&String(candidateInput.styleKey||"")!==styleKey)continue;
+    if(productionInputFingerprint(candidateInput,sourceType,normalizedRef)!==fingerprint)continue;
+    return candidate;
+  }
+  return null;
+}
+
 function bestTopicItem(topic){return (Array.isArray(topic?.items)?topic.items:[]).find((item)=>/^https?:\/\//i.test(String(item?.url||""))&&item?.kind!=="social")||null;}
 
 export async function processProductionRead(env,jobId,{force=false}={}){
@@ -373,7 +391,7 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.1",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     const alreadyReady=await getProductionJob(db,jobId);if(alreadyReady?.status==="ready"&&alreadyReady?.result?.slides?.length)return alreadyReady;
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score,deterministicOnly:Boolean(deterministicOnly)});return job;
   }catch(error){await updateJob(db,jobId,{status:"failed",stage:"generating",progress:100,error:error?.message||String(error)});await event(db,jobId,"generating","failed",error?.message||String(error));throw error;}
@@ -409,11 +427,30 @@ export async function startProductionPipeline(env,jobId,{force=false,ctx=null}={
 }
 
 
+async function executeInteractiveProduction(env,jobId,{force=false}={}){
+  let current=await processProductionRead(env,jobId,{force});
+  if(current?.status==="failed")return current;
+  return processProductionGenerate(env,jobId);
+}
+
+export async function launchInteractiveProduction(env,jobId,{force=false,ctx=null}={}){
+  const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
+  if(job.status==="ready"&&job.result?.slides?.length)return {job,completed:true,interactive:true,launched:false};
+  await event(db,jobId,"interactive","queued","Interactive Fast Path assíncrono iniciado",{transport:"waitUntil-direct"}).catch(()=>null);
+  const task=executeInteractiveProduction(env,jobId,{force}).catch(async(error)=>{
+    await event(db,jobId,"interactive","failed",String(error?.message||error).slice(0,500),{transport:"waitUntil-direct"}).catch(()=>null);
+    return getProductionJob(db,jobId).catch(()=>null);
+  });
+  if(ctx?.waitUntil)ctx.waitUntil(task);else void task;
+  job=await getProductionJob(db,jobId);
+  return {job,completed:job?.status==="ready",interactive:true,launched:true,deferred:true};
+}
+
 export async function runInteractiveProduction(env,jobId,{force=false,ctx=null,deadlineMs=PRODUCTION_INTERACTIVE_DEADLINE_MS}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result?.slides?.length)return {job,completed:true,interactive:true};
   await event(db,jobId,"interactive","running","Interactive Fast Path iniciado",{deadlineMs:Number(deadlineMs)||PRODUCTION_INTERACTIVE_DEADLINE_MS}).catch(()=>null);
-  const task=(async()=>{let current=await processProductionRead(env,jobId,{force});if(current?.status==="failed")return current;current=await processProductionGenerate(env,jobId);return current;})();
+  const task=executeInteractiveProduction(env,jobId,{force});
   const wrapped=task.then(value=>({done:true,value}),error=>({done:true,error}));
   const timeout=new Promise(resolve=>setTimeout(()=>resolve({done:false}),Math.max(2500,Number(deadlineMs)||PRODUCTION_INTERACTIVE_DEADLINE_MS)));
   const state=await Promise.race([wrapped,timeout]);
