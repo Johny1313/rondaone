@@ -1,3 +1,17 @@
+# RONDA ONE Cloud v0.9.7.4.3 — Terminal Carousel Completion
+
+A v0.9.7.4.3 é uma correção cumulativa de conclusão do Production Engine. O foco é garantir que um carrossel com Evidence Pack válido chegue a um estado terminal sem disputa entre tentativas concorrentes.
+
+## Correções principais
+
+- lease por etapa para impedir leitura/IA/fallback concorrentes no mesmo job;
+- `ready` tornou-se estado terminal protegido contra tentativas lentas que terminem depois;
+- falha da IA aciona automaticamente o gerador determinístico quando as evidências já existem;
+- jobs `failed` com Evidence Pack recebem uma tentativa automática de conclusão segura;
+- o FORMA não dispara outra IA apenas porque o polling ficou alguns segundos sem progresso;
+- frontend e backend usam deadlines compatíveis, com fallback antes do limite visual;
+- retry manual continua reutilizando o mesmo job e o mesmo Evidence Pack.
+
 # RONDA ONE Cloud v0.9.7.4.2 — Retry UX + Same Job Recovery
 
 A v0.9.7.4.2 é cumulativa e preserva toda a linha anterior. Além da consistência de snapshots e do Fast Path assíncrono, o FORMA agora oferece recuperação explícita: quando uma produção falha ou excede o Fast Path, o operador pode **Tentar novamente** e retomar o mesmo job, reaproveitando o Evidence Pack quando ele já existe.

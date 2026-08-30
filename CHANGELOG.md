@@ -1,3 +1,15 @@
+# RONDA ONE Cloud v0.9.7.4.3 — Terminal Carousel Completion
+
+## 0.9.7.4.3
+
+- Corrigida corrida entre geração principal, retry e fallback determinístico.
+- Adicionados `production_stage_leases` para deduplicar execução por estágio.
+- `ready` não pode mais ser sobrescrito por erro tardio de outra tentativa.
+- IA que falha após Evidence Pack dispara fallback determinístico automaticamente.
+- Recuperação de job falho com Evidence Pack acontece sem exigir recriação da produção.
+- Polling do FORMA deixou de abrir novas gerações concorrentes.
+- Deadline visual alinhado ao deadline do backend.
+
 # RONDA ONE Cloud v0.9.7.4.2 — Retry UX + Same Job Recovery
 
 ## 0.9.7.4.2 — recuperação explícita no FORMA

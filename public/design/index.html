@@ -1259,33 +1259,64 @@
     });
   }
   async function waitFormaProductionJob(jobId,pollAfterMs=900){
-    const startedAt=Date.now(),deadline=startedAt+20*1000;let networkErrors=0,lastProgressAt=Date.now(),lastProgress=-1,lastStage='',recoveryCalls=0,fallbackCalled=false;
+    const startedAt=Date.now(),deadline=startedAt+26*1000;
+    let networkErrors=0,lastProgressAt=Date.now(),lastProgress=-1,lastStage='',recoveryCalls=0,fallbackAttempts=0,nextFallbackAt=startedAt+9000;
     while(Date.now()<deadline){
-      await new Promise(resolve=>setTimeout(resolve,Math.max(500,Number(pollAfterMs)||750)));
+      await new Promise(resolve=>setTimeout(resolve,Math.max(420,Number(pollAfterMs)||650)));
       let bundle;
       try{bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);networkErrors=0;}
-      catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',Math.max(4,lastProgress));await new Promise(r=>setTimeout(r,Math.min(2500,500+networkErrors*350)));continue;}
-      const job=bundle?.job||{};const stage=job.stage||'source';const progress=Math.max(2,Number(job.progress)||2);directArticleState.lastJobId=job.id||jobId;directArticleState.lastStage=stage;setProductionStage(stage,job.error||'');
+      catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',Math.max(4,lastProgress));await new Promise(r=>setTimeout(r,Math.min(1800,350+networkErrors*250)));continue;}
+      const job=bundle?.job||{};const stage=job.stage||'source';const progress=Math.max(2,Number(job.progress)||2);
+      directArticleState.lastJobId=job.id||jobId;directArticleState.lastStage=stage;setProductionStage(stage,job.error||'');
       if(progress>lastProgress||stage!==lastStage){lastProgressAt=Date.now();lastProgress=progress;lastStage=stage;}
       const evidence=bundle?.evidence;
-      const label=stage==='reading'?'Lendo a matéria…':stage==='evidence'&&evidence?`Evidence Pack pronto · ${evidence.wordCount||0} palavras · leitura ${Math.round(evidence?.reading?.quality||0)}/100`:stage==='generating'?'Evidence Pack pronto. IA redigindo os slides…':stage==='fallback'?'IA demorou; finalizando pelo modo seguro baseado nas evidências…':stage==='ready'?'Conteúdo pronto para composição no FORMA.':job.error||'Processando produção…';
+      const label=stage==='reading'?'Lendo a matéria…':stage==='evidence'&&evidence?`Evidence Pack pronto · ${evidence.wordCount||0} palavras · leitura ${Math.round(evidence?.reading?.quality||0)}/100`:stage==='generating'?'Evidence Pack pronto. IA redigindo os slides…':stage==='fallback'?'Finalizando pelo modo seguro baseado nas evidências…':stage==='ready'?'Conteúdo pronto para composição no FORMA.':job.error||'Processando produção…';
       setDirectArticleStatus(label,job.status==='failed'?'error':'',progress);
-      if(job.status==='ready'&&job.result?.slides?.length){directArticleState.lastStage='ready';directArticleState.lastError=null;setProductionRetryVisible(false);setProductionStage('ready');return job.result;}
-      if(job.status==='failed'){const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id||jobId;error.productionStage=job.stage||stage;registerProductionFailure(error);throw error;}
 
-      const idle=Date.now()-lastProgressAt;const age=Date.now()-startedAt;
-      if(idle>=4000&&recoveryCalls<2){
-        recoveryCalls+=1;lastProgressAt=Date.now();
-        setDirectArticleStatus('Etapa sem progresso detectada. Recuperação automática em andamento…','',progress);
-        try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage:(stage==='generating'||stage==='quality'||stage==='fallback')?'generate':null})});}catch{}
+      if(job.status==='ready'&&job.result?.slides?.length){
+        directArticleState.lastStage='ready';directArticleState.lastError=null;setProductionRetryVisible(false);setProductionStage('ready');return job.result;
       }
-      if(!fallbackCalled&&age>=10000&&evidence?.id){
-        fallbackCalled=true;lastProgressAt=Date.now();
-        setDirectArticleStatus('Finalizando pelo modo seguro para não manter a produção em espera…','',Math.max(72,progress));
+
+      const idle=Date.now()-lastProgressAt,age=Date.now()-startedAt;
+
+      // Falha após Evidence Pack não encerra a experiência: tenta a conclusão determinística automaticamente.
+      if(job.status==='failed'&&evidence?.id&&fallbackAttempts<4){
+        fallbackAttempts+=1;nextFallbackAt=Date.now()+2200;lastProgressAt=Date.now();
+        setDirectArticleStatus('A IA não concluiu. Finalizando automaticamente com as evidências já lidas…','',Math.max(76,progress));
+        try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/fallback`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch{}
+        continue;
+      }
+      if(job.status==='failed'){
+        const error=new Error(job.error||'A produção foi encerrada.');
+        error.productionJobId=job.id||jobId;error.productionStage=job.stage||stage;registerProductionFailure(error);throw error;
+      }
+
+      // Só recupera leitura quando ainda não existe Evidence Pack. Não dispara outra IA em paralelo.
+      if(!evidence?.id&&(stage==='source'||stage==='reading')&&idle>=5000&&recoveryCalls<1){
+        recoveryCalls+=1;lastProgressAt=Date.now();
+        setDirectArticleStatus('Leitura sem progresso. Recuperando a mesma produção…','',progress);
+        try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage:null})});}catch{}
+      }
+
+      // Com evidências prontas, solicita fallback seguro repetidamente até o lease da IA liberar.
+      if(evidence?.id&&age>=9000&&Date.now()>=nextFallbackAt&&fallbackAttempts<4&&stage!=='ready'){
+        fallbackAttempts+=1;nextFallbackAt=Date.now()+2300;
+        setDirectArticleStatus('Garantindo conclusão: modo seguro baseado nas evidências…','',Math.max(74,progress));
         try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/fallback`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch{}
       }
     }
-    const error=new Error('A produção não concluiu no Fast Path. O job foi preservado e pode ser retomado agora.');error.productionJobId=jobId;error.productionStage=lastStage||directArticleState.lastStage||'reading';registerProductionFailure(error);throw error;
+
+    // Última leitura do estado antes de mostrar erro ao operador.
+    try{
+      const bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);
+      const job=bundle?.job||{};
+      if(job.status==='ready'&&job.result?.slides?.length){setProductionRetryVisible(false);setProductionStage('ready');return job.result;}
+      const error=new Error(job.error||'A produção não chegou a um estado terminal dentro do limite operacional.');
+      error.productionJobId=job.id||jobId;error.productionStage=job.stage||lastStage||'reading';registerProductionFailure(error);throw error;
+    }catch(error){
+      if(!error.productionJobId){error.productionJobId=jobId;error.productionStage=lastStage||directArticleState.lastStage||'reading';registerProductionFailure(error);}
+      throw error;
+    }
   }
   async function startFormaProduction(payload){
     directArticleState.lastPayload={...(payload||{})};directArticleState.lastSourceType=payload?.sourceType||null;directArticleState.lastArticleUrl=payload?.url||directArticleState.lastArticleUrl||'';directArticleState.lastError=null;setProductionRetryVisible(false);setProductionStage('source');
@@ -1391,7 +1422,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.4.2',
+      sourceVersion:'0.9.7.4.3',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
