@@ -65,7 +65,7 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.1',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
     jobs:{stuckIntelligent,stuckProduction,healthy:stuckIntelligent===0&&stuckProduction===0},
@@ -85,10 +85,10 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.5',
+      version:'0.9.7.5.1',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.5',
+        editorialVersion:'2.9.7.5.1',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -307,7 +307,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.4.2-retry-ux-same-job'
+        assetCacheBust:'2.9.7.5.1-unified-no-hang'
       },
       navigation:{
         ronda:'/ronda',

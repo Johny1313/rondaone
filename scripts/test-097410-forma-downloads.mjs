@@ -14,6 +14,6 @@ assert.match(design,/markEditorialProductionComplete\(\{silent:true\}\)/);
 assert.match(design,/Não foi possível atualizar a Mesa, mas o download foi liberado/);
 assert.match(design,/triggerBlobDownload\(blob,boardExportName\(board,i,boards.length\)\)/);
 assert.match(platform,/formaDownloadFlowV097410/);
-assert.match(shell,/(?:0\.9\.7\.4\.(?:10-forma-download-all-slides|11-newsroom-os-phase-1|12-newsroom-os-hardening)|0\.9\.7\.5-adaptive-retry-no-repeat)/);
+assert.match(shell,/(?:0\.9\.7\.4\.(?:10-forma-download-all-slides|11-newsroom-os-phase-1|12-newsroom-os-hardening)|0\.9\.7\.5(?:-adaptive-retry-no-repeat|\.1-unified-no-hang-coordinator))/);
 
 console.log("RONDA ONE v0.9.7.4.10 FORMA Download Flex + All Slides: OK");

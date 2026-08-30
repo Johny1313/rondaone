@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const engine=fs.readFileSync(new URL('../src/production/engine.js',import.meta.url),'utf8');
+const forma=fs.readFileSync(new URL('../public/design/index.html',import.meta.url),'utf8');
+const api=fs.readFileSync(new URL('../src/ronda/v285/index.js',import.meta.url),'utf8');
+const waitBlock=forma.slice(forma.indexOf('async function waitFormaProductionJob'),forma.indexOf('async function startFormaProduction'));
+
+assert.equal((engine.match(/const PRODUCTION_HARD_DEADLINE_MS/g)||[]).length,1,'deve existir um único hard deadline');
+assert.equal((engine.match(/const PRODUCTION_ABSOLUTE_DEADLINE_MS/g)||[]).length,1,'deve existir um único deadline absoluto');
+assert.match(engine,/PRODUCTION_INTERACTIVE_DEADLINE_MS = 10_000/);
+assert.match(engine,/PRODUCTION_HARD_DEADLINE_MS = 45_000/);
+assert.match(engine,/PRODUCTION_ABSOLUTE_DEADLINE_MS = 55_000/);
+assert.ok(10_000 < 45_000 && 45_000 < 55_000,'hierarquia de deadlines deve ser 10s < 45s < 55s');
+assert.match(engine,/runDirectProductionRecovery\(env,id,\{stage:"reading",ctx,force:true,retryMode:"alternate"\}\)/);
+assert.match(engine,/retryMode=retryNumber===1\?'alternate':retryNumber===2\?'deep':'snapshot'/);
+assert.match(engine,/fallbackCount>=1/);
+assert.doesNotMatch(waitBlock,/\/retry/,'polling não pode chamar retry automático');
+assert.doesNotMatch(waitBlock,/\/fallback/,'polling não pode chamar fallback automático');
+assert.match(forma,/clientSafetyCeiling=startedAt\+65\*1000/);
+assert.match(api,/if \(!\["ready","failed"\]\.includes\(current\.status\)\) await recoverStalledProductionJob/);
+assert.equal((api.match(/recoverStalledProductionJob\(env,current\.id,\{ctx\}\)/g)||[]).length,1,'GET do job deve ter um único coordenador server-side');
+assert.match(api,/engineVersion:"0\.9\.7\.5\.1"/);
+console.log('RONDA ONE v0.9.7.5.1 Unified No-Hang Coordinator invariants: OK');
