@@ -1,3 +1,15 @@
+# v0.9.7.5.1 — Unified No-Hang Coordinator
+
+- restaura o princípio No-Hang da v0.9.7.2.2 sem perder o Fast Path atual;
+- remove o deadline terminal cego de 26 s do FORMA;
+- backend passa a ser o único coordenador de recovery;
+- remove retry e fallback automáticos concorrentes do polling do frontend;
+- hard recovery em 45 s e limite absoluto em 55 s;
+- mantém teto de conexão do frontend em 65 s apenas como segurança de UX;
+- recuperação automática de leitura usa rota alternativa e respeita lease;
+- fallback determinístico automático é único por job;
+- scraping, collector, article-reader e scraping-engine não foram modificados.
+
 # v0.9.7.5 — Produção leve + scraping restaurado + tarefas unificadas
 
 ## Arquitetura

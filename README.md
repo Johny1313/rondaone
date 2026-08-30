@@ -1,3 +1,21 @@
+# RONDA ONE Cloud v0.9.7.5.1 — Unified No-Hang Coordinator
+
+Hotfix estrutural sobre a v0.9.7.5 Production Lite. O scraping e a qualidade editorial não foram alterados; esta versão reconstrói somente a coordenação de jobs do FORMA.
+
+## Coordenador único
+- backend é o único responsável por recuperação automática;
+- polling do FORMA apenas observa status/progresso e nunca dispara retry/fallback em paralelo;
+- Fast Path permanece em 10 s;
+- recuperação No-Hang usa janela operacional de 45 s;
+- limite absoluto de segurança é 55 s;
+- frontend mantém apenas teto de conexão de 65 s, sem transformar 20/26 s em falha terminal;
+- recuperação de leitura automática força transporte alternativo;
+- retry manual preserva o mesmo job e progride: alternate → deep → snapshot;
+- fallback determinístico automático pode ser iniciado apenas uma vez por job.
+
+## Auditoria de conflito
+A suíte falha caso volte a existir: hard deadline duplicado, segundo coordenador no GET, retry/fallback automático no polling, fallback automático duplicado ou versão divergente do Production Engine.
+
 # RONDA ONE Cloud v0.9.7.5 — Produção leve + Adaptive Retry
 
 Build consolidada sobre a 0.9.7.4.12 com duas correções principais: retry adaptativo sem repetição cega e separação completa entre gerenciamento de produção e pipeline editorial.
