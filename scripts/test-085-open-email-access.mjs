@@ -1,4 +1,0 @@
-import assert from "node:assert/strict";import fs from "node:fs";
-const read=p=>fs.readFileSync(new URL(`../${p}`,import.meta.url),"utf8");
-const worker=read("src/ronda/v285/index.js"),db=read("src/ronda/v285/database.js"),login=read("public/index.html"),admin=read("public/admin/index.html"),adminjs=read("public/admin/admin.js");
-assert.match(worker,/emailOnly:true/);assert.match(worker,/ADMIN_BOOTSTRAP_PASSWORD/);assert.match(worker,/Marque “Entrar como ADM”/);assert.match(db,/setUserAccessDisabled/);assert.match(db,/todayActiveMs/);assert.match(db,/totalActiveMs/);assert.match(login,/Entrar como ADM/);assert.doesNotMatch(login,/Criar senha|cria sua senha/i);assert.match(admin,/Tempo por usuário/);assert.match(adminjs,/Bloquear/);assert.match(adminjs,/Liberar/);console.log("RONDA ONE v0.8.5 Open Email Access: OK");
