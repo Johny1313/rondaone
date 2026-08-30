@@ -46,6 +46,7 @@ const roundView = document.getElementById("roundView");
 const sourcesView = document.getElementById("sourcesView");
 const monitoringView = document.getElementById("monitoringView");
 const newsroomView = document.getElementById("newsroomView");
+const productionView = document.getElementById("productionView");
 const profileView = document.getElementById("profileView");
 
 function escapeHtml(value) {
@@ -303,12 +304,14 @@ function showView(view) {
   sourcesView.hidden = view !== "sources";
   monitoringView.hidden = view !== "monitoring";
   newsroomView.hidden = view !== "newsroom";
+  productionView.hidden = view !== "production";
   profileView.hidden = view !== "profile";
   document.getElementById("sourceHealth").hidden = view !== "round";
   document.getElementById("navRound").classList.toggle("active", view === "round");
   document.getElementById("navSources").classList.toggle("active", view === "sources");
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
   document.getElementById("navNewsroom").classList.toggle("active", view === "newsroom");
+  document.getElementById("navProduction").classList.toggle("active", view === "production");
   document.getElementById("navProfile").classList.toggle("active", view === "profile");
   if (view === "sources") renderPortalCards();
   if (view === "monitoring") {
@@ -1620,6 +1623,7 @@ document.getElementById("refreshNewsroom").addEventListener("click", () => loadN
 document.getElementById("newsroomBoard").addEventListener("change", (event) => { const card=event.target.closest("[data-story-id]"); if(card && event.target.matches("[data-story-status]")) patchNewsroomStory(card.dataset.storyId,{workflowStatus:event.target.value}); });
 document.getElementById("newsroomBoard").addEventListener("click", (event) => { const card=event.target.closest("[data-story-id]"); if(!card)return; if(event.target.closest("[data-story-assume]")) patchNewsroomStory(card.dataset.storyId,{assignToSelf:true}); if(event.target.closest("[data-story-note]")) addNewsroomNote(card.dataset.storyId); if(event.target.closest("[data-story-follow]")) toggleNewsroomFollow(card.dataset.storyId); });
 document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); loadNewsroom(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.getElementById("navProduction").addEventListener("click", () => { showView("production"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.querySelectorAll('[data-profile-ref-tab]').forEach(button=>button.addEventListener('click',()=>setProfileReferenceTab(button.dataset.profileRefTab)));

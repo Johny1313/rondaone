@@ -1,3 +1,96 @@
+# RONDA ONE Cloud v0.9.7.5.3 — Read Budget Regression Fix
+
+Corrige uma regressão de orçamento de leitura introduzida entre as versões 0.9.7.4.5 e 0.9.7.4.6, preservando o Unified No-Hang Coordinator, Mesa e Produção separadas.
+
+# RONDA ONE Cloud v0.9.7.5.3 — Unified No-Hang Coordinator
+
+Hotfix estrutural sobre a v0.9.7.5 Production Lite. O scraping e a qualidade editorial não foram alterados; esta versão reconstrói somente a coordenação de jobs do FORMA.
+
+## Coordenador único
+- backend é o único responsável por recuperação automática;
+- polling do FORMA apenas observa status/progresso e nunca dispara retry/fallback em paralelo;
+- Fast Path permanece em 10 s;
+- recuperação No-Hang usa janela operacional de 45 s;
+- limite absoluto de segurança é 55 s;
+- frontend mantém apenas teto de conexão de 65 s, sem transformar 20/26 s em falha terminal;
+- recuperação de leitura automática força transporte alternativo;
+- retry manual preserva o mesmo job e progride: alternate → deep → snapshot;
+- fallback determinístico automático pode ser iniciado apenas uma vez por job.
+
+## Auditoria de conflito
+A suíte falha caso volte a existir: hard deadline duplicado, segundo coordenador no GET, retry/fallback automático no polling, fallback automático duplicado ou versão divergente do Production Engine.
+
+# RONDA ONE Cloud v0.9.7.5 — Produção leve + Adaptive Retry
+
+Build consolidada sobre a 0.9.7.4.12 com duas correções principais: retry adaptativo sem repetição cega e separação completa entre gerenciamento de produção e pipeline editorial.
+
+## Produção leve
+- nova aba **Produção**: Produção → Aprovação → Finalização → Concluído;
+- serve somente para mover/indicar status das tarefas;
+- não executa scraping, diagnóstico de fontes, Evidence Pack, IA ou geração;
+- tarefas vindas da Ronda entram em Produção ao serem enviadas ao FORMA;
+- tarefas geradas diretamente no FORMA também entram em Produção;
+- cards exibem título, responsável/quem gerou e comentários;
+- comentários não disparam processamento editorial;
+- download final conclui a tarefa.
+
+## Qualidade de leitura restaurada
+- pautas da Ronda voltam ao pipeline completo `topic → scraping → Evidence Pack → geração`;
+- o gerenciamento da Produção não fornece conteúdo substituto para a leitura;
+- núcleos `scraper`, `collector`, `article-reader` e `production/scraping-engine` são idênticos aos da 0.9.7.4.12.
+
+## Retry adaptativo
+- preserva o mesmo job e o Evidence Pack válido;
+- cada retry muda de estratégia em vez de repetir cegamente a rota que falhou.
+
+# RONDA ONE Cloud v0.9.7.4.12 — Newsroom Operating System Hardening
+
+Build consolidada para quem não baixou as duas versões anteriores. Inclui integralmente **v0.9.7.4.10 (FORMA Download Flex + All Slides)** e **v0.9.7.4.11 (Newsroom Operating System · Phase 1)**, mais a camada de hardening de performance e estabilidade.
+
+## Incluído nesta build
+- download de carrossel sem obrigatoriedade de revisão;
+- download de todos os slides;
+- Kanban editorial, trava de dupla produção e histórico operacional;
+- Principal/Novidades/Mesa sobre a mesma base;
+- evolução do mesmo evento;
+- scheduler adaptativo, saúde e cobertura das fontes;
+- handoff profundo Ronda → FORMA e retorno FORMA → Ronda com projeto/preview;
+- redução de renderizações e requisições redundantes;
+- redução de gravações redundantes no D1;
+- preview FORMA mais leve e sincronização deduplicada.
+
+# RONDA ONE Cloud v0.9.7.4.11 — Newsroom Operating System · Phase 1
+
+Atualização incremental sobre a v0.9.7.4.10, preservando HOTFIX LOCK, scraping híbrido, Evidence Pack, filas e integração FORMA.
+
+## Prioridades implementadas
+- Mesa em **Kanban editorial**: Disponível → Em produção → FORMA → Revisão → Concluído, com drag-and-drop;
+- **trava de produção** no backend para evitar duas pessoas assumindo a mesma pauta;
+- Principal, Novidades e Mesa mantidas como visões da **mesma base editorial**;
+- **Evolução do evento** consolidada em timeline;
+- scheduler de fontes passa a adaptar a próxima leitura conforme volume e cobertura;
+- saúde das fontes e **captado/meta 1h** visíveis na Mesa;
+- handoff Ronda → FORMA leva snapshot editorial, fontes e evolução do evento;
+- retorno FORMA → Ronda grava projeto, preview e permite reabrir a arte diretamente pela pauta.
+
+# RONDA ONE Cloud v0.9.7.4.10 — FORMA Download Flex + All Slides
+
+Atualização incremental sobre a v0.9.7.4.9. Não redesenha interface, não troca a arquitetura editorial e não remove cache, fallback, filas, scraping híbrido, Browser Run, Evidence Pack ou mecanismos de recuperação.
+
+## Objetivo
+
+Liberar a exportação operacional do FORMA sem depender da etapa de revisão e acelerar a saída de carrosséis completos.
+
+## FORMA Download Flex
+- permite baixar o slide atual mesmo quando o carrossel não foi enviado para revisão;
+- adiciona botão dedicado para **baixar todos os slides** do projeto em sequência com um único clique;
+- mantém a revisão como etapa opcional do fluxo, sem bloquear a exportação da arte;
+- ao exportar um conteúdo ligado à Mesa, tenta concluir a pauta automaticamente sem impedir o download caso o registro editorial falhe.
+
+## Compatibilidade
+- mantém a rastreabilidade da Mesa editorial da v0.9.7.4.9;
+- mantém o HOTFIX LOCK v0.9.7.4.8, circuit breaker, SWR, Browser Run limitado e descoberta de alto volume sem reescrita arquitetural.
+
 # RONDA ONE Cloud v0.9.7.4.9 — Editorial Desk Tracking + Main/Novidades
 
 Atualização incremental sobre a v0.9.7.4.7. Não redesenha interface, não troca a arquitetura editorial e não remove cache, fallback, filas, scraping híbrido, Browser Run, Evidence Pack ou mecanismos de recuperação.

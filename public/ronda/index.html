@@ -15,6 +15,7 @@
       <nav aria-label="Navegação principal">
         <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
         <button class="nav" id="navNewsroom" type="button"><span class="nav-icon">M</span><span>Mesa</span></button>
+        <button class="nav" id="navProduction" type="button"><span class="nav-icon">P</span><span>Produção</span></button>
         <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
         <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
         <button class="nav" id="navProfile" type="button"><span class="nav-icon">P</span><span>Perfil</span></button>
@@ -35,6 +36,10 @@
 
       <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> A ronda e o monitoramento dedicado continuam no Cloudflare mesmo com esta janela fechada; resultados de termos aparecem somente na aba Termos.</div>
       <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button></div>
+
+      <section class="newsroom-view production-view" id="productionView" hidden aria-labelledby="productionTitle">
+        <div class="management-heading newsroom-heading"><div><p class="eyebrow">Gerenciamento operacional</p><h2 id="productionTitle">Produção</h2><p>Status, responsáveis, aprovação, finalização e comentários. Esta área não participa da coleta, leitura ou geração.</p></div><button class="secondary" id="refreshProduction" type="button">↻ Atualizar produção</button></div>
+      </section>
 
       <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
         <div class="sources-heading">
