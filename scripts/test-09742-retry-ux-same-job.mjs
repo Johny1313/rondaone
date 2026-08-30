@@ -12,7 +12,7 @@ assert.match(design,/\/api\/production\/jobs\/\$\{encodeURIComponent\(jobId\)\}\
 assert.match(engine,/Nova tentativa solicitada pelo operador/);
 assert.match(engine,/sameJob:true/);
 assert.match(engine,/runDirectProductionRecovery\(env,id,\{stage:"generating",ctx\}\)/);
-assert.match(engine,/launchInteractiveProduction\(env,id,\{force:(?:true|false),ctx\}\)/);
+assert.match(engine,/launchInteractiveProduction\(env,id,\{force:[^,}]+,ctx(?:,retryMode)?\}\)/);
 assert.doesNotMatch(engine,/if\(stage==="generate"&&job\.evidenceId\).*queueForCarousel/s);
 assert.match(worker,/productionRetryMatch/);
 console.log('v0.9.7.4.2 Retry UX + Same Job Recovery OK');

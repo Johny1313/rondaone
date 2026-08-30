@@ -11,7 +11,7 @@ assert.match(engine,/buildCarouselFromEvidencePack/);
 assert.match(engine,/PRODUCTION_INTERACTIVE_DEADLINE_MS = (?:10_000|12_000)/);
 assert.match(engine,/mode:"evidence-first"/);
 assert.match(worker,/(?:runInteractiveProduction|launchInteractiveProduction)\(env,job\.id/);
-assert.match(design,/deadline=startedAt\+(?:20|26)\*1000/);
+assert.match(design,/clientSafetyCeiling=startedAt\+65\*1000/);
 
 const evidence={
   id:'evidence-fast-test',sourceName:'Agência Teste',url:'https://example.test/noticia',canonicalUrl:'https://example.test/noticia',resolvedUrl:'https://example.test/noticia',

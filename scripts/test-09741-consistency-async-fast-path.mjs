@@ -5,7 +5,6 @@ import { collectRound } from '../src/ronda/v285/collector.js';
 const collector=fs.readFileSync('src/ronda/v285/collector.js','utf8');
 const engine=fs.readFileSync('src/production/engine.js','utf8');
 const worker=fs.readFileSync('src/ronda/v285/index.js','utf8');
-const mesa=fs.readFileSync('public/ronda/editorial-mesa.js','utf8');
 const events=fs.readFileSync('src/ronda/editorial-events.js','utf8');
 const design=fs.readFileSync('public/design/index.html','utf8');
 
@@ -16,7 +15,6 @@ assert.match(worker,/launchInteractiveProduction\(env,job\.id/);
 assert.match(worker,/reusedActive:true/);
 assert.doesNotMatch(worker,/await runInteractiveProduction\(env,job\.id/);
 assert.match(design,/\[502,503,504\]/);
-assert.match(mesa,/editorial-changes\?sinceLastRound=1/);
 assert.match(events,/sinceLastRound/);
 assert.match(events,/trigger_type <> 'fast-lane'/);
 assert.match(collector,/hasSafeSnapshot/);

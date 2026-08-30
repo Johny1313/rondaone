@@ -146,7 +146,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.4.9";
+const VERSION = "2.9.7.5.1";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1482,14 +1482,43 @@ async function handleApi(request, env, url, ctx) {
         if (stored?.payload) payload = withEditorias({ ...stored.payload, runId:stored.id, triggerType:stored.triggerType });
       }
       if (!payload) payload = withEditorias(await getLatestRound(db));
-      let topic = payload?.topics?.find((item)=>item?.id===sourceRef) || null;
+      let topic = null;
+      let editorialEvent = null;
+      // Pautas abertas diretamente pelo Kanban devem usar o evento persistido da Mesa
+      // como fonte primária de contexto. A leitura externa vira enriquecimento, não pré-requisito.
+      if (sourceType === "event") {
+        editorialEvent = await getEditorialEvent(db,sourceRef).catch(()=>null);
+        topic = editorialEvent ? topicFromEditorialEvent(editorialEvent) : null;
+      }
+      if (!topic) topic = payload?.topics?.find((item)=>item?.id===sourceRef) || null;
       if (!topic) {
-        const editorialEvent = await getEditorialEvent(db,sourceRef).catch(()=>null);
+        editorialEvent = editorialEvent || await getEditorialEvent(db,sourceRef).catch(()=>null);
         topic = editorialEvent ? topicFromEditorialEvent(editorialEvent) : null;
       }
       if (!topic) throw new HttpError(404,"Assunto não encontrado na Ronda ou na Mesa Editorial.");
-      input = { topic, runId:body?.runId||payload?.runId||null, editoria:topic.editoria||body?.editoria||"Notícias" };
-      sourceType = topic?.editorialEvent?.eventId ? "event" : "topic";
+      const editorialEventContext = editorialEvent ? {
+        eventId:editorialEvent.eventId,
+        title:editorialEvent.titulo||topic.title||"Evento editorial",
+        summary:editorialEvent.resumoEditorial||editorialEvent.resumo||"",
+        editoria:editorialEvent.editoria||topic.editoria||"Notícias",
+        subeditoria:editorialEvent.subeditoria||"",
+        status:editorialEvent.status||"",
+        confirmation:editorialEvent.nivelConfirmacao||null,
+        quality:editorialEvent.qualidadeApuracao||null,
+        newInformation:(editorialEvent.informacoesNovas||[]).map(item=>typeof item==='string'?item:item?.text).filter(Boolean).slice(0,24),
+        openPoints:(editorialEvent.pontosEmAberto||[]).map(item=>typeof item==='string'?item:item?.text||item).filter(Boolean).slice(0,16),
+        timeline:(editorialEvent.timeline||[]).slice(-30),
+        sources:(editorialEvent.fontes||editorialEvent.materias||[]).map(item=>({
+          sourceName:item?.sourceName||item?.name||"Fonte",
+          title:item?.title||"",
+          url:item?.url||null,
+          publishedAt:item?.publishedAt||null,
+          role:item?.role||null,
+          summary:item?.description||item?.summary||item?.resumo||"",
+        })).slice(0,30),
+      } : null;
+      input = { topic, editorialEventContext, runId:body?.runId||payload?.runId||null, editoria:topic.editoria||body?.editoria||"Notícias" };
+      sourceType = editorialEventContext || topic?.editorialEvent?.eventId ? "event" : "topic";
     } else if (sourceType === "text") {
       const text = plainText(body?.text);
       if (text.length < 120) throw new HttpError(400,"O texto próprio precisa ter conteúdo suficiente para gerar um carrossel.");
@@ -1509,19 +1538,19 @@ async function handleApi(request, env, url, ctx) {
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
       if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.8", job:reusable, pollAfterMs:0 },200);
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.5.1", job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.8",job:active,pollAfterMs:450},202);
+      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.5.1",job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
     // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
     // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
     const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.8", job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.5.1", job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
@@ -2108,7 +2137,7 @@ async function handleApi(request, env, url, ctx) {
     const { user } = await requireEditorialUser(request, env);
     const body = await readJsonBody(request);
     try {
-      const item = await updateEditorialProductionTracking(requireDatabase(env),editorialProductionRoute[1],{action:String(body?.action||""),userId:user.id});
+      const item = await updateEditorialProductionTracking(requireDatabase(env),editorialProductionRoute[1],{action:String(body?.action||""),userId:user.id,payload:body?.payload&&typeof body.payload==='object'?body.payload:{}});
       return json({ ok:true, item });
     } catch (error) {
       throw new HttpError(409,error instanceof Error?error.message:"Não foi possível atualizar a produção editorial.");

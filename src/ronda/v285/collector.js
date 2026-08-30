@@ -107,6 +107,24 @@ function sourceRefreshMinutes(id) {
   return 5;
 }
 
+function adaptiveSourceRefreshMinutes(feed, items = [], healthy = true) {
+  if (!healthy) return Math.max(1, Number(feed?.refreshMinutes) || 5);
+  const coverage = coverageSnapshot(feed, items);
+  const profile = feed?.volume?.id || coverage.profile || "normal";
+  if (profile === "very-high") {
+    if (coverage.score < 60) return 1;
+    if (coverage.score < 100) return 1;
+    return 2;
+  }
+  if (profile === "high") {
+    if (coverage.score < 60) return 2;
+    if (coverage.score < 100) return 3;
+    return 4;
+  }
+  if (coverage.score < 60) return 3;
+  return Math.max(4, Number(feed?.refreshMinutes) || 5);
+}
+
 export async function runPool(items, concurrency, worker, onSettled = null) {
   const list = Array.isArray(items) ? items : [];
   const output = new Array(list.length);
@@ -1056,8 +1074,9 @@ function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState,
   const attemptedAt = collectedAt.toISOString();
   const healthy = Boolean(rawResult?.status?.ok);
   const circuit=sourceCircuitDecision(feed,previousState,rawResult,resilientResult,collectedAt);
+  const adaptiveRefreshMinutes = healthy ? adaptiveSourceRefreshMinutes(feed, resilientResult?.items || [], true) : null;
   const nextMinutes = healthy
-    ? Math.max(1, Number(feed.refreshMinutes) || 5)
+    ? adaptiveRefreshMinutes
     : circuit.circuitState === "OPEN"
       ? Math.max(1,Math.round((Date.parse(circuit.nextRetryAt)-collectedAt.getTime())/60000))
       : Math.min(15, retryBackoffMinutes(rawResult?.status?.errorCode, circuit.failureCount));
@@ -1093,6 +1112,7 @@ function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState,
     lastRouteTried: rawResult?.operational?.lastRouteTried || previousState?.lastRouteTried || null,
     coverage: resilientResult?.status?.coverage || coverageSnapshot(feed, items, [resilientResult?.status?.route]),
     volumeProfile: feed?.volume?.id || "normal",
+    adaptiveRefreshMinutes: adaptiveRefreshMinutes || nextMinutes,
     updatedAt: attemptedAt,
   };
 }
@@ -1112,6 +1132,7 @@ function enrichStatus(status, sourceState, feed) {
     lastRouteTried: status?.lastRouteTried || sourceState?.lastRouteTried || null,
     priorityRecovery: PRIORITY_RECOVERY_SOURCE_IDS.has(feed.id),
     refreshMinutes: feed.refreshMinutes,
+    adaptiveRefreshMinutes: (()=>{const next=Date.parse(sourceState?.nextCheckAt||"");const attempt=Date.parse(sourceState?.lastAttemptAt||"");return Number.isFinite(next)&&Number.isFinite(attempt)?Math.max(1,Math.round((next-attempt)/60000)):feed.refreshMinutes;})(),
   };
 }
 

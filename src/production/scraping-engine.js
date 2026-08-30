@@ -452,7 +452,7 @@ export async function scrapeArticle(item, {
   }
 
   try {
-    const directBudget = Math.min(browserFetcher ? (adapter ? 2_800 : 3_200) : (adapter ? 3_800 : 4_500), Math.max(1_500, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+    const directBudget = Math.min(6_500, Math.max(1_500, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
     const fetched = await fetchHtml(inputUrl, fetcher, directBudget, { slideCount });
     const html = fetched.html;
     const finalUrl = fetched.finalUrl;
@@ -692,7 +692,7 @@ export async function scrapeTopicToEvidence(topic, options = {}) {
     let record;
     try{
       const adapterKnown=Boolean(portalAdapterForUrl(item?.url));
-      const candidateTimeout=Math.min(Number(options.timeoutMs)||4_500,adapterKnown?3_800:4_500);
+      const candidateTimeout=Math.min(6_500,Math.max(1_500,Number(options.timeoutMs)||6_500));
       let transportPreference=options.transportPreference||"direct-first";
       if(typeof options.transportPreferenceFor==="function"){try{transportPreference=await options.transportPreferenceFor(item,role)||"direct-first";}catch{transportPreference="direct-first";}}
       record=await scrapeArticle(item,{...options,timeoutMs:candidateTimeout,slideCount:Number(options.slideCount)||7,allowCollectedFastPath:false,transportPreference});
