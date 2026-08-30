@@ -563,13 +563,13 @@ export async function scrapeArticle(item, {
     }
   }
 
-  if (!best) {
+  if (!best || !best.evidenceSufficiency?.ready || Number(best.readingQuality) < 55) {
     const fallback = collectedFallback(item);
     if (fallback) {
       fallback.evidenceSufficiency = evidenceSufficiency(fallback.content, slideCount);
-      attempts.push({method:"collected-fallback",ok:true,wordCount:fallback.wordCount});
+      attempts.push({method:"collected-fallback",transport:"snapshot",ok:true,wordCount:fallback.wordCount});
       consider(fallback);
-    } else attempts.push({method:"collected-fallback",ok:false,error:"snapshot/RSS sem conteúdo suficiente"});
+    } else attempts.push({method:"collected-fallback",transport:"snapshot",ok:false,error:"snapshot/RSS sem conteúdo suficiente"});
   }
 
 

@@ -19,5 +19,5 @@ assert.doesNotMatch(waitBlock,/\/fallback/,'polling não pode chamar fallback au
 assert.match(forma,/clientSafetyCeiling=startedAt\+65\*1000/);
 assert.match(api,/if \(!\["ready","failed"\]\.includes\(current\.status\)\) await recoverStalledProductionJob/);
 assert.equal((api.match(/recoverStalledProductionJob\(env,current\.id,\{ctx\}\)/g)||[]).length,1,'GET do job deve ter um único coordenador server-side');
-assert.match(api,/engineVersion:"0\.9\.7\.5\.1"/);
-console.log('RONDA ONE v0.9.7.5.1 Unified No-Hang Coordinator invariants: OK');
+assert.match(api,/engineVersion:"0\.9\.7\.5\.[1-4]"/);
+console.log('RONDA ONE Unified No-Hang Coordinator invariants: OK');

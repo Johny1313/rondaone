@@ -10,8 +10,8 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.1";
-const PRODUCTION_READ_STALE_MS = 8_000;
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.4";
+const PRODUCTION_READ_STALE_MS = 15_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 45_000;
 const PRODUCTION_ABSOLUTE_DEADLINE_MS = 55_000;
@@ -293,6 +293,41 @@ async function acquireProductionLease(db,jobId,stage,ttlMs){
   return row?.token===token?{jobId,stage,token,expiresAt}:null;
 }
 
+async function renewProductionLease(db,lease,ttlMs){
+  if(!lease)return false;
+  const expiresAt=Date.now()+Math.max(4_000,Number(ttlMs)||12_000);
+  const result=await db.prepare("UPDATE production_stage_leases SET expires_at=?,updated_at=? WHERE job_id=? AND stage=? AND token=?").bind(expiresAt,nowIso(),lease.jobId,lease.stage,lease.token).run().catch(()=>null);
+  const changed=Number(result?.meta?.changes??result?.changes??0);
+  if(changed>0){lease.expiresAt=expiresAt;return true;}
+  const row=await db.prepare("SELECT token FROM production_stage_leases WHERE job_id=? AND stage=? LIMIT 1").bind(lease.jobId,lease.stage).first().catch(()=>null);
+  if(row?.token===lease.token){lease.expiresAt=expiresAt;return true;}
+  return false;
+}
+
+async function hasActiveProductionLease(db,jobId,stage){
+  await ensureProductionSchema(db);
+  const row=await db.prepare("SELECT expires_at FROM production_stage_leases WHERE job_id=? AND stage=? LIMIT 1").bind(jobId,stage).first().catch(()=>null);
+  return Number(row?.expires_at)>Date.now();
+}
+
+async function touchProductionJob(db,jobId){
+  await db.prepare("UPDATE production_jobs SET updated_at=? WHERE id=? AND status IN ('queued','running')").bind(nowIso(),jobId).run().catch(()=>null);
+}
+
+function startProductionLeaseHeartbeat(db,jobId,lease,{ttlMs=30_000,intervalMs=4_000}={}){
+  if(!lease||typeof globalThis.setInterval!=="function")return ()=>{};
+  let busy=false,stopped=false;
+  const timer=globalThis.setInterval(async()=>{
+    if(busy||stopped)return;busy=true;
+    try{
+      const renewed=await renewProductionLease(db,lease,ttlMs);
+      if(renewed)await touchProductionJob(db,jobId);
+      else stopped=true;
+    }finally{busy=false;}
+  },Math.max(2_000,Number(intervalMs)||4_000));
+  return ()=>{stopped=true;try{globalThis.clearInterval?.(timer);}catch{}};
+}
+
 async function releaseProductionLease(db,lease){
   if(!lease)return;
   await db.prepare("DELETE FROM production_stage_leases WHERE job_id=? AND stage=? AND token=?").bind(lease.jobId,lease.stage,lease.token).run().catch(()=>null);
@@ -444,11 +479,12 @@ function bestTopicItem(topic){return (Array.isArray(topic?.items)?topic.items:[]
 export async function processProductionRead(env,jobId,{force=false,retryMode=null}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result)return job;
-  const lease=await acquireProductionLease(db,jobId,"reading",20_000);
+  const lease=await acquireProductionLease(db,jobId,"reading",30_000);
   if(!lease){
-    await event(db,jobId,"reading","deduplicated","Leitura já está em execução; tentativa duplicada ignorada",{sameJob:true}).catch(()=>null);
-    return getProductionJob(db,jobId);
+    await event(db,jobId,"reading","deduplicated","Leitura já está em execução; tentativa duplicada ignorada",{sameJob:true,leaseBusy:true}).catch(()=>null);
+    const current=await getProductionJob(db,jobId);return current?{...current,leaseBusy:true,deduplicated:true}:current;
   }
+  const stopLeaseHeartbeat=startProductionLeaseHeartbeat(db,jobId,lease,{ttlMs:30_000,intervalMs:4_000});
   await updateJob(db,jobId,{status:"running",stage:"reading",progress:10,error:null});await event(db,jobId,"reading","running","Leitura iniciada");
   try{
     if(!force){let cached=await cachedEvidenceFor(db,job,{maxAgeMinutes:Number(env.EVIDENCE_FAST_CACHE_MINUTES)||(job.sourceType==="url"?60:10)});if(cached?.articleText&&Number(cached?.reading?.quality)>=55){cached=await translateEvidencePackToPtBrFast(env,cached,{slideCount:job.input?.slideCount||7});if(!evidencePtBrReady(cached))throw new Error("A matéria está em outro idioma e a tradução para português do Brasil não pôde ser concluída.");await saveEvidencePackage(db,cached);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:46,evidenceId:cached.id,fallbackLevel:1});await event(db,jobId,"evidence","completed_fallback","Evidence Pack recuperado do cache e normalizado para PT-BR",{quality:cached?.reading?.quality,translation:cached?.translation?.status||"not-needed"});return job;}}
@@ -462,7 +498,8 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
       const retryTimeout=retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500);
       let record=await scrapeArticle(item,{timeoutMs:retryTimeout,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,transportPreference});
       await recordTransportOutcome(db,item.url,record).catch(()=>null);
-      if(!record.ok){const error=new Error(record.error||"A matéria externa não forneceu leitura útil por nenhuma rota disponível.");error.readAttempts=record.attempts||[];throw error;}
+      const usefulRead=Boolean(record?.ok&&(Number(record.readingQuality)>=55||(record?.evidenceSufficiency?.ready&&Number(record.readingQuality)>=40)));
+      if(!usefulRead){const error=new Error(record.error||"A matéria externa abriu, mas não forneceu texto editorial suficiente para gerar o carrossel com segurança.");error.readAttempts=record.attempts||[];throw error;}
       let pack=buildEvidencePack(record,{sourceType:"url",sourceRef:job.sourceRef});
       pack=await translateEvidencePackToPtBrFast(env,pack,{slideCount:job.input?.slideCount||7});
       evidenceResult={ok:true,evidence:pack};
@@ -498,8 +535,9 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
   }catch(error){
     const latest=await getProductionJob(db,jobId).catch(()=>null);
     if(latest?.status==="ready"&&latest?.result?.slides?.length)return latest;
-    await updateJob(db,jobId,{status:"failed",stage:"reading",progress:100,error:error?.message||String(error)});await event(db,jobId,"reading","failed",error?.message||String(error));throw error;
-  }finally{await releaseProductionLease(db,lease);}
+    const readAttempts=Array.isArray(error?.readAttempts)?error.readAttempts.slice(0,8):[];
+    await updateJob(db,jobId,{status:"failed",stage:"reading",progress:100,error:error?.message||String(error)});await event(db,jobId,"reading","failed",error?.message||String(error),{attempts:readAttempts,attemptCount:readAttempts.length});throw error;
+  }finally{stopLeaseHeartbeat();await releaseProductionLease(db,lease);}
 }
 
 function evidenceSyntheticHtml(evidence){
@@ -513,11 +551,12 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result?.slides?.length)return job;
   const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;if(!evidence?.articleText)throw new Error("Evidence Pack não encontrado para a produção.");if(!evidencePtBrReady(evidence))throw new Error("A produção foi bloqueada porque o conteúdo ainda não está normalizado em português do Brasil.");
-  const lease=await acquireProductionLease(db,jobId,"generating",12_000);
+  const lease=await acquireProductionLease(db,jobId,"generating",24_000);
   if(!lease){
-    await event(db,jobId,deterministicOnly?"fallback":"generating","deduplicated","Geração já está em execução; tentativa duplicada ignorada",{sameJob:true,deterministicOnly:Boolean(deterministicOnly)}).catch(()=>null);
-    return getProductionJob(db,jobId);
+    await event(db,jobId,deterministicOnly?"fallback":"generating","deduplicated","Geração já está em execução; tentativa duplicada ignorada",{sameJob:true,deterministicOnly:Boolean(deterministicOnly),leaseBusy:true}).catch(()=>null);
+    const current=await getProductionJob(db,jobId);return current?{...current,leaseBusy:true,deduplicated:true}:current;
   }
+  const stopLeaseHeartbeat=startProductionLeaseHeartbeat(db,jobId,lease,{ttlMs:24_000,intervalMs:4_000});
   await updateJob(db,jobId,{status:"running",stage:deterministicOnly?"fallback":"generating",progress:deterministicOnly?74:58,error:null,fallbackLevel:deterministicOnly?Math.max(2,job.fallbackLevel||0):job.fallbackLevel});await event(db,jobId,deterministicOnly?"fallback":"generating","running",deterministicOnly?"Fallback determinístico iniciado":"Multi-AI iniciada",{quality:evidence?.reading?.quality,deterministicOnly:Boolean(deterministicOnly)});
   try{
     const sourceUrl=evidence.canonicalUrl||evidence.url||"https://example.com/ronda-evidence";
@@ -527,7 +566,7 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.5.1",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.5.4",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     const alreadyReady=await getProductionJob(db,jobId);if(alreadyReady?.status==="ready"&&alreadyReady?.result?.slides?.length)return alreadyReady;
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score,deterministicOnly:Boolean(deterministicOnly)});return job;
   }catch(error){
@@ -535,11 +574,12 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     if(latest?.status==="ready"&&latest?.result?.slides?.length)return latest;
     if(!deterministicOnly){
       await event(db,jobId,"fallback","recovery","A geração com IA não concluiu; finalizando automaticamente pelo modo seguro baseado nas evidências",{error:String(error?.message||error).slice(0,220)}).catch(()=>null);
+      stopLeaseHeartbeat();
       await releaseProductionLease(db,lease);
       return processProductionGenerate(env,jobId,{deterministicOnly:true});
     }
     await updateJob(db,jobId,{status:"failed",stage:"fallback",progress:100,error:error?.message||String(error)});await event(db,jobId,"fallback","failed",error?.message||String(error));throw error;
-  }finally{await releaseProductionLease(db,lease);}
+  }finally{stopLeaseHeartbeat();await releaseProductionLease(db,lease);}
 }
 
 export async function startProductionPipeline(env,jobId,{force=false,ctx=null}={}){
@@ -642,6 +682,7 @@ async function runDirectProductionRecovery(env,jobId,{stage,ctx=null,retryMode=n
   const task=(async()=>{
     if(stage==="generating"||stage==="fallback")return processProductionGenerate(env,jobId,{deterministicOnly:stage==="fallback"});
     const read=await processProductionRead(env,jobId,{force,retryMode});
+    if(read?.leaseBusy||read?.deduplicated)return read;
     if(read?.status!=="failed")return processProductionGenerate(env,jobId);
     return read;
   })();
@@ -680,6 +721,7 @@ export async function recoverStalledProductionJob(env,id,{ctx=null,forceFallback
   }
 
   if((stage==="source"||stage==="reading")&&idleMs>=PRODUCTION_READ_STALE_MS){
+    if(await hasActiveProductionLease(db,id,"reading"))return job;
     const count=await productionRecoveryCount(db,id,"reading");
     if(count<1){
       await updateJob(db,id,{status:"running",stage:"reading",progress:Math.max(8,job.progress||0),error:null,fallbackLevel:Math.max(1,job.fallbackLevel||0)});
@@ -689,6 +731,7 @@ export async function recoverStalledProductionJob(env,id,{ctx=null,forceFallback
   }
 
   if((stage==="generating"||stage==="quality")&&idleMs>=PRODUCTION_GENERATE_STALE_MS){
+    if(await hasActiveProductionLease(db,id,"generating"))return job;
     const count=await productionRecoveryCount(db,id,"generating");
     if(count<1){
       await updateJob(db,id,{status:"running",stage:"generating",progress:Math.max(58,job.progress||0),error:null,fallbackLevel:Math.max(1,job.fallbackLevel||0)});
@@ -730,12 +773,12 @@ export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
     await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; retomando diretamente do Evidence Pack",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
     return runDirectProductionRecovery(env,id,{stage:"generating",ctx});
   }
-  const retryRows=(await env.DB.prepare("SELECT metadata_json FROM production_stage_events WHERE job_id=? AND stage='reading' AND status='recovery' ORDER BY created_at ASC LIMIT 12").bind(id).all().catch(()=>({results:[]})))?.results||[];
+  const retryRows=(await env.DB.prepare("SELECT metadata_json FROM production_stage_events WHERE job_id=? AND stage='reading' AND status='recovery' AND detail LIKE 'Nova tentativa %' ORDER BY created_at ASC LIMIT 12").bind(id).all().catch(()=>({results:[]})))?.results||[];
   const retryNumber=retryRows.length+1;
   const retryMode=retryNumber===1?'alternate':retryNumber===2?'deep':'snapshot';
   const labels={alternate:'transporte alternativo',deep:'leitura profunda com rota alternativa',snapshot:'snapshot/cache + rotas disponíveis'};
   await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});
-  await event(env.DB,id,"reading","recovery",`Nova tentativa ${retryNumber}: ${labels[retryMode]}; mesmo job, estratégia diferente`,{sameJob:true,retryNumber,retryMode,avoidRepeat:true}).catch(()=>null);
+  await event(env.DB,id,"reading","recovery",`Nova tentativa ${retryNumber}: ${labels[retryMode]}; mesmo job, estratégia diferente`,{sameJob:true,retryNumber,retryMode,avoidRepeat:true,manualRetry:true}).catch(()=>null);
   const launched=await launchInteractiveProduction(env,id,{force:retryMode!=='snapshot',ctx,retryMode});
   return launched.job||getProductionJob(env.DB,id);
 }
