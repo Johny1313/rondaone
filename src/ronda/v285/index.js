@@ -141,7 +141,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.4.1";
+const VERSION = "2.9.7.4.2";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1453,19 +1453,19 @@ async function handleApi(request, env, url, ctx) {
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
       if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.1", job:reusable, pollAfterMs:0 },200);
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.2", job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.1",job:active,pollAfterMs:450},202);
+      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.2",job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
     // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
     // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
     const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.1", job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.2", job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);

@@ -205,7 +205,9 @@
               </div>
               <label class="direct-article-check"><input id="directArticleForce" type="checkbox"> Releitura completa · ignorar carrossel em cache</label>
               <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Gerar conteúdo</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div><button class="mini-btn" id="directArticleApplyTemplate" type="button" disabled style="width:100%;margin-top:6px">Aplicar template ao carrossel pronto</button>
-              <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div><div id="productionStages" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px;font-size:8px"><span data-prod-stage="source">1 Fonte</span><span data-prod-stage="reading">2 Leitura</span><span data-prod-stage="evidence">3 Evidências</span><span data-prod-stage="generating">4 Multi-AI</span><span data-prod-stage="quality">5 Qualidade</span><span data-prod-stage="ready">6 FORMA</span></div>
+              <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div>
+              <div id="directArticleRetryRow" class="hidden" style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="primary-btn" id="directArticleRetry" type="button" style="flex:1">↻ Tentar novamente</button><span id="directArticleRetryHint" style="font-size:9px;line-height:1.25;opacity:.72;max-width:45%">Retoma o mesmo job do ponto salvo.</span></div>
+              <div id="productionStages" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px;font-size:8px"><span data-prod-stage="source">1 Fonte</span><span data-prod-stage="reading">2 Leitura</span><span data-prod-stage="evidence">3 Evidências</span><span data-prod-stage="generating">4 Multi-AI</span><span data-prod-stage="quality">5 Qualidade</span><span data-prod-stage="ready">6 FORMA</span></div>
               <div class="production-source-summary hidden" id="productionSourceSummary"><strong>Matéria efetivamente lida</strong><a id="productionSourceLink" href="#" target="_blank" rel="noopener noreferrer"></a><span id="productionSourceMeta"></span><div class="production-image-credits" id="productionImageCredits"></div></div>
             </div>
             <div class="smart-template-status" id="smartTemplateStatus"><strong>Template inteligente</strong><span id="smartTemplateStatusText">Importe um carrossel da RONDA para aplicar o conteúdo automaticamente.</span><div class="smart-template-actions"><button class="mini-btn" id="reapplySmartTemplate" disabled>Reaplicar</button><button class="mini-btn" id="detachSmartTemplate" disabled>Desvincular</button></div></div>
@@ -1197,7 +1199,7 @@
     try{localStorage.setItem(LS_TEMPLATES,JSON.stringify(templates.slice(0,30)));closeModal('templateModal');renderTemplates();showToast(`Template inteligente salvo · ${compiled.slotCount} campos detectados`);}catch{showToast('Template grande demais para o armazenamento local');}
   };
   function getTemplates(){try{const stored=localStorage.getItem(LS_TEMPLATES);if(stored!==null)return JSON.parse(stored||'[]')||[];return JSON.parse(localStorage.getItem('rondaDesign.templates.v1')||'[]')||[];}catch{return[];}}
-  const directArticleState={busy:false,lastJobId:null,lastReused:false};
+  const directArticleState={busy:false,lastJobId:null,lastReused:false,lastStage:'source',lastPayload:null,lastSourceType:null,lastArticleUrl:'',lastError:null};
   function setDirectArticleStatus(text,mode='',progress=null){
     const box=$('#directArticleStatus'),label=$('#directArticleStatusText'),bar=$('#directArticleProgress');
     if(!box||!label||!bar)return;
@@ -1206,6 +1208,19 @@
     box.classList.toggle('ok',mode==='ok');
     box.classList.toggle('error',mode==='error');
     if(progress!=null)bar.style.width=`${Math.max(0,Math.min(100,Number(progress)||0))}%`;
+  }
+  function setProductionRetryVisible(visible,{stage=null,hint=null}={}){
+    const row=$('#directArticleRetryRow'),button=$('#directArticleRetry'),label=$('#directArticleRetryHint');
+    if(!row||!button)return;
+    row.classList.toggle('hidden',!visible);row.style.display=visible?'flex':'none';button.disabled=Boolean(directArticleState.busy);
+    const effective=stage||directArticleState.lastStage||'reading';
+    if(label)label.textContent=hint||(effective==='generating'||effective==='quality'||effective==='fallback'?'Retoma a geração usando o Evidence Pack já salvo.':'Retoma o mesmo job e tenta novamente a leitura da fonte.');
+  }
+  function registerProductionFailure(error){
+    if(error?.productionJobId)directArticleState.lastJobId=error.productionJobId;
+    if(error?.productionStage)directArticleState.lastStage=error.productionStage;
+    directArticleState.lastError=error?.message||String(error||'');
+    setProductionRetryVisible(Boolean(directArticleState.lastJobId),{stage:directArticleState.lastStage});
   }
   function renderDirectArticleTemplates(){
     const select=$('#directArticleTemplate');if(!select)return;
@@ -1250,13 +1265,13 @@
       let bundle;
       try{bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);networkErrors=0;}
       catch(error){networkErrors+=1;setDirectArticleStatus('Conexão oscilou. A produção continua salva; reconectando…','',Math.max(4,lastProgress));await new Promise(r=>setTimeout(r,Math.min(2500,500+networkErrors*350)));continue;}
-      const job=bundle?.job||{};const stage=job.stage||'source';const progress=Math.max(2,Number(job.progress)||2);setProductionStage(stage,job.error||'');
+      const job=bundle?.job||{};const stage=job.stage||'source';const progress=Math.max(2,Number(job.progress)||2);directArticleState.lastJobId=job.id||jobId;directArticleState.lastStage=stage;setProductionStage(stage,job.error||'');
       if(progress>lastProgress||stage!==lastStage){lastProgressAt=Date.now();lastProgress=progress;lastStage=stage;}
       const evidence=bundle?.evidence;
       const label=stage==='reading'?'Lendo a matéria…':stage==='evidence'&&evidence?`Evidence Pack pronto · ${evidence.wordCount||0} palavras · leitura ${Math.round(evidence?.reading?.quality||0)}/100`:stage==='generating'?'Evidence Pack pronto. IA redigindo os slides…':stage==='fallback'?'IA demorou; finalizando pelo modo seguro baseado nas evidências…':stage==='ready'?'Conteúdo pronto para composição no FORMA.':job.error||'Processando produção…';
       setDirectArticleStatus(label,job.status==='failed'?'error':'',progress);
-      if(job.status==='ready'&&job.result?.slides?.length){setProductionStage('ready');return job.result;}
-      if(job.status==='failed'){const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id;error.productionStage=job.stage;throw error;}
+      if(job.status==='ready'&&job.result?.slides?.length){directArticleState.lastStage='ready';directArticleState.lastError=null;setProductionRetryVisible(false);setProductionStage('ready');return job.result;}
+      if(job.status==='failed'){const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id||jobId;error.productionStage=job.stage||stage;registerProductionFailure(error);throw error;}
 
       const idle=Date.now()-lastProgressAt;const age=Date.now()-startedAt;
       if(idle>=4000&&recoveryCalls<2){
@@ -1270,10 +1285,10 @@
         try{await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/fallback`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch{}
       }
     }
-    throw new Error('A produção não concluiu no Fast Path. O job foi preservado para recuperação; tente novamente ou escolha outra fonte.');
+    const error=new Error('A produção não concluiu no Fast Path. O job foi preservado e pode ser retomado agora.');error.productionJobId=jobId;error.productionStage=lastStage||directArticleState.lastStage||'reading';registerProductionFailure(error);throw error;
   }
   async function startFormaProduction(payload){
-    setProductionStage('source');
+    directArticleState.lastPayload={...(payload||{})};directArticleState.lastSourceType=payload?.sourceType||null;directArticleState.lastArticleUrl=payload?.url||directArticleState.lastArticleUrl||'';directArticleState.lastError=null;setProductionRetryVisible(false);setProductionStage('source');
     const request=()=>directArticleApi('/api/production/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     let response;
     try{response=await request();}
@@ -1284,7 +1299,7 @@
       response=await request();
     }
     const jobId=response?.job?.id;if(!jobId)throw new Error('O Production Engine não retornou um job válido.');
-    directArticleState.lastJobId=jobId;directArticleState.lastReused=Boolean(response?.reused);
+    directArticleState.lastJobId=jobId;directArticleState.lastReused=Boolean(response?.reused);directArticleState.lastStage=response?.job?.stage||'source';
     if(response?.job?.status==='ready'&&response.job.result?.slides?.length)return response.job.result;
     return waitFormaProductionJob(jobId,response.pollAfterMs);
   }
@@ -1376,7 +1391,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.4.1',
+      sourceVersion:'0.9.7.4.2',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
@@ -1416,17 +1431,35 @@
       const visualMode=project.directArticle?.visualMode;
       const visualLabel=visualMode==='publisher'?'imagem da matéria':visualMode==='free-bank'?'imagem do Banco Free':'sem imagem automática liberada';
       renderProductionProvenance(data);$('#directArticleApplyTemplate').disabled=false;
-      setDirectArticleStatus(`Conteúdo pronto${directArticleState.lastReused?' · cache rápido':''} · ${project.slides.length} slides · PT-BR · ${visualLabel}. Escolha um template para diagramar ou continue no layout neutro.`,'ok',100);
+      setProductionRetryVisible(false);setDirectArticleStatus(`Conteúdo pronto${directArticleState.lastReused?' · cache rápido':''} · ${project.slides.length} slides · PT-BR · ${visualLabel}. Escolha um template para diagramar ou continue no layout neutro.`,'ok',100);
       showToast(`Produção FORMA concluída · ${project.slides.length} slides`,3200);
     }catch(error){
-      setDirectArticleStatus(error.message||'Não foi possível gerar o carrossel.','error',100);
+      registerProductionFailure(error);setDirectArticleStatus(error.message||'Não foi possível gerar o carrossel.','error',100);
       showToast(error.message||'Falha ao gerar a partir da matéria',4000);
     }finally{
       directArticleState.busy=false;button.disabled=false;button.textContent=original;
     }
   }
+  async function retryLastFormaProduction(){
+    const jobId=directArticleState.lastJobId;if(!jobId){showToast('Nenhuma produção preservada para retomar');return;}
+    if(directArticleState.busy)return;
+    const retryButton=$('#directArticleRetry'),generateButton=$('#directArticleGenerate');directArticleState.busy=true;if(retryButton)retryButton.disabled=true;if(generateButton)generateButton.disabled=true;
+    const stage=directArticleState.lastStage||'reading';const retryStage=['generating','quality','fallback'].includes(stage)?'generate':null;
+    setProductionRetryVisible(false);setDirectArticleStatus(retryStage==='generate'?'Retomando a geração com o Evidence Pack salvo…':'Tentando novamente a leitura no mesmo job…','',Math.max(4,retryStage==='generate'?52:6));
+    try{
+      const out=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage:retryStage})});
+      const data=out?.job?.status==='ready'&&out?.job?.result?.slides?.length?out.job.result:await waitFormaProductionJob(jobId,450);
+      if(!data?.slides?.length)throw Object.assign(new Error('A recuperação terminou sem slides válidos.'),{productionJobId:jobId,productionStage:directArticleState.lastStage});
+      const payload=directArticleState.lastPayload||{};const articleUrl=data?.production?.readUrl||data?.evidencePack?.resolvedUrl||data?.evidencePack?.canonicalUrl||data?.verificationLinks?.[0]?.url||payload.url||directArticleState.lastArticleUrl||String($('#directArticleUrl')?.value||'').trim();
+      const project=await buildDirectArticleProject(data,articleUrl);if(directArticleState.lastSourceType==='topic'||directArticleState.lastSourceType==='event'){project.source='forma-production-topic';project.topicId=payload.topicId||data?.topicId||null;}
+      renderProductionProvenance(data);if(!applyRondaProject(project,''))throw Object.assign(new Error('O FORMA não conseguiu montar as pranchetas após a recuperação.'),{productionJobId:jobId,productionStage:'ready'});
+      $('#directArticleApplyTemplate').disabled=false;directArticleState.lastStage='ready';directArticleState.lastError=null;setProductionRetryVisible(false);setDirectArticleStatus(`Produção recuperada · ${project.slides.length} slides · mesmo job ${jobId.slice(-8)}. Escolha o template depois.`,'ok',100);showToast('Produção recuperada sem criar um novo job',3200);
+    }catch(error){registerProductionFailure(error);setDirectArticleStatus(error.message||'A nova tentativa não foi concluída.','error',100);showToast(error.message||'Falha ao retomar a produção',3800);}
+    finally{directArticleState.busy=false;if(retryButton)retryButton.disabled=false;if(generateButton)generateButton.disabled=false;if(directArticleState.lastError)setProductionRetryVisible(true,{stage:directArticleState.lastStage});}
+  }
+  $('#directArticleRetry').onclick=retryLastFormaProduction;
   $('#directArticleGenerate').onclick=generateDirectArticleCarousel;
-  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;$('#directArticleTemplate').value='';$('#directArticleApplyTemplate').disabled=true;setDirectArticleStatus('', '', 0);clearProductionProvenance();};
+  $('#directArticleClear').onclick=()=>{$('#directArticleUrl').value='';$('#directArticleForce').checked=false;$('#directArticleTemplate').value='';$('#directArticleApplyTemplate').disabled=true;directArticleState.lastJobId=null;directArticleState.lastPayload=null;directArticleState.lastStage='source';directArticleState.lastError=null;setProductionRetryVisible(false);setDirectArticleStatus('', '', 0);clearProductionProvenance();};
   $('#directArticleApplyTemplate').onclick=()=>{const templateId=$('#directArticleTemplate').value;if(!state.rondaContentModel?.slides?.length){showToast('Gere o conteúdo antes de aplicar um template');return;}if(!templateId){showToast('Escolha um template salvo');return;}const template=getTemplates().find(t=>String(t.id)===String(templateId));if(!template){showToast('Template não encontrado');return;}if(applySmartTemplate(template)){setDirectArticleStatus(`Template ${template.name} aplicado ao conteúdo já gerado · nenhuma nova chamada de IA.`,'ok',100);showToast('Template aplicado sem regenerar o carrossel');}};
   $('#directArticleUrl').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();generateDirectArticleCarousel();}});
   function renderSmartTemplateStatus(){
@@ -1636,8 +1669,8 @@
       project.source='forma-production-topic';project.topicId=topicId;renderProductionProvenance(data);
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas da pauta.');
       $('#directArticleApplyTemplate').disabled=false;
-      setDirectArticleStatus(`Pauta produzida no FORMA · conteúdo neutro PT-BR · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100. Escolha o template depois.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
-    }catch(error){setDirectArticleStatus(error.message||'Não foi possível produzir a pauta.','error',100);showToast(error.message||'Falha na produção da pauta',4200);return false;}
+      setProductionRetryVisible(false);setDirectArticleStatus(`Pauta produzida no FORMA · conteúdo neutro PT-BR · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100. Escolha o template depois.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
+    }catch(error){registerProductionFailure(error);setDirectArticleStatus(error.message||'Não foi possível produzir a pauta.','error',100);showToast(error.message||'Falha na produção da pauta',4200);return false;}
   }
   async function importPlatformProjectFromUrl(){
     const params=new URLSearchParams(location.search),projectId=params.get('project'),handoff=params.get('handoff');if(!projectId&&!handoff)return;

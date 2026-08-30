@@ -50,4 +50,4 @@ const result=await collectRound({fetcher,now,feeds,previousRound,sourceStates,mo
 assert.equal(result.ok,true);
 assert.ok(result.totals.sources>=26,`esperado preservar >=26 fontes; recebido ${result.totals.sources}`);
 assert.ok(networkCalls>=4,'fontes sem snapshot anterior devem voltar a ser coletadas');
-console.log('v0.9.7.4.1 Consistency + Async Fast Path OK');
+console.log('v0.9.7.4.2 Consistency + Async Fast Path OK');

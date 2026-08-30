@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.1";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.2";
 const PRODUCTION_READ_STALE_MS = 10_000;
 const PRODUCTION_GENERATE_STALE_MS = 12_000;
 const PRODUCTION_HARD_DEADLINE_MS = 30_000;
@@ -391,7 +391,7 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.1",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.2",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     const alreadyReady=await getProductionJob(db,jobId);if(alreadyReady?.status==="ready"&&alreadyReady?.result?.slides?.length)return alreadyReady;
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score,deterministicOnly:Boolean(deterministicOnly)});return job;
   }catch(error){await updateJob(db,jobId,{status:"failed",stage:"generating",progress:100,error:error?.message||String(error)});await event(db,jobId,"generating","failed",error?.message||String(error));throw error;}
@@ -560,8 +560,15 @@ export async function productionBundle(db,id){
 
 export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
   const job=await getProductionJob(env.DB,id);if(!job)throw new Error("Produção não encontrada.");
-  if(stage==="generate"&&job.evidenceId){await updateJob(env.DB,id,{status:"queued",stage:"generating",progress:52,error:null});const q=queueForCarousel(env);if(q?.send)await q.send({type:"production-generate",jobId:id});else{const task=processProductionGenerate(env,id);if(ctx?.waitUntil)ctx.waitUntil(task.catch(()=>null));else await task;}return getProductionJob(env.DB,id);}
-  await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});return startProductionPipeline(env,id,{force:true,ctx});
+  if(stage==="generate"&&job.evidenceId){
+    await updateJob(env.DB,id,{status:"queued",stage:"generating",progress:52,error:null});
+    await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; retomando diretamente do Evidence Pack",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
+    return runDirectProductionRecovery(env,id,{stage:"generating",ctx});
+  }
+  await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});
+  await event(env.DB,id,"reading","recovery","Nova tentativa solicitada pelo operador; relendo no mesmo job",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
+  const launched=await launchInteractiveProduction(env,id,{force:true,ctx});
+  return launched.job||getProductionJob(env.DB,id);
 }
 
 export async function generateProductionImage(env,{prompt,width=1024,height=1024}={}){

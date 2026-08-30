@@ -1,6 +1,18 @@
-# RONDA ONE Cloud v0.9.7.4.1 — Consistency + Async Fast Path
+# RONDA ONE Cloud v0.9.7.4.2 — Retry UX + Same Job Recovery
 
-## 0.9.7.4.1 — Snapshot Continuity + No-503 Production
+## 0.9.7.4.2 — recuperação explícita no FORMA
+
+- adiciona botão **Tentar novamente** quando uma produção falha ou excede o Fast Path;
+- retry reutiliza o mesmo `production_job`;
+- quando existe Evidence Pack, retoma da geração e não relê a matéria;
+- quando a falha ocorreu na leitura, relê no mesmo job;
+- retry usa execução direta assíncrona, mantendo Queues como proteção e não como espera obrigatória;
+- botão desaparece após sucesso ou ao limpar a produção;
+- status informa se a recuperação retomará leitura ou geração.
+
+# RONDA ONE Cloud v0.9.7.4.2 — Consistency + Async Fast Path
+
+## 0.9.7.4.2 — Snapshot Continuity + No-503 Production
 
 - O FORMA não mantém scraping/IA dentro do request POST: cria o job e inicia o Fast Path direto via `waitUntil`, retornando `202` rapidamente.
 - Requisições transitórias `502/503/504` recebem uma reconexão curta no cliente; o backend reaproveita um job ativo equivalente para não duplicar processamento.

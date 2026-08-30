@@ -1,14 +1,19 @@
-# RONDA ONE Cloud v0.9.7.4.1 — Consistency + Async Fast Path
+# RONDA ONE Cloud v0.9.7.4.2 — Retry UX + Same Job Recovery
 
-A v0.9.7.4.1 é cumulativa e preserva toda a linha anterior. Ela corrige dois riscos observados em produção: o FORMA passa a iniciar o Fast Path de forma assíncrona para que scraping/IA não derrubem o request HTTP, e a Ronda preserva snapshots de fontes adiadas para nunca encolher silenciosamente para poucas fontes entre ciclos.
+A v0.9.7.4.2 é cumulativa e preserva toda a linha anterior. Além da consistência de snapshots e do Fast Path assíncrono, o FORMA agora oferece recuperação explícita: quando uma produção falha ou excede o Fast Path, o operador pode **Tentar novamente** e retomar o mesmo job, reaproveitando o Evidence Pack quando ele já existe.
 
 
-## v0.9.7.4.1 — estabilidade observada em produção
+## v0.9.7.4.2 — Retry UX + Same Job Recovery
 
 - POST de produção retorna rapidamente e o processamento direto continua com `waitUntil`; Queue continua como recovery.
 - Retry curto de transporte para 502/503/504 sem duplicação: jobs ativos equivalentes são reaproveitados.
 - Snapshot continuity: fonte não-due usa `source_state` ou ronda anterior; se não existir snapshot, ela vira due imediatamente.
 - “Desde a última ronda” usa o timestamp da última ronda editorial concluída.
+- botão **Tentar novamente** aparece quando há um job preservado;
+- retry mantém o mesmo `jobId` e o histórico de diagnóstico;
+- se o Evidence Pack existe, retoma diretamente da geração;
+- se a falha ocorreu antes das evidências, relê a fonte no mesmo job;
+- retry usa o Fast Path direto assíncrono e não obriga espera de Queue.
 
 ## v0.9.7.4 — Fast Ronda 25+
 

@@ -1086,7 +1086,7 @@ export async function collectRound({
       operational: {
         mode,
         portalConcurrency: fastMode ? 8 : dueConcurrency,
-        sourceRecovery: "0.9.7.4.1-snapshot-continuity-rss-first",
+        sourceRecovery: "0.9.7.4.2-snapshot-continuity-rss-first",
         healthyMaxRefreshMinutes: fastMode ? 1 : 5,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1139,7 +1139,7 @@ export async function collectRound({
         mode: "fast",
         fastLane: true,
         portalConcurrency: 8,
-        sourceRecovery: "0.9.7.4.1-snapshot-continuity-rss-first",
+        sourceRecovery: "0.9.7.4.2-snapshot-continuity-rss-first",
         healthyMaxRefreshMinutes: 1,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1182,7 +1182,7 @@ export async function collectRound({
     operational: {
       mode: "full",
       portalConcurrency: dueConcurrency,
-      sourceRecovery: "0.9.7.4.1-snapshot-continuity-rss-first",
+      sourceRecovery: "0.9.7.4.2-snapshot-continuity-rss-first",
       healthyMaxRefreshMinutes: 5,
       failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,
