@@ -10,7 +10,7 @@ assert.ok(start>0&&end>start);
 assert.doesNotMatch(worker.slice(start,end),/status:\s*"failed"/);
 assert.match(app,/queuedStalled/);assert.match(app,/runningStalled/);assert.match(app,/Outro consumidor já está processando este carrossel/);
 assert.match(design,/A matéria já está sendo processada pela fila/);assert.match(design,/runningStalled/);
-assert.match(filters,/function matches/);assert.match(filters,/>=75/);assert.match(filters,/latestLimit=20/);assert.match(filters,/function filterLinked/);assert.match(mesa,/updateFilterButtons/);assert.match(mesa,/aria-pressed/);
+assert.match(filters,/function matches/);assert.match(filters,/>=75/);assert.match(filters,/latestLimit=20/);assert.match(filters,/function filterLinked/);assert.match(mesa,/production-board/);assert.match(mesa,/Gerenciamento editorial/);
 assert.match(css,/\.event-filter b\{/);
 assert.match(platform,/lockCoordinationV0881/);assert.match(platform,/lockBusyIsFailure:false/);assert.match(platform,/mesaFacetFilters:true/);
 console.log("RONDA ONE v0.8.8.1 Lock + Mesa Hotfix: OK");

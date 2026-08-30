@@ -1616,10 +1616,10 @@ document.getElementById("historyBack").addEventListener("click", () => {
   document.getElementById("historyList").hidden = false;
   document.getElementById("historyBack").hidden = true;
 });
-document.getElementById("refreshNewsroom").addEventListener("click", () => loadNewsroom());
+// Produção leve gerencia seu próprio refresh; não carrega mais a Mesa clássica.
 document.getElementById("newsroomBoard").addEventListener("change", (event) => { const card=event.target.closest("[data-story-id]"); if(card && event.target.matches("[data-story-status]")) patchNewsroomStory(card.dataset.storyId,{workflowStatus:event.target.value}); });
 document.getElementById("newsroomBoard").addEventListener("click", (event) => { const card=event.target.closest("[data-story-id]"); if(!card)return; if(event.target.closest("[data-story-assume]")) patchNewsroomStory(card.dataset.storyId,{assignToSelf:true}); if(event.target.closest("[data-story-note]")) addNewsroomNote(card.dataset.storyId); if(event.target.closest("[data-story-follow]")) toggleNewsroomFollow(card.dataset.storyId); });
-document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); loadNewsroom(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.querySelectorAll('[data-profile-ref-tab]').forEach(button=>button.addEventListener('click',()=>setProfileReferenceTab(button.dataset.profileRefTab)));

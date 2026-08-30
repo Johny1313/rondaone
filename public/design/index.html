@@ -1156,6 +1156,20 @@
   async function blobToDataUrl(blob){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});}
   async function removeBgForElement(el,button){
     const src=el?.src;if(!src){showToast('Este elemento ainda não tem imagem');return;}button.classList.add('busy');button.disabled=true;const old=button.textContent;button.textContent='Processando…';try{const blob=await dataUrlToBlob(src),form=new FormData();form.append('image_file',blob,'imagem.png');form.append('size','auto');const response=await fetch('/api/remove-bg',{method:'POST',credentials:'same-origin',body:form});if(!response.ok){let detail='';try{const j=await response.json();detail=j?.error||j?.detail||'';}catch{}throw new Error(detail||`Erro ${response.status}`);}const out=await response.blob(),data=await blobToDataUrl(out);el.src=data;if(el.type==='mask')await setMaskImage(el,data);state.uploads.unshift({name:'remove-bg.png',src:data});pushHistory();renderAll();showToast('Fundo removido');}catch(err){showToast(`Remover fundo: ${err.message||'falha na requisição'}`,3200);}finally{button.classList.remove('busy');button.disabled=false;button.textContent=old;}}
+  function productionTaskId(){return state.platformMeta?.productionTaskId||state.platformMeta?.editorialEventId||null;}
+  function directProductionTaskId(){const raw=String(directArticleState.lastJobId||state.platformMeta?.jobId||'').replace(/[^a-zA-Z0-9-]/g,'').slice(0,110);return raw?`forma-${raw}`:`forma-${Date.now()}`;}
+  async function updateProductionTask(action,payload={}, {silent=false}={}){
+    const taskId=productionTaskId();if(!taskId)return null;
+    const response=await fetch(`/api/newsroom/event-production/${encodeURIComponent(taskId)}`,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,payload})});
+    const data=await response.json().catch(()=>({}));if(!response.ok||!data.ok){const error=new Error(data.error||'Não foi possível atualizar a tarefa em Produção.');if(silent)return {ok:false,error};throw error;}return data.item||null;
+  }
+  async function registerFormaTask({title=null,sourceUrl=null,origin='forma'}={}){
+    if(!state.platformMeta)state.platformMeta={};
+    if(!state.platformMeta.productionTaskId)state.platformMeta.productionTaskId=state.platformMeta.editorialEventId||directProductionTaskId();
+    const item=await updateProductionTask('register_forma_task',{title:title||state.docTitle||'Projeto FORMA',sourceUrl:sourceUrl||'',origin,projectId:state.platformMeta?.projectId||null},{silent:true});
+    try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
+    return item;
+  }
   async function buildDeskProjectPreview(){
     try{
       syncActiveArtboard();ensureArtboards();const board=clone(state.artboards.find(b=>b.id===state.activeArtboardId)||state.artboards[0]||currentBoardData());
@@ -1165,7 +1179,7 @@
   let deskFormaSync={projectId:null,signature:null,at:0,promise:null};
   function deskPreviewSignature(projectId){syncActiveArtboard();const board=state.artboards?.find(b=>b.id===state.activeArtboardId)||state.artboards?.[0];const visible=(board?.elements||[]).filter(e=>e.visible!==false);return `${projectId}|${board?.id||''}|${visible.length}|${visible.map(e=>`${e.id}:${e.x}:${e.y}:${e.w}:${e.h}:${e.text||''}:${String(e.src||'').slice(-32)}`).join('|')}`.slice(0,12000);}
   async function linkFormaProjectToDesk(projectId,{force=false}={}){
-    const eventId=state.platformMeta?.editorialEventId||null;if(!eventId||!projectId)return null;
+    const eventId=productionTaskId();if(!eventId||!projectId)return null;
     const signature=deskPreviewSignature(projectId);
     if(!force&&deskFormaSync.projectId===projectId&&deskFormaSync.signature===signature&&Date.now()-deskFormaSync.at<120000)return null;
     if(deskFormaSync.promise)return deskFormaSync.promise;
@@ -1184,15 +1198,16 @@
     if(!response.ok||!out.ok)throw new Error(out.error||`HTTP ${response.status}`);
     const projectId=out.id||currentId;if(!projectId)throw new Error('O projeto foi salvo, mas o servidor não retornou o identificador.');
     state.platformMeta={...(state.platformMeta||{}),projectId,source:state.platformMeta?.source||'forma-design'};
+    if(!state.platformMeta.productionTaskId)state.platformMeta.productionTaskId=state.platformMeta.editorialEventId||directProductionTaskId();
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     const next=new URL(location.href);next.search='';next.searchParams.set('project',projectId);history.replaceState({},'',next.pathname+next.search);
-    try{await linkFormaProjectToDesk(projectId);}catch(error){if(!silent)showToast(error.message||'Projeto salvo, mas a Mesa não recebeu o preview.',3200);}
+    try{await registerFormaTask({title:state.docTitle,sourceUrl:state.rondaContentModel?.sourceUrl||state.platformMeta?.sourceUrl||'',origin:state.platformMeta?.editorialEventId?'ronda':'forma'});await linkFormaProjectToDesk(projectId);}catch(error){if(!silent)showToast(error.message||'Projeto salvo, mas Produção não recebeu o vínculo.',3200);}
     markSaved();if(!silent)showToast('Projeto salvo na aba Projetos · Mesa atualizada');return projectId;
   }
   $('#saveProjectBtn').onclick=async()=>{const button=$('#saveProjectBtn'),old=button.textContent;button.disabled=true;button.textContent='Salvando…';try{await saveProjectToProjects();}catch(error){showToast(error.message||'Não foi possível salvar o projeto',3600);}finally{button.disabled=false;button.textContent=old;}};
   $('#saveRevisionBtn').onclick=async()=>{try{const out=await saveCloudRevision('Versão salva no FORMA');if(out){markSaved();showToast(`Versão ${out.version?.versionNumber||''} salva no RONDA`);}}catch(error){showToast(error.message||'Não foi possível salvar a versão',3200);}};
   $('#versionsBtn').onclick=async()=>{try{const meta=state.platformMeta||{};if(!meta.jobId&&!meta.topicId){showToast('Projeto sem histórico de versões');return;}const q=meta.jobId?`jobId=${encodeURIComponent(meta.jobId)}`:`topicId=${encodeURIComponent(meta.topicId)}`;const res=await fetch('/api/carousel-versions?'+q,{cache:'no-store',credentials:'same-origin'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Falha ao carregar versões');const list=out.versions||[];if(!list.length){showToast('Nenhuma versão salva ainda');return;}const text=list.slice(0,12).map(v=>`v${v.versionNumber} · ${new Date(v.createdAt).toLocaleString('pt-BR')} · ${v.kind}`).join('\n');const choice=prompt(`VERSÕES DO CARROSSEL\n\n${text}\n\nDigite o número da versão para restaurar:`);if(!choice)return;const v=list.find(x=>String(x.versionNumber)===String(choice).trim());if(!v?.payload?.artboards){showToast('Esta versão não contém snapshot visual do FORMA');return;}const parsed=v.payload;state.artboards=clone(parsed.artboards);state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||state.docTitle;state.platformMeta={...(parsed.platformMeta||{}),versionId:v.id,versionNumber:v.versionNumber};state.rondaContentModel=parsed.rondaContentModel||state.rondaContentModel;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;renderAll();markDirty();showToast(`Versão ${v.versionNumber} restaurada`);}catch(error){showToast(error.message||'Falha ao abrir versões',3200);}};
-  $('#submitReviewBtn').onclick=async()=>{try{let workflowId=state.platformMeta?.workflowId;if(!workflowId){const saved=await saveCloudRevision('Versão enviada para revisão');workflowId=saved?.workflow?.id;}if(!workflowId)throw new Error('Não foi possível criar o fluxo de aprovação.');const res=await fetch('/api/workflow/'+encodeURIComponent(workflowId),{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',note:'Enviado pelo FORMA Design'})}),out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta.workflowStatus=out.item?.status||'in_review';try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}if(state.platformMeta?.editorialEventId){fetch(`/api/newsroom/event-production/${encodeURIComponent(state.platformMeta.editorialEventId)}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'mark_review'})}).catch(()=>null);}showToast('Versão enviada para revisão editorial');}catch(error){showToast(error.message||'Falha ao enviar para revisão',3600);}};
+  $('#submitReviewBtn').onclick=async()=>{try{let workflowId=state.platformMeta?.workflowId;if(!workflowId){const saved=await saveCloudRevision('Versão enviada para revisão');workflowId=saved?.workflow?.id;}if(!workflowId)throw new Error('Não foi possível criar o fluxo de aprovação.');const res=await fetch('/api/workflow/'+encodeURIComponent(workflowId),{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',note:'Enviado pelo FORMA Design'})}),out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta.workflowStatus=out.item?.status||'in_review';try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}if(productionTaskId()){fetch(`/api/newsroom/event-production/${encodeURIComponent(productionTaskId())}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'mark_review'})}).catch(()=>null);}showToast('Versão enviada para revisão editorial');}catch(error){showToast(error.message||'Falha ao enviar para revisão',3600);}};
   function loadProject(){try{const raw=localStorage.getItem(LS_PROJECT)||localStorage.getItem('rondaDesign.project.v1');if(!raw)return false;const parsed=JSON.parse(raw);if(Array.isArray(parsed.artboards)&&parsed.artboards.length){state.artboards=parsed.artboards.map((b,i)=>{const d=migrateSnapshot(b);return {...b,...d,id:b.id||('board_'+Date.now()+'_'+i),name:b.name||`Prancheta ${i+1}`};});state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||'Sem título';state.platformMeta=parsed.platformMeta||null;state.rondaContentModel=parsed.rondaContentModel||parsed.platformMeta?.rondaContentModel||null;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));return true;}const d=migrateSnapshot(parsed);if(!d)return false;state.width=d.width;state.height=d.height;state.bg=d.bg;state.bgMode=d.bgMode;state.gradient=normalizeGradientData(d.gradient,d.bg);state.elements=clone(d.elements);state.docTitle=d.docTitle||'Sem título';return true;}catch{return false;}}
   $('#saveTemplateBtn').onclick=()=>{$('#templateName').value=state.docTitle==='Sem título'?'':state.docTitle;openModal('templateModal');setTimeout(()=>$('#templateName').focus(),20);};
   function smartEngine(){if(!window.RondaSmartTemplates)throw new Error('Motor de templates não carregado. Atualize a página.');return window.RondaSmartTemplates;}
@@ -1469,7 +1484,9 @@
 
       setDirectArticleStatus('Conteúdo concluído. Selecionando imagem editorial…','',92);
       const project=await buildDirectArticleProject(data,articleUrl);
+      project.productionTaskId=directProductionTaskId();project.sourceUrl=articleUrl;
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas do carrossel.');
+      await registerFormaTask({title:project.title,sourceUrl:articleUrl,origin:'forma'});
 
       const visualMode=project.directArticle?.visualMode;
       const visualLabel=visualMode==='publisher'?'imagem da matéria':visualMode==='free-bank'?'imagem do Banco Free':'sem imagem automática liberada';
@@ -1495,7 +1512,8 @@
       if(!data?.slides?.length)throw Object.assign(new Error('A recuperação terminou sem slides válidos.'),{productionJobId:jobId,productionStage:directArticleState.lastStage});
       const payload=directArticleState.lastPayload||{};const articleUrl=data?.production?.readUrl||data?.evidencePack?.resolvedUrl||data?.evidencePack?.canonicalUrl||data?.verificationLinks?.[0]?.url||payload.url||directArticleState.lastArticleUrl||String($('#directArticleUrl')?.value||'').trim();
       const project=await buildDirectArticleProject(data,articleUrl);if(directArticleState.lastSourceType==='topic'||directArticleState.lastSourceType==='event'){project.source='forma-production-topic';project.topicId=payload.topicId||data?.topicId||null;}
-      renderProductionProvenance(data);if(!applyRondaProject(project,''))throw Object.assign(new Error('O FORMA não conseguiu montar as pranchetas após a recuperação.'),{productionJobId:jobId,productionStage:'ready'});
+      project.productionTaskId=state.platformMeta?.productionTaskId||directProductionTaskId();project.sourceUrl=articleUrl;renderProductionProvenance(data);if(!applyRondaProject(project,''))throw Object.assign(new Error('O FORMA não conseguiu montar as pranchetas após a recuperação.'),{productionJobId:jobId,productionStage:'ready'});
+      await registerFormaTask({title:project.title,sourceUrl:articleUrl,origin:project.editorialEventId?'ronda':'forma'});
       $('#directArticleApplyTemplate').disabled=false;directArticleState.lastStage='ready';directArticleState.lastError=null;setProductionRetryVisible(false);setDirectArticleStatus(`Produção recuperada · ${project.slides.length} slides · mesmo job ${jobId.slice(-8)}. Escolha o template depois.`,'ok',100);showToast('Produção recuperada sem criar um novo job',3200);
     }catch(error){registerProductionFailure(error);setDirectArticleStatus(error.message||'A nova tentativa não foi concluída.','error',100);showToast(error.message||'Falha ao retomar a produção',3800);}
     finally{directArticleState.busy=false;if(retryButton)retryButton.disabled=false;if(generateButton)generateButton.disabled=false;if(directArticleState.lastError)setProductionRetryVisible(true,{stage:directArticleState.lastStage});}
@@ -1547,7 +1565,7 @@
   function canvasGradient(ctx,w,h,gdata){const gd=normalizeGradientData(gdata||state.gradient),a=(Number(gd.angle)||0)*Math.PI/180,vx=Math.sin(a),vy=-Math.cos(a),len=Math.abs(w*vx)+Math.abs(h*vy),cx=w/2,cy=h/2,g=ctx.createLinearGradient(cx-vx*len/2,cy-vy*len/2,cx+vx*len/2,cy+vy*len/2);[...gd.stops].sort((x,y)=>x.pos-y.pos).forEach(st=>g.addColorStop(clamp(st.pos,0,100)/100,hexToRgba(st.color,gradientStopAlpha(st))));return g;}
   function paintBackground(ctx){if(state.bgMode!=='gradient'){ctx.fillStyle=state.bg;ctx.fillRect(0,0,state.width,state.height);return;}ctx.fillStyle=canvasGradient(ctx,state.width,state.height,state.gradient);ctx.fillRect(0,0,state.width,state.height);}
   async function markEditorialProductionComplete({silent=false}={}){
-    const eventId=state.platformMeta?.editorialEventId||null;if(!eventId)return null;
+    const eventId=productionTaskId();if(!eventId)return null;
     const response=await fetch(`/api/newsroom/event-production/${encodeURIComponent(eventId)}`,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'complete'})});
     const data=await response.json().catch(()=>({}));
     if(!response.ok||!data.ok){const error=new Error(data.error||'Não foi possível registrar a conclusão na Mesa.');if(silent)return {ok:false,error};throw error;}
@@ -1570,12 +1588,12 @@
   async function boardPngBlob(board){const canvas=await renderBoardCanvas(board);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Não foi possível gerar o PNG.');return blob;}
   function triggerBlobDownload(blob,fileName){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1600);}
   async function ensureFormaProjectReturnedToDesk(){
-    const eventId=state.platformMeta?.editorialEventId||null;if(!eventId)return null;
+    const eventId=productionTaskId();if(!eventId)return null;
     let projectId=state.platformMeta?.projectId||null;
     try{if(!projectId)projectId=await saveProjectToProjects({silent:true});else await linkFormaProjectToDesk(projectId);}catch(error){showToast(error.message||'A arte será baixada, mas o vínculo com a Mesa não foi atualizado.',3600);}
     return projectId;
   }
-  async function finalizeEditorialCompletionAfterDownload(){if(!state.platformMeta?.editorialEventId)return false;const result=await markEditorialProductionComplete({silent:true});if(result&&result.ok===false){showToast(result.error?.message||'Não foi possível atualizar a Mesa, mas o download foi liberado.',4200);return false;}return true;}
+  async function finalizeEditorialCompletionAfterDownload(){if(!productionTaskId())return false;const result=await markEditorialProductionComplete({silent:true});if(result&&result.ok===false){showToast(result.error?.message||'Não foi possível atualizar a Mesa, mas o download foi liberado.',4200);return false;}return true;}
   async function exportCurrentBoard(){syncActiveArtboard();ensureArtboards();await ensureFormaProjectReturnedToDesk();const total=state.artboards?.length||1;const board=clone(state.artboards.find(b=>b.id===state.activeArtboardId)||currentBoardData());const boardIndex=(state.artboards||[]).findIndex(b=>b.id===board.id);const safeIndex=boardIndex>=0?boardIndex:0;const blob=await boardPngBlob(board);triggerBlobDownload(blob,boardExportName(board,safeIndex,total));const completed=await finalizeEditorialCompletionAfterDownload();showToast(completed?'Slide exportado · pauta concluída na Mesa':'Slide exportado');}
   async function exportAllBoards(){syncActiveArtboard();ensureArtboards();await ensureFormaProjectReturnedToDesk();const boards=(state.artboards||[]).map(b=>clone(b));if(!boards.length){showToast('Nenhuma prancheta disponível para exportar');return;}let count=0;for(let i=0;i<boards.length;i+=1){const board=boards[i];const blob=await boardPngBlob(board);triggerBlobDownload(blob,boardExportName(board,i,boards.length));count+=1;if(i<boards.length-1)await new Promise(resolve=>setTimeout(resolve,120));}const completed=await finalizeEditorialCompletionAfterDownload();showToast(completed?`${count} slides exportados · pauta concluída na Mesa`:`${count} slides exportados`);}
   async function exportPNG(){try{await exportCurrentBoard();}catch(error){showToast(error.message||'Falha ao exportar o slide',4200);}}
@@ -1720,24 +1738,32 @@
   function applyRondaProject(project,id=''){
     if(!project?.slides?.length)return false;
     const boards=buildRondaBoards(project);if(!boards.length)return false;
-    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;const applyTemplateButton=$('#directArticleApplyTemplate');if(applyTemplateButton)applyTemplateButton.disabled=false;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editorialEventId:project.editorialEventId||project.platformMeta?.editorialEventId||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1',editorialEventSnapshot:project.editorialEventSnapshot||project.platformMeta?.editorialEventSnapshot||null};
+    state.artboards=boards;state.activeArtboardId=boards[0].id;state.docTitle=project.title||'Carrossel da Ronda';state.rondaContentModel=smartEngine().buildContentModel(project);state.templateBinding=null;const applyTemplateButton=$('#directArticleApplyTemplate');if(applyTemplateButton)applyTemplateButton.disabled=false;state.platformMeta={source:'ronda-editorial',projectId:id||null,jobId:project.jobId||project.directArticle?.jobId||project.cycle?.jobId||null,topicId:project.topicId||null,editorialEventId:project.editorialEventId||project.platformMeta?.editorialEventId||null,productionTaskId:project.productionTaskId||project.platformMeta?.productionTaskId||project.editorialEventId||project.platformMeta?.editorialEventId||null,sourceUrl:project.sourceUrl||project.directArticle?.url||project.platformMeta?.sourceUrl||null,editoria:project.editoria||'',verificationLinks:project.verificationLinks||[],disclaimer:project.disclaimer||'',qualityGate:project.qualityGate||null,confidence:project.confidence||null,workflowId:project.workflowId||null,versionId:project.versionId||null,contentContract:state.rondaContentModel?.contract||'ronda-content-model-v1',editorialEventSnapshot:project.editorialEventSnapshot||project.platformMeta?.editorialEventSnapshot||null};
     loadBoardToState(boards[0]);$('#docTitle').value=state.docTitle;state.history=[snapshot()];state.historyIndex=0;renderAll();requestAnimationFrame(()=>fitZoom());markDirty();setPlatformImportStatus('Importado da Ronda','ok');
     try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
     if(!project?.articleVisuals?.primary && !project?.articleVisuals?.alternatives?.length){const q=document.getElementById('freeBankQuery');if(q&&!q.value)q.value=project.title||'';}return true;
   }
+  function setKanbanProductionMode(enabled,eventId=null){
+    const card=$('#directArticleCard');if(!card)return;
+    card.dataset.kanbanMode=enabled?'1':'0';
+    const title=card.querySelector('strong');if(title&&enabled)title.textContent='Produção FORMA · pauta da Ronda';
+    const hint=card.querySelector('.direct-article-head p');if(hint&&enabled)hint.textContent='A aba Produção gerencia apenas status. A leitura continua usando o pipeline completo de scraping e Evidence Pack da Ronda.';
+    const retryHint=$('#directArticleRetryHint');if(retryHint&&enabled)retryHint.textContent='Retoma o mesmo job e troca a estratégia de leitura quando necessário.';
+    if(enabled&&eventId)card.dataset.editorialEventId=eventId;
+  }
   async function importProductionTopicFromUrl(){
-    const params=new URLSearchParams(location.search),topicId=params.get('productionTopic'),runId=params.get('runId');if(!topicId)return false;
-    document.querySelector('[data-panel="templates"]')?.click();setDirectArticleStatus('Pauta recebida da RONDA. Escolha quantos slides terá o carrossel antes de começar.','',0);setProductionStage('source');
+    const params=new URLSearchParams(location.search),topicId=params.get('productionTopic'),runId=params.get('runId'),editorialEventId=params.get('editorialEvent')||null;if(!topicId)return false;
+    document.querySelector('[data-panel="templates"]')?.click();setKanbanProductionMode(Boolean(editorialEventId),editorialEventId);setDirectArticleStatus('Pauta recebida da RONDA. Produção registra apenas o status; a leitura completa continua no pipeline normal.','',0);setProductionStage('source');
     try{
       const slideCount=await requestCarouselSlideCount();
       if(!slideCount){setDirectArticleStatus('Pauta aguardando quantidade de slides. Nenhuma leitura ou IA foi iniciada.','',0);return true;}
-      setDirectArticleStatus(`Quantidade confirmada: ${slideCount} slides. Iniciando leitura da fonte principal…`,'',2);
-      const editorialEventId=params.get('editorialEvent')||null;
-      const [data,eventBundle]=await Promise.all([startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount}),editorialEventId?fetch(`/api/editorial-events/${encodeURIComponent(editorialEventId)}`,{cache:'no-store',credentials:'same-origin'}).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)]);
+      setDirectArticleStatus(`Quantidade confirmada: ${slideCount} slides. Iniciando leitura completa da pauta…`,'',2);
+      const data=await startFormaProduction({sourceType:'topic',topicId,runId:runId||null,slideCount});
       const articleUrl=data?.verificationLinks?.[0]?.url||data?.evidencePack?.canonicalUrl||'';
       const project=await buildDirectArticleProject(data,articleUrl);
-      project.source='forma-production-topic';project.topicId=topicId;project.editorialEventId=editorialEventId;project.editorialEventSnapshot=eventBundle?.event?{eventId:eventBundle.event.eventId,title:eventBundle.event.titulo,resumo:eventBundle.event.resumoEditorial||eventBundle.event.resumo,editoria:eventBundle.event.editoria,subeditoria:eventBundle.event.subeditoria,updates:eventBundle.event.informacoesNovas||[],sources:(eventBundle.event.fontes||[]).map(source=>({name:source.name,url:source.url,official:source.official||false,publishedAt:source.publishedAt||null})),timeline:eventBundle.event.timeline||[]}:null;renderProductionProvenance(data);
+      project.source='forma-production-topic';project.topicId=topicId;project.editorialEventId=editorialEventId;project.productionTaskId=editorialEventId||null;project.sourceUrl=articleUrl;renderProductionProvenance(data);
       if(!applyRondaProject(project,''))throw new Error('O FORMA não conseguiu montar as pranchetas da pauta.');
+      if(editorialEventId)await updateProductionTask('send_to_forma',{}, {silent:true});
       $('#directArticleApplyTemplate').disabled=false;
       setProductionRetryVisible(false);setDirectArticleStatus(`Pauta produzida no FORMA · conteúdo neutro PT-BR · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100. Escolha o template depois.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
     }catch(error){registerProductionFailure(error);setDirectArticleStatus(error.message||'Não foi possível produzir a pauta.','error',100);showToast(error.message||'Falha na produção da pauta',4200);return false;}

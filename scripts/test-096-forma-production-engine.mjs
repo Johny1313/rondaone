@@ -22,7 +22,7 @@ assert.match(design,/\/api\/production\/jobs/);
 assert.match(design,/Production Engine/);
 assert.match(ronda,/Produzir no FORMA/);
 assert.match(ronda,/productionTopic/);
-assert.match(mesa,/Produzir no FORMA/);
+assert.match(mesa,/Abrir FORMA/);
 assert.match(mesa,/productionTopic/);
 const producers=new Map(wrangler.queues.producers.map(x=>[x.binding,x.queue]));
 assert.equal(producers.get('ARTICLE_READ_QUEUE'),'ronda-one-article-read');
