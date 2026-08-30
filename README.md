@@ -1,22 +1,92 @@
-# RONDA ONE Cloud v0.9.7.4.7 — High-Volume Source Discovery Engine
+# RONDA ONE Cloud v0.9.7.4.8 — HOTFIX LOCK Stability
 
-A v0.9.7.4.7 mantém o Hybrid Multi-Transport Reader da v0.9.7.4.6 e amplia a profundidade da Ronda em portais de alto volume. A fonte deixa de ser considerada bem coberta apenas porque respondeu: o sistema passa a medir **cobertura real de conteúdo**.
+Atualização incremental sobre a v0.9.7.4.7. Não redesenha interface, não troca a arquitetura editorial e não remove cache, fallback, filas, scraping híbrido, Browser Run, Evidence Pack ou mecanismos de recuperação.
 
-## O que muda
+## Objetivo
 
-- perfis de volume `very-high`, `high` e `normal`;
-- G1, CNN Brasil, Folha, Estadão, O Globo, Metrópoles e ge retêm snapshots maiores e não encerram a descoberta após um RSS mínimo;
-- fontes de grande volume consultam RSS + home + busca dedicada do domínio antes de considerar a descoberta suficiente;
-- discovery scraper captura links editoriais de headings mesmo quando a home não publica `<time>` em cada card;
-- URLs são deduplicadas por identidade normalizada, removendo parâmetros de tracking;
-- tabela D1 `source_discovery_items` registra cada URL descoberta e permite métricas de 15 min / 1 h / 6 h / 24 h;
-- cada fonte ganha `coverageScore`, perfil e meta de captura por hora;
-- a tela de fontes mostra volume da última hora e sinaliza cobertura baixa;
-- a disponibilidade HTTP e a cobertura editorial passam a ser métricas separadas.
+Fechar os requisitos operacionais do HOTFIX LOCK:
 
-## Política de não regressão
+- Circuit Breaker formal por fonte: `CLOSED → OPEN → HALF_OPEN`;
+- Stale-While-Revalidate: cache válido é servido imediatamente e a revalidação ocorre fora do caminho crítico;
+- budgets progressivos por rota e troca adaptativa de método;
+- HTTP `403`, `404`, `525` e timeout com políticas distintas;
+- `/api/platform/status` leve e operacional, sem iniciar scraping/coleta;
+- estado de D1, scheduler, filas, cobertura e jobs presos no status;
+- observabilidade por fonte com `circuitState`, `servedFrom`, `revalidationPending`, `nextRetryAt`, `preferredRoute` e `lastRouteTried`;
+- revalidação de fonte via `ROUND_JOBS_QUEUE`, com retry limitado;
+- Browser Run apenas como recuperação controlada, com concorrência limitada;
+- continuidade da Ronda mesmo com fontes degradadas.
 
-Continuam ativos Browser Run, Adaptive Scraping, Evidence Sufficiency, Single Source + um backup, PT-BR, Evidence Pack, Multi-AI, Quality Gate, Content First, Retry Same Job, Terminal Completion, Projects, segurança das integrações e Fast Ronda 25+.
+## Fluxo de fonte degradada
+
+```text
+fonte falha
+↓
+cache válido?
+├─ sim → serve imediatamente na ronda
+│        ↓
+│      source-revalidate na ROUND queue
+│        ↓
+│      tentativa controlada
+│
+└─ não → rota adaptativa / fallback
+
+3 falhas consecutivas
+↓
+OPEN
+↓ cooldown
+HALF_OPEN (uma tentativa)
+├─ sucesso → CLOSED / failureCount=0
+└─ falha   → OPEN novamente
+```
+
+## Platform Status
+
+`GET /api/platform/status` consolida apenas estado já persistido e bindings. Não inicia ronda, Browser Run, scraping ou geração.
+
+Campos principais:
+
+```text
+database
+schedulerHealthy
+lastSuccessAt
+queues.ROUND
+queues.INTELLIGENT
+sources.total
+sources.healthy
+sources.degraded
+sources.unavailable
+sources.cacheOnly
+sources.coveragePercent
+jobs.intelligentStuck
+jobs.productionStuck
+```
+
+## Validação
+
+Teste local específico:
+
+```bash
+npm run test:09748
+```
+
+Validação completa:
+
+```bash
+npm run test:all
+```
+
+Após o deploy, execute três ciclos reais no ambiente Cloudflare:
+
+```bash
+BASE_URL=https://SEU-WORKER npm run validate:prod
+```
+
+A certificação de produção do HOTFIX LOCK só deve ser considerada concluída após esses três ciclos remotos.
+
+## Não regressão
+
+Preservados: High-Volume Source Discovery, Hybrid Multi-Transport Reader, Browser Run, Fast Ronda 25+, Adaptive Scraping, Evidence Sufficiency, Single Source + 1 backup, PT-BR, Multi-AI, Quality Gate, Content First, Mandatory Slide Count, Retry Same Job, Terminal Completion, Projects, Content Lock e segurança das integrações.
 
 ---
 

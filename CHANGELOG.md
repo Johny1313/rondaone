@@ -1,4 +1,28 @@
-# v0.9.7.4.7 — High-Volume Source Discovery Engine
+# v0.9.7.4.8 — HOTFIX LOCK Stability
+
+- formaliza Circuit Breaker por fonte com `CLOSED`, `OPEN` e `HALF_OPEN`;
+- adiciona `preferredRoute`, `nextRetryAt`, `servedFrom`, `revalidationPending` e `lastRouteTried` ao `source_state` com migração aditiva automática;
+- implementa Stale-While-Revalidate: cache válido entra imediatamente na Ronda e `source-revalidate` é enviado separadamente para a ROUND Queue;
+- limita revalidação a tentativas controladas e evita loops infinitos;
+- adiciona budgets progressivos para direct/fallback/scrape e Browser Run controlado;
+- HTTP 525 passa a ser classificado como `tls-upstream`; 403/404/timeouts mantêm políticas específicas de cooldown/fallback;
+- fontes prioritariamente degradadas recebem política de recuperação genérica, sem hacks frágeis por portal;
+- `/api/platform/status` passa a consolidar D1, scheduler, ROUND/INTELLIGENT, cobertura das fontes e jobs possivelmente presos, sem executar processamento caro;
+- 404 de rota da API passa a expor `ROUTE_NOT_FOUND` e `workerReachable: true`, sem confundir com Worker offline;
+- `/api/sources/diagnostics` preserva campos atuais e recebe estados do circuito/SWR;
+- Browser Run na revalidação de fontes é limitado por concorrência e usado somente quando necessário;
+- preserva cache, fallback, filas, scraping híbrido, High-Volume Discovery, FORMA Production Engine, Multi-AI e toda a regressão acumulada;
+- adiciona `scripts/test-09748-hotfix-lock-stability.mjs` e `scripts/validate-hotfix-lock-prod.mjs`.
+
+## Três ciclos locais do HOTFIX
+
+1. falha controlada → `CLOSED`, `failureCount=1`;
+2. nova falha → rota adaptativa, `CLOSED`, `failureCount=2`;
+3. terceira falha → `OPEN`; cache SWR; cooldown → `HALF_OPEN`; recuperação → `CLOSED`.
+
+A validação real pós-deploy deve ser executada com `BASE_URL=https://... npm run validate:prod`.
+
+# v0.9.7.4.8 — High-Volume Source Discovery Engine
 
 - adiciona perfis de volume por fonte e limites de retenção maiores para portais de alta produção;
 - G1, CNN Brasil, Folha, Estadão, O Globo, Metrópoles e ge passam a exigir múltiplas rotas de descoberta antes de encerrar uma coleta;

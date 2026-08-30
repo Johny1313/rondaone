@@ -2,7 +2,7 @@ import { getReliabilitySummary } from "../../reliability/core.js";
 import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.9.7.4.7";
+export const DATABASE_SCHEMA_VERSION = "2.9.7.4.8";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -106,6 +106,12 @@ const SCHEMA_STATEMENTS = [
     next_check_at TEXT,
     failure_count INTEGER NOT NULL DEFAULT 0,
     response_ms INTEGER,
+    preferred_route TEXT,
+    circuit_state TEXT NOT NULL DEFAULT 'CLOSED',
+    next_retry_at TEXT,
+    served_from TEXT,
+    revalidation_pending INTEGER NOT NULL DEFAULT 0,
+    last_route_tried TEXT,
     updated_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS idx_source_state_next_check ON source_state(next_check_at)",
@@ -493,6 +499,23 @@ async function ensureIntelligentJobRequestColumn(db) {
   }
 }
 
+async function ensureSourceStateHotfixColumns(db) {
+  const result = await db.prepare("PRAGMA table_info(source_state)").all();
+  const columns = new Set((result?.results || []).map((row) => String(row?.name || "")));
+  const additions = [
+    ["preferred_route", "TEXT"],
+    ["circuit_state", "TEXT NOT NULL DEFAULT 'CLOSED'"],
+    ["next_retry_at", "TEXT"],
+    ["served_from", "TEXT"],
+    ["revalidation_pending", "INTEGER NOT NULL DEFAULT 0"],
+    ["last_route_tried", "TEXT"],
+  ];
+  for (const [name,type] of additions) {
+    if (!columns.has(name)) await db.prepare(`ALTER TABLE source_state ADD COLUMN ${name} ${type}`).run();
+  }
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_source_state_circuit ON source_state(circuit_state, next_retry_at)").run();
+}
+
 async function ensureCarouselReliabilitySchema(db) {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS carousel_reliability (
@@ -528,6 +551,7 @@ export async function ensureSchema(db) {
     }
     await ensureRunStateColumns(db);
     await ensureIntelligentJobRequestColumn(db);
+    await ensureSourceStateHotfixColumns(db);
     await ensureCarouselReliabilitySchema(db);
     if (version !== DATABASE_SCHEMA_VERSION) {
       const now = new Date().toISOString();
@@ -1251,6 +1275,12 @@ function sourceStateRow(row) {
     nextCheckAt: row.next_check_at || null,
     failureCount: Number(row.failure_count) || 0,
     responseMs: row.response_ms == null ? null : Number(row.response_ms),
+    preferredRoute: row.preferred_route || null,
+    circuitState: row.circuit_state || "CLOSED",
+    nextRetryAt: row.next_retry_at || null,
+    servedFrom: row.served_from || null,
+    revalidationPending: Boolean(row.revalidation_pending),
+    lastRouteTried: row.last_route_tried || null,
     updatedAt: row.updated_at,
   };
 }
@@ -1361,8 +1391,9 @@ export async function saveSourceStates(db, entries = []) {
       INSERT INTO source_state (
         source_id, name, region, status, route, http_status, error_code, error_detail,
         items_json, item_count, last_url, validators_json, last_attempt_at, last_success_at,
-        next_check_at, failure_count, response_ms, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        next_check_at, failure_count, response_ms, preferred_route, circuit_state, next_retry_at,
+        served_from, revalidation_pending, last_route_tried, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_id) DO UPDATE SET
         name = excluded.name,
         region = excluded.region,
@@ -1380,6 +1411,12 @@ export async function saveSourceStates(db, entries = []) {
         next_check_at = excluded.next_check_at,
         failure_count = excluded.failure_count,
         response_ms = excluded.response_ms,
+        preferred_route = excluded.preferred_route,
+        circuit_state = excluded.circuit_state,
+        next_retry_at = excluded.next_retry_at,
+        served_from = excluded.served_from,
+        revalidation_pending = excluded.revalidation_pending,
+        last_route_tried = excluded.last_route_tried,
         updated_at = excluded.updated_at
     `).bind(
       entry.sourceId,
@@ -1399,6 +1436,12 @@ export async function saveSourceStates(db, entries = []) {
       entry.nextCheckAt || null,
       Number(entry.failureCount) || 0,
       entry.responseMs == null ? null : Math.max(0, Number(entry.responseMs) || 0),
+      entry.preferredRoute || null,
+      entry.circuitState || "CLOSED",
+      entry.nextRetryAt || null,
+      entry.servedFrom || null,
+      entry.revalidationPending ? 1 : 0,
+      entry.lastRouteTried || null,
       entry.updatedAt || new Date().toISOString(),
     )));
   }
@@ -1411,7 +1454,8 @@ export async function listSourceDiagnostics(db) {
     db.prepare(`
       SELECT source_id, name, region, status, route, http_status, error_code, error_detail,
              item_count, last_attempt_at, last_success_at, next_check_at, failure_count,
-             response_ms, updated_at
+             response_ms, preferred_route, circuit_state, next_retry_at, served_from,
+             revalidation_pending, last_route_tried, updated_at
       FROM source_state
       ORDER BY region, name COLLATE NOCASE
     `).all(),
@@ -1432,6 +1476,12 @@ export async function listSourceDiagnostics(db) {
     nextCheckAt: row.next_check_at || null,
     failureCount: Number(row.failure_count) || 0,
     responseMs: row.response_ms == null ? null : Number(row.response_ms),
+    preferredRoute: row.preferred_route || null,
+    circuitState: row.circuit_state || "CLOSED",
+    nextRetryAt: row.next_retry_at || null,
+    servedFrom: row.served_from || null,
+    revalidationPending: Boolean(row.revalidation_pending),
+    lastRouteTried: row.last_route_tried || null,
     updatedAt: row.updated_at,
     discovery: discovery.get(row.source_id) || {m15:0,h1:0,h6:0,h24:0},
   }));

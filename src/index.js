@@ -28,6 +28,50 @@ function json(data,status=200){
   });
 }
 
+export async function buildPlatformStatus(env){
+  const generatedAt=new Date().toISOString();
+  const queues={
+    ROUND:env?.ROUND_JOBS_QUEUE&&typeof env.ROUND_JOBS_QUEUE.send==='function'?'available':'unavailable',
+    INTELLIGENT:env?.INTELLIGENT_JOBS_QUEUE&&typeof env.INTELLIGENT_JOBS_QUEUE.send==='function'?'available':'unavailable',
+    ARTICLE_READ:env?.ARTICLE_READ_QUEUE&&typeof env.ARTICLE_READ_QUEUE.send==='function'?'available':'unavailable',
+    CAROUSEL_AI:env?.CAROUSEL_AI_QUEUE&&typeof env.CAROUSEL_AI_QUEUE.send==='function'?'available':'unavailable',
+  };
+  let database='unconfigured',lastSuccessAt=null,schedulerHealthy=false,sourceRows=[],stuckIntelligent=0,stuckProduction=0;
+  if(env?.DB){
+    try{
+      const health=await env.DB.prepare('SELECT 1 AS ok').first();
+      database=Number(health?.ok)===1?'connected':'error';
+      const latest=await env.DB.prepare("SELECT completed_at FROM runs WHERE status='success' ORDER BY completed_at DESC LIMIT 1").first().catch(()=>null);
+      lastSuccessAt=latest?.completed_at||null;
+      schedulerHealthy=Boolean(lastSuccessAt)&&Date.now()-Date.parse(lastSuccessAt)<=12*60*1000;
+      const sources=await env.DB.prepare('SELECT source_id,status,route,item_count,failure_count FROM source_state').all().catch(()=>({results:[]}));
+      sourceRows=sources?.results||[];
+      const staleCutoff=new Date(Date.now()-5*60*1000).toISOString();
+      const intelligent=await env.DB.prepare("SELECT COUNT(*) AS total FROM intelligent_jobs WHERE status IN ('queued','running') AND updated_at < ?").bind(staleCutoff).first().catch(()=>null);
+      const production=await env.DB.prepare("SELECT COUNT(*) AS total FROM production_jobs WHERE status IN ('queued','running') AND updated_at < ?").bind(staleCutoff).first().catch(()=>null);
+      stuckIntelligent=Number(intelligent?.total)||0;stuckProduction=Number(production?.total)||0;
+    }catch{database='error';}
+  }
+  const total=39;
+  let healthy=0,degraded=0,cacheOnly=0;
+  for(const row of sourceRows){
+    const count=Number(row?.item_count)||0;const route=String(row?.route||'');const status=String(row?.status||'');const failures=Number(row?.failure_count)||0;
+    if(count<=0)continue;
+    const cache=route==='cache';
+    if(cache)cacheOnly+=1;
+    if(cache||status==='degraded'||failures>0)degraded+=1;else healthy+=1;
+  }
+  const available=Math.min(total,healthy+degraded);const unavailable=Math.max(0,total-available);
+  const coveragePercent=total?Math.round(available/total*100):0;
+  const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
+  return {
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.4.8',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    queues,
+    sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
+    jobs:{stuckIntelligent,stuckProduction,healthy:stuckIntelligent===0&&stuckProduction===0},
+  };
+}
+
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
@@ -38,13 +82,13 @@ export default {
     if(url.pathname==='/projects') return Response.redirect(new URL('/projects/',request.url).toString(),302);
     if(url.pathname==='/admin') return Response.redirect(new URL('/admin/',request.url).toString(),302);
 
-    if(url.pathname==='/api/platform/status') return json({
-      ok:true,
+    if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
+      ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.4.7',
+      version:'0.9.7.4.8',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4.7',
+        editorialVersion:'2.9.7.4.8',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -196,6 +240,7 @@ export default {
       adaptiveScrapingV09745:{enabled:true,streamingHtml:true,maxHtmlBytes:2500000,jsonLdFirst:true,adapterFirst:true,evidenceSufficiency:true,ampOnlyWhenNeeded:true,singleBackupAutomatic:true,retryChangesStrategy:true,schemaHotPathMemoized:true},
       hybridMultiTransportV09746:{enabled:true,policy:'same-source-transports-before-backup',transports:['cache','direct-fetch','browser-run','snapshot-rss'],browserRunBinding:!!env.BROWSER,directFirstDefault:true,transportLearning:true,browserFirstForDegradedDomains:true,singleEditorialBackup:true,bandAdapter:true,noManualRetryLoop:true},
       highVolumeDiscoveryV09747:{enabled:true,sourceVolumeProfiles:true,veryHighSources:['g1','cnn-brasil','folha','estadao','o-globo','metropoles','ge'],multiRouteBeforeStop:true,undatedHomepageFirstSeen:true,canonicalUrlDedup:true,discoveryPersistence:'D1 source_discovery_items',coverageWindows:['15m','1h','6h','24h'],coverageScore:true,coverageTargetPerProfile:true,lowCoverageAlert:true},
+      hotfixLockV09748:{enabled:true,circuitBreaker:['CLOSED','OPEN','HALF_OPEN'],staleWhileRevalidate:true,routeAwareTimeouts:true,http525:'tls-upstream',platformStatusOperational:true,queueStatus:true,sourceIsolation:true,limitedBrowserRecovery:true,noArchitectureRewrite:true},
       consistencyAsyncFastPathV09741:{enabled:true,productionPostAsync:true,transportRetryStatuses:[502,503,504],activeJobDeduplication:true,deferredSourceSnapshotContinuity:true,forceRefreshWhenSnapshotMissing:true,editorialChangesSinceLastCompletedRound:true},
       roundStabilityV0951:{
         enabled:true,
@@ -284,7 +329,7 @@ export default {
         priority:['publisher','scraped-article','wikimedia-commons','uploads','giphy','ai-on-demand'],
         ai:!!env.AI
       }
-    });
+    }); }
 
     // Hotfix: somente logins explicitamente marcados como ADM são interceptados.
     // Usuários comuns continuam no fluxo existente da v0.8.5.

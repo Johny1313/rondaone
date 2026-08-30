@@ -19,8 +19,12 @@ const MEDIUM_FREQUENCY_SOURCES = new Set([
   "caras-brasil", "observatorio-dos-famosos", "area-vip", "natelinha",
   "new-york-times", "washington-post", "al-jazeera", "france-24", "deutsche-welle",
 ]);
+const PRIORITY_RECOVERY_SOURCE_IDS = new Set([
+  "campo-grande-news","caras-brasil","leo-dias","natelinha","nexo","o-liberal",
+  "observatorio-dos-famosos","purepeople-brasil","quem","tv-foco","area-vip","cnn","infobae",
+]);
 
-// v0.9.7.4.7 — cobertura de fonte não é apenas "HTTP 200".
+// v0.9.7.4.8 — cobertura de fonte não é apenas "HTTP 200".
 // Portais de grande produção mantêm mais itens no snapshot e consultam múltiplas
 // rotas de descoberta antes de encerrar a coleta.
 const VERY_HIGH_VOLUME_SOURCES = new Set([
@@ -312,6 +316,7 @@ function classifyHttpStatus(status) {
   if (status === 403) return { code: "blocked", retryable: false };
   if (status === 404) return { code: "not-found", retryable: false };
   if (status === 429) return { code: "rate-limited", retryable: true };
+  if (status === 525) return { code: "tls-upstream", retryable: false };
   if (status >= 500) return { code: "upstream-error", retryable: true };
   return { code: "http-error", retryable: false };
 }
@@ -443,27 +448,35 @@ function validatorSnapshot(response) {
   };
 }
 
+function routeForFeedUrl(feed,url){
+  if (Boolean(feed?.directUrl) && String(url) === String(feed.directUrl)) return "direct";
+  if ((Array.isArray(feed?.scrapeUrls)?feed.scrapeUrls:[]).includes(url)) return "scrape";
+  return "fallback";
+}
+
 function orderedFeedUrls(feed, sourceState) {
   const urls = Array.isArray(feed?.urls) ? [...feed.urls] : [];
   const lastGood = String(sourceState?.lastUrl || "");
-  if (!lastGood || !urls.includes(lastGood)) return urls;
-
   const scrapeUrls = Array.isArray(feed?.scrapeUrls) ? feed.scrapeUrls : [];
-  // Mantém a recuperação histórica para fontes sem scraper.
-  if (!scrapeUrls.length) return [lastGood, ...urls.filter((url) => url !== lastGood)];
-
-  // Com Fast News Engine, evita que um fallback agregado saudável impeça
-  // a consulta do feed oficial + página HTML direta.
-  const discovery = urls.filter((url) => url === feed?.directUrl || scrapeUrls.includes(url));
-  const fallback = urls.filter((url) => !discovery.includes(url));
-  if (discovery.includes(lastGood)) {
-    return [lastGood, ...discovery.filter((url) => url !== lastGood), ...fallback];
+  let ordered;
+  if (!lastGood || !urls.includes(lastGood)) ordered = urls;
+  else if (!scrapeUrls.length) ordered = [lastGood, ...urls.filter((url) => url !== lastGood)];
+  else {
+    const discovery = urls.filter((url) => url === feed?.directUrl || scrapeUrls.includes(url));
+    const fallback = urls.filter((url) => !discovery.includes(url));
+    ordered = discovery.includes(lastGood)
+      ? [lastGood, ...discovery.filter((url) => url !== lastGood), ...fallback]
+      : [...discovery, lastGood, ...fallback.filter((url) => url !== lastGood)];
   }
-  return [...discovery, lastGood, ...fallback.filter((url) => url !== lastGood)];
+  const preferred=String(sourceState?.preferredRoute||"").toLowerCase();
+  if (["direct","scrape","fallback"].includes(preferred)) {
+    ordered=[...ordered].sort((a,b)=>Number(routeForFeedUrl(feed,b)===preferred)-Number(routeForFeedUrl(feed,a)===preferred));
+  }
+  return [...new Set(ordered)];
 }
 
 function routeLabel(routeSet) {
-  const active = ["direct", "scrape", "fallback"].filter((route) => routeSet.has(route));
+  const active = ["direct", "scrape", "fallback", "browser"].filter((route) => routeSet.has(route));
   if (active.length) return active.join("+");
   return routeSet.has("cache") ? "cache" : "no-new";
 }
@@ -477,6 +490,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
   let totalResponseMs = 0;
   let lastUrl = sourceState?.lastUrl || null;
   let mergedItems = [];
+  let usedCachedContent = false;
   const routes = [];
   const profile = feed?.volume || sourceVolumeProfile(feed?.id, feed?.region);
   const desiredMinimum = Math.max(feed.region === "Mundo" ? 5 : 8, Number(feed.discoveryTarget) || Number(profile.discoveryTarget) || 8);
@@ -487,11 +501,16 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
   let scrapeAttempted = false;
   let directAttempted = false;
 
-  const orderedUrls = orderedFeedUrls(feed, sourceState);
+  const orderedUrlsAll = orderedFeedUrls(feed, sourceState);
+  const routeLimit = Math.max(1, Math.min(orderedUrlsAll.length || 1, Number(options.maxRoutes) || orderedUrlsAll.length || 1));
+  const orderedUrls = orderedUrlsAll.slice(0, routeLimit);
+  let lastRouteTried = sourceState?.lastRouteTried || null;
 
   for (let index = 0; index < orderedUrls.length; index += 1) {
     const url = orderedUrls[index];
     const scrape = scrapeUrls.has(url);
+    const routeKind = routeForFeedUrl(feed,url);
+    lastRouteTried = routeKind;
     if (requiredDiscoveryUrls.has(url)) attemptedDiscoveryUrls.add(url);
     if (scrape) scrapeAttempted = true;
     if (Boolean(feed.directUrl) && String(url) === String(feed.directUrl)) directAttempted = true;
@@ -499,7 +518,11 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       reserveExternalRequest(requestBudget, url);
       const response = await fetchWithTimeout(url, fetcher, {
         validator: validators[url],
-        timeoutMs: Number(options.timeoutMs) || 8_000,
+        timeoutMs: routeKind === "direct"
+          ? Number(options.directTimeoutMs) || Number(options.timeoutMs) || 2_500
+          : routeKind === "fallback"
+            ? Number(options.fallbackTimeoutMs) || Number(options.timeoutMs) || 3_500
+            : Number(options.scrapeTimeoutMs) || Number(options.timeoutMs) || 3_000,
         accept: scrape
           ? "text/html,application/xhtml+xml;q=0.9,*/*;q=0.7"
           : "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.7",
@@ -512,7 +535,9 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         const cached = cachedItemsFromState(sourceState, feed, cutoff);
         if (cached.length) {
           mergedItems = uniqueItems([...mergedItems, ...cached], itemLimit);
-          routes.push("cache");
+          usedCachedContent = true;
+          // 304 confirma que a rota continua saudável, mas os itens vieram do cache.
+          routes.push(direct ? "direct" : routeKind === "fallback" ? "fallback" : "cache");
         }
         lastUrl = url;
         const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum && !profile.requireDiscoveryRoutes);
@@ -572,6 +597,30 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
     }
   }
 
+  if (!mergedItems.length && options.allowBrowserRecovery && typeof options.browserFetcher === "function") {
+    const target=(Array.isArray(feed?.scrapeUrls)?feed.scrapeUrls:[])[0] || null;
+    if(target){
+      try{
+        const rendered=await options.browserFetcher(target,feed,{timeoutMs:Number(options.browserTimeoutMs)||4_500});
+        const html=String(rendered?.html||rendered||"");
+        if(html){
+          let items=parseNewsHtml(html,feed,target,effectiveCutoff,itemLimit);
+          if(items.length<desiredMinimum){
+            const discovery=parseDiscoveryHtml(html,feed,target,{limit:itemLimit,discoveredAt:new Date().toISOString(),existingUrls:items.map(item=>item.url)});
+            items=uniqueItems([...items,...discovery],itemLimit);
+          }
+          if(items.length){
+            mergedItems=uniqueItems(items.map(item=>({...item,collectionRoute:"browser"})),itemLimit);
+            routes.push("browser");
+            successfulResponses+=1;
+            lastUrl=target;
+            lastRouteTried="browser";
+          }else errors.push({code:"browser-empty",httpStatus:null,retryable:false,detail:"Browser Run respondeu, mas não encontrou cards editoriais úteis"});
+        }
+      }catch(error){errors.push({code:"browser-failed",httpStatus:null,retryable:true,detail:`Browser Run: ${compactError(error)}`});}
+    }
+  }
+
   if (mergedItems.length) {
     const routeSet = new Set(routes);
     const route = routeLabel(routeSet);
@@ -587,7 +636,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         error: null,
         warning: errors.length ? [...new Set(errors.map((item) => item.detail))].slice(0, 2).join(" | ") : null,
         fallback: routeSet.has("fallback"),
-        cached: routeSet.has("cache"),
+        cached: usedCachedContent || routeSet.has("cache"),
         route,
         attempts: Math.min(orderedUrls.length, successfulResponses + errors.length),
         windowHours,
@@ -598,7 +647,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         volumeProfile: profile.id,
         coverage: coverageSnapshot(feed, mergedItems, routes),
       },
-      operational: { validators, lastUrl, discoveryRoutes:[...attemptedDiscoveryUrls], volumeProfile:profile.id },
+      operational: { validators, lastUrl, lastRouteTried, preferredRoute:routes.at(-1)||lastRouteTried, discoveryRoutes:[...attemptedDiscoveryUrls], volumeProfile:profile.id },
     };
   }
 
@@ -626,11 +675,11 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
         volumeProfile: profile.id,
         coverage: coverageSnapshot(feed, cached, cached.length ? ["cache"] : []),
       },
-      operational: { validators, lastUrl, discoveryRoutes:[...attemptedDiscoveryUrls], volumeProfile:profile.id },
+      operational: { validators, lastUrl, lastRouteTried, preferredRoute:routes.at(-1)||lastRouteTried, discoveryRoutes:[...attemptedDiscoveryUrls], volumeProfile:profile.id },
     };
   }
 
-  const primaryError = errors.find((item) => ["blocked", "rate-limited", "timeout", "not-found", "budget-exhausted"].includes(item.code))
+  const primaryError = errors.find((item) => ["blocked", "rate-limited", "timeout", "not-found", "tls-upstream", "budget-exhausted"].includes(item.code))
     || errors.at(-1)
     || { code: "unknown", detail: "Fonte indisponível", httpStatus: null };
 
@@ -656,7 +705,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       volumeProfile: profile.id,
       coverage: coverageSnapshot(feed, [], routes),
     },
-    operational: { validators, lastUrl, discoveryRoutes:[...attemptedDiscoveryUrls], volumeProfile:profile.id },
+    operational: { validators, lastUrl, lastRouteTried, preferredRoute:routes.at(-1)||lastRouteTried, discoveryRoutes:[...attemptedDiscoveryUrls], volumeProfile:profile.id },
   };
 }
 
@@ -863,8 +912,13 @@ function effectiveNextCheckAt(sourceState, feed, referenceMs = Date.now()) {
 }
 
 function sourceIsDue(sourceState, collectedAt, feed) {
+  const now=collectedAt.getTime();
+  if(String(sourceState?.circuitState||"CLOSED").toUpperCase()==="OPEN") {
+    const retryAt=Date.parse(sourceState?.nextRetryAt||sourceState?.nextCheckAt||"");
+    return !Number.isFinite(retryAt) || retryAt<=now;
+  }
   if (!sourceState?.nextCheckAt) return true;
-  return effectiveNextCheckAt(sourceState, feed, collectedAt.getTime()) <= collectedAt.getTime();
+  return effectiveNextCheckAt(sourceState, feed, now) <= now;
 }
 
 function deferredSourceResult(feed, sourceState, cutoff, previousRound = null) {
@@ -877,17 +931,17 @@ function deferredSourceResult(feed, sourceState, cutoff, previousRound = null) {
       id: feed.id,
       name: feed.name,
       region: feed.region || "Brasil",
-      ok: true,
+      ok: items.length > 0,
       count: items.length,
-      error: null,
-      warning: null,
+      error: items.length ? null : (sourceState?.errorDetail || "Circuit breaker em cooldown sem cache válido."),
+      warning: items.length && String(sourceState?.circuitState||"CLOSED")==="OPEN" ? "Fonte em cooldown; cache stale-while-revalidate servido." : null,
       fallback: sourceState?.route === "fallback",
       cached: items.length > 0,
-      route: items.length > 0 ? "cache" : "no-new",
+      route: items.length > 0 ? "cache" : (String(sourceState?.circuitState||"CLOSED")==="OPEN"?"circuit-open":"no-new"),
       attempts: 0,
       windowHours: 24,
       httpStatus: sourceState?.httpStatus ?? null,
-      errorCode: null,
+      errorCode: items.length ? null : (sourceState?.errorCode || null),
       responseMs: sourceState?.responseMs ?? null,
       lastUrl: sourceState?.lastUrl || null,
       lastAttemptAt: sourceState?.lastAttemptAt || null,
@@ -895,6 +949,14 @@ function deferredSourceResult(feed, sourceState, cutoff, previousRound = null) {
       nextCheckAt: sourceState ? new Date(effectiveNextCheckAt(sourceState, feed)).toISOString() : null,
       refreshMinutes: feed.refreshMinutes,
       deferred: true,
+      degraded: String(sourceState?.circuitState||"CLOSED")==="OPEN" || Number(sourceState?.failureCount)>0,
+      servedFrom: items.length ? "cache" : null,
+      revalidationPending: String(sourceState?.circuitState||"CLOSED")==="OPEN",
+      circuitState: sourceState?.circuitState || "CLOSED",
+      nextRetryAt: sourceState?.nextRetryAt || null,
+      preferredRoute: sourceState?.preferredRoute || null,
+      lastRouteTried: sourceState?.lastRouteTried || null,
+      priorityRecovery: PRIORITY_RECOVERY_SOURCE_IDS.has(feed.id),
       volumeProfile: feed?.volume?.id || "normal",
       coverage: coverageSnapshot(feed, items, items.length ? ["cache"] : []),
       cacheOrigin: stateItems.length ? "source-state" : previousItems.length ? "previous-round" : null,
@@ -906,11 +968,51 @@ function deferredSourceResult(feed, sourceState, cutoff, previousRound = null) {
   };
 }
 
+function circuitCooldownMinutes(errorCode,sourceId=null){
+  if(errorCode === "not-found") return 30;
+  if(errorCode === "blocked") return 20;
+  if(errorCode === "tls-upstream") return 15;
+  if(errorCode === "rate-limited") return 15;
+  const base=10;
+  return PRIORITY_RECOVERY_SOURCE_IDS.has(String(sourceId||""))?7:base;
+}
+
+function alternativePreferredRoute(feed,previousState,errorCode,lastRouteTried){
+  const routes=new Set((feed?.urls||[]).map(url=>routeForFeedUrl(feed,url)));
+  if(["blocked","not-found","tls-upstream","rate-limited"].includes(errorCode) && routes.has("fallback")) return "fallback";
+  if(["timeout","upstream-error"].includes(errorCode)){
+    if(previousState?.preferredRoute!=="fallback"&&routes.has("fallback"))return "fallback";
+    if(previousState?.preferredRoute!=="scrape"&&routes.has("scrape"))return "scrape";
+  }
+  if(lastRouteTried === "direct" && routes.has("scrape")) return "scrape";
+  if(lastRouteTried !== "fallback" && routes.has("fallback")) return "fallback";
+  if(lastRouteTried !== "direct" && routes.has("direct")) return "direct";
+  return previousState?.preferredRoute || lastRouteTried || null;
+}
+
+export function sourceCircuitDecision(feed,previousState,rawResult,resilientResult,collectedAt=new Date()){
+  const healthy=Boolean(rawResult?.status?.ok);
+  if(healthy){
+    const preferred=rawResult?.operational?.preferredRoute || rawResult?.operational?.lastRouteTried || previousState?.preferredRoute || null;
+    return {failureCount:0,circuitState:"CLOSED",nextRetryAt:null,preferredRoute:preferred,revalidationPending:false};
+  }
+  const failureCount=(Number(previousState?.failureCount)||0)+1;
+  const errorCode=rawResult?.status?.errorCode||"unknown";
+  const lastRouteTried=rawResult?.operational?.lastRouteTried||previousState?.lastRouteTried||null;
+  const preferredRoute=alternativePreferredRoute(feed,previousState,errorCode,lastRouteTried);
+  if(failureCount>=3){
+    const nextRetryAt=new Date(collectedAt.getTime()+circuitCooldownMinutes(errorCode,feed?.id)*60000).toISOString();
+    return {failureCount,circuitState:"OPEN",nextRetryAt,preferredRoute,revalidationPending:Boolean(resilientResult?.items?.length)};
+  }
+  return {failureCount,circuitState:"CLOSED",nextRetryAt:null,preferredRoute,revalidationPending:Boolean(resilientResult?.items?.length)};
+}
+
 function retryBackoffMinutes(errorCode, failureCount) {
   const step = Math.min(4, Math.max(0, Number(failureCount) - 1));
   if (errorCode === "rate-limited") return [5, 5, 10, 10, 15][step];
   if (errorCode === "not-found") return [5, 10, 10, 15, 15][step];
   if (errorCode === "blocked") return [5, 5, 10, 10, 15][step];
+  if (errorCode === "tls-upstream") return [8, 10, 15, 15, 15][step];
   return [3, 5, 5, 10, 15][step];
 }
 
@@ -953,15 +1055,18 @@ export function applyDiscoveryMetadata(items, previousState, collectedAt = new D
 function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState, collectedAt) {
   const attemptedAt = collectedAt.toISOString();
   const healthy = Boolean(rawResult?.status?.ok);
-  const failureCount = healthy ? 0 : (Number(previousState?.failureCount) || 0) + 1;
+  const circuit=sourceCircuitDecision(feed,previousState,rawResult,resilientResult,collectedAt);
   const nextMinutes = healthy
     ? Math.max(1, Number(feed.refreshMinutes) || 5)
-    : Math.min(15, retryBackoffMinutes(rawResult?.status?.errorCode, failureCount));
-  const nextCheckAt = new Date(collectedAt.getTime() + nextMinutes * 60 * 1000).toISOString();
+    : circuit.circuitState === "OPEN"
+      ? Math.max(1,Math.round((Date.parse(circuit.nextRetryAt)-collectedAt.getTime())/60000))
+      : Math.min(15, retryBackoffMinutes(rawResult?.status?.errorCode, circuit.failureCount));
+  const nextCheckAt = circuit.nextRetryAt || new Date(collectedAt.getTime() + nextMinutes * 60 * 1000).toISOString();
   const items = snapshotItems(feed, resilientResult?.items, previousState, collectedAt);
+  const servedFrom = resilientResult?.status?.route === "cache" ? "cache" : (rawResult?.status?.route || null);
   const status = healthy
     ? rawResult.status.route
-    : resilientResult?.status?.route === "cache" ? "degraded" : rawResult?.status?.errorCode || "failed";
+    : items.length ? "degraded" : rawResult?.status?.errorCode || "failed";
   return {
     sourceId: feed.id,
     name: feed.name,
@@ -978,8 +1083,14 @@ function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState,
     lastAttemptAt: attemptedAt,
     lastSuccessAt: healthy ? attemptedAt : previousState?.lastSuccessAt || null,
     nextCheckAt,
-    failureCount,
+    failureCount: circuit.failureCount,
     responseMs: rawResult?.status?.responseMs ?? previousState?.responseMs ?? null,
+    preferredRoute: circuit.preferredRoute,
+    circuitState: circuit.circuitState,
+    nextRetryAt: circuit.nextRetryAt,
+    servedFrom,
+    revalidationPending: Boolean(!healthy && items.length),
+    lastRouteTried: rawResult?.operational?.lastRouteTried || previousState?.lastRouteTried || null,
     coverage: resilientResult?.status?.coverage || coverageSnapshot(feed, items, [resilientResult?.status?.route]),
     volumeProfile: feed?.volume?.id || "normal",
     updatedAt: attemptedAt,
@@ -993,10 +1104,36 @@ function enrichStatus(status, sourceState, feed) {
     lastSuccessAt: status.lastSuccessAt || sourceState?.lastSuccessAt || null,
     nextCheckAt: status.nextCheckAt || sourceState?.nextCheckAt || null,
     failureCount: Number(sourceState?.failureCount) || 0,
+    circuitState: sourceState?.circuitState || status?.circuitState || "CLOSED",
+    servedFrom: status?.servedFrom || sourceState?.servedFrom || (status?.cached ? "cache" : status?.route || null),
+    revalidationPending: Boolean(status?.revalidationPending || sourceState?.revalidationPending),
+    nextRetryAt: sourceState?.nextRetryAt || status?.nextRetryAt || null,
+    preferredRoute: sourceState?.preferredRoute || status?.preferredRoute || null,
+    lastRouteTried: status?.lastRouteTried || sourceState?.lastRouteTried || null,
+    priorityRecovery: PRIORITY_RECOVERY_SOURCE_IDS.has(feed.id),
     refreshMinutes: feed.refreshMinutes,
   };
 }
 
+
+export async function collectSourceRevalidation({feed,state,previousRound=null,fetcher=fetch,browserFetcher=null,now=new Date()}={}){
+  if(!feed)throw new Error("Fonte não informada para revalidação.");
+  const collectedAt=new Date(now);
+  const cutoff=new Date(collectedAt.getTime()-24*60*60*1000);
+  const halfOpen=String(state?.circuitState||"CLOSED").toUpperCase()==="OPEN";
+  const options={directTimeoutMs:1_800,scrapeTimeoutMs:2_200,fallbackTimeoutMs:2_600,skipScrapeWhenDirectHealthy:true,browserFetcher,browserTimeoutMs:4_500,allowBrowserRecovery:Number(state?.failureCount)>=2||halfOpen,...(halfOpen?{maxRoutes:1}:{} )};
+  const raw=await collectFeed(feed,cutoff,fetcher,{remaining:8,used:0,seenUrls:new Set()},halfOpen?{...state,circuitState:"HALF_OPEN"}:state,options);
+  let resilient=raw;
+  if(!raw.status.ok){
+    const stateItems=cachedItemsFromState(state,feed,cutoff);
+    const previousItems=stateItems.length?[]:cachedItemsForFeed(previousRound,feed,cutoff);
+    const cached=stateItems.length?stateItems:previousItems;
+    if(cached.length)resilient={items:cached,status:{...raw.status,ok:true,count:cached.length,error:null,warning:raw.status.error,fallback:true,cached:true,degraded:true,route:"cache",servedFrom:"cache",revalidationPending:true},operational:raw.operational};
+  }
+  resilient={...resilient,items:applyDiscoveryMetadata(resilient.items,state,collectedAt)};
+  const update=buildSourceStateUpdate(feed,raw,resilient,halfOpen?{...state,circuitState:"HALF_OPEN"}:state,collectedAt);
+  return {raw,resilient,update};
+}
 
 export function summarizePortalStatuses(statuses = []) {
   const portals = (Array.isArray(statuses) ? statuses : []).filter((source) => source?.region !== "Rede");
@@ -1016,8 +1153,9 @@ export function summarizePortalStatuses(statuses = []) {
   return {
     total: portals.length,
     withContent: withContent.length,
-    healthy: Math.max(0, portals.length - failures.length),
+    healthy: portals.filter((source)=>source?.ok && !source?.degraded && !source?.warning).length,
     failed: failures.length,
+    unavailable: failures.length,
     degraded: degraded.length,
     cached: cached.length,
     noNew: noNew.length,
@@ -1059,6 +1197,8 @@ export async function collectRound({
   earlySourceTarget = 25,
   earlyFreshMinimum = 8,
   onEarlySnapshot = null,
+  onRevalidateSource = null,
+  browserFetcher = null,
 } = {}) {
   const startedAt = Date.now();
   const collectedAt = new Date(now);
@@ -1069,6 +1209,7 @@ export async function collectRound({
   const portalFetcher = sharedResponseFetcher(fetcher);
   const portalResults = new Array(feeds.length);
   const due = [];
+  const revalidationEnqueues = [];
 
   feeds.forEach((feed, index) => {
     const state = sourceStateFor(sourceStates, feed.id);
@@ -1077,16 +1218,28 @@ export async function collectRound({
     const hasSafeSnapshot = stateItems.length > 0 || previousItems.length > 0;
     // Nunca adia uma fonte sem snapshot utilizável. Esse caso causava a ronda
     // a encolher para apenas as poucas fontes que estavam "due" após um deploy.
-    if (forceRefresh || sourceIsDue(state, collectedAt, feed) || !hasSafeSnapshot) due.push({ feed, index, state });
-    else portalResults[index] = deferredSourceResult(feed, state, cutoff, previousRound);
+    const openCircuit=String(state?.circuitState||"CLOSED").toUpperCase()==="OPEN";
+    const circuitDue=sourceIsDue(state,collectedAt,feed);
+    if(openCircuit && !circuitDue){
+      portalResults[index]=deferredSourceResult(feed,state,cutoff,previousRound);
+    }else if (hasSafeSnapshot && Number(state?.failureCount)>0 && circuitDue && typeof onRevalidateSource === "function") {
+      const cached=deferredSourceResult(feed,state,cutoff,previousRound);
+      cached.status={...cached.status,ok:true,degraded:true,servedFrom:"cache",revalidationPending:true,circuitState:openCircuit?"HALF_OPEN":(state?.circuitState||"CLOSED"),warning:cached.status.warning||"Cache servido imediatamente; revalidação agendada em background."};
+      portalResults[index]=cached;
+      revalidationEnqueues.push(Promise.resolve().then(()=>onRevalidateSource(feed.id,{halfOpen:openCircuit})).catch(()=>null));
+    }else if (forceRefresh || circuitDue || !hasSafeSnapshot) {
+      const halfOpen=openCircuit && circuitDue;
+      due.push({ feed, index, state:halfOpen?{...state,circuitState:"HALF_OPEN"}:state, halfOpen });
+    } else portalResults[index] = deferredSourceResult(feed, state, cutoff, previousRound);
   });
+  if(revalidationEnqueues.length) await Promise.all(revalidationEnqueues);
 
   let earlyPublished = false;
   const fullConcurrency = Math.max(8, Math.min(16, Number(optionsFullConcurrency(mode, feeds.length)) || 14));
   const dueConcurrency = fastMode ? 8 : fullConcurrency;
   const feedOptions = fastMode
-    ? { timeoutMs: 3_500, skipScrapeWhenDirectHealthy: false }
-    : { timeoutMs: 4_500, skipScrapeWhenDirectHealthy: true };
+    ? { timeoutMs: 3_500,directTimeoutMs:2_200,scrapeTimeoutMs:2_600,fallbackTimeoutMs:3_000, skipScrapeWhenDirectHealthy: false }
+    : { timeoutMs: 4_500,directTimeoutMs:2_500,scrapeTimeoutMs:3_000,fallbackTimeoutMs:3_500, skipScrapeWhenDirectHealthy: true };
   const maybePublishEarly = async () => {
     if (fastMode || earlyPublished || typeof onEarlySnapshot !== "function") return;
     const interim = portalResults.map((result, index) => {
@@ -1111,9 +1264,16 @@ export async function collectRound({
       operational:{mode:"full",earlyPreview:true,sourceTarget:Number(earlySourceTarget)||25,availableSources:available,freshSources:fresh,portalConcurrency:dueConcurrency,externalPortalRequests:requestBudget.used,externalPortalLimit:safeExternalRequestLimit}
     });
   };
-  const dueResults = await runPool(due, dueConcurrency, async ({ feed, state }) => (
-    collectFeed(feed, cutoff, portalFetcher, requestBudget, state, feedOptions)
-  ), async (result,index) => { portalResults[due[index].index] = result; await maybePublishEarly(); });
+  const dueResults = await runPool(due, dueConcurrency, async ({ feed, state, halfOpen }) => {
+    const secondFailure=Number(state?.failureCount)===2;
+    const adaptiveOptions={...feedOptions,
+      ...(secondFailure?{directTimeoutMs:1_800,scrapeTimeoutMs:2_200,fallbackTimeoutMs:2_600,allowBrowserRecovery:true}:{}),
+      ...(halfOpen?{maxRoutes:1,directTimeoutMs:1_800,scrapeTimeoutMs:2_200,fallbackTimeoutMs:2_600,allowBrowserRecovery:true}:{}),
+      browserFetcher,
+      browserTimeoutMs:4_500,
+    };
+    return collectFeed(feed, cutoff, portalFetcher, requestBudget, state, adaptiveOptions);
+  }, async (result,index) => { portalResults[due[index].index] = result; await maybePublishEarly(); });
   due.forEach((entry, index) => { portalResults[entry.index] = dueResults[index]; });
 
   let resilientPortalResults = portalResults.map((result, index) => {
@@ -1152,6 +1312,12 @@ export async function collectRound({
     const raw = dueResults[index];
     const resilient = resilientPortalResults[entry.index];
     return buildSourceStateUpdate(entry.feed, raw, resilient, entry.state, collectedAt);
+  });
+  const updateBySource=new Map(sourceStateUpdates.map(update=>[update.sourceId,update]));
+  resilientPortalResults=resilientPortalResults.map((result,index)=>{
+    const update=updateBySource.get(feeds[index].id);
+    if(!update)return result;
+    return {...result,status:{...result.status,circuitState:update.circuitState,nextRetryAt:update.nextRetryAt,preferredRoute:update.preferredRoute,lastRouteTried:update.lastRouteTried,servedFrom:update.servedFrom,revalidationPending:update.revalidationPending,failureCount:update.failureCount,degraded:update.status==="degraded"||Boolean(result.status.degraded)}};
   });
 
   const portalItems = uniqueItems(resilientPortalResults.flatMap((result) => result.items), 900);
@@ -1201,7 +1367,7 @@ export async function collectRound({
       operational: {
         mode,
         portalConcurrency: fastMode ? 8 : dueConcurrency,
-        sourceRecovery: "0.9.7.4.7-high-volume-multi-route",
+        sourceRecovery: "0.9.7.4.8-high-volume-multi-route",
         healthyMaxRefreshMinutes: fastMode ? 1 : 5,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1254,7 +1420,7 @@ export async function collectRound({
         mode: "fast",
         fastLane: true,
         portalConcurrency: 8,
-        sourceRecovery: "0.9.7.4.7-high-volume-multi-route",
+        sourceRecovery: "0.9.7.4.8-high-volume-multi-route",
         healthyMaxRefreshMinutes: 1,
         failedMaxSilenceMinutes: 10,
         portalsDue: due.length,
@@ -1297,7 +1463,7 @@ export async function collectRound({
     operational: {
       mode: "full",
       portalConcurrency: dueConcurrency,
-      sourceRecovery: "0.9.7.4.7-high-volume-multi-route",
+      sourceRecovery: "0.9.7.4.8-high-volume-multi-route",
       healthyMaxRefreshMinutes: 5,
       failedMaxSilenceMinutes: 10,
       monitoringConcurrency: 3,

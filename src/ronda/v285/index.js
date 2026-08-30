@@ -1,7 +1,7 @@
 import { handleSecureRemoveBg } from '../remove-bg.js';
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
 import { ARTICLE_ANALYSIS_MODEL, ARTICLE_SECONDARY_MODEL, ARTICLE_TERTIARY_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
-import { collectRound, FAST_LANE_FEEDS, FEEDS, sourceVolumeProfile, summarizePortalStatuses } from "./collector.js";
+import { collectRound, collectSourceRevalidation, FAST_LANE_FEEDS, FEEDS, sourceVolumeProfile, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
   createIntelligentJob,
@@ -143,12 +143,32 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.4.7";
+const VERSION = "2.9.7.4.8";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
 const EDITORIAL_ROUND_LOCK_TTL_MS = 3 * 60 * 1000;
 function carouselQueue(env){ return env?.CAROUSEL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null; }
+function sourceBrowserAvailable(env){return Boolean(env?.BROWSER&&typeof env.BROWSER.quickAction==="function");}
+function createSourceBrowserFetcher(env,{concurrency=2}={}){
+  if(!sourceBrowserAvailable(env))return null;
+  let active=0;const waiters=[];
+  const acquire=()=>active<concurrency?(active++,Promise.resolve()):new Promise(resolve=>waiters.push(()=>{active++;resolve();}));
+  const release=()=>{active=Math.max(0,active-1);const next=waiters.shift();if(next)next();};
+  return async(url,feed,{timeoutMs=4500}={})=>{
+    await acquire();
+    const started=Date.now();
+    try{
+      const task=env.BROWSER.quickAction("content",{url,gotoOptions:{waitUntil:"domcontentloaded",timeout:Math.max(2000,Math.min(7000,Number(timeoutMs)||4500))},rejectResourceTypes:["image","media","font","stylesheet"]});
+      const response=await Promise.race([task,new Promise((_,reject)=>setTimeout(()=>reject(new Error("Browser Run excedeu o budget da fonte")),Math.max(2500,Number(timeoutMs)||4500)))]);
+      let html="";
+      if(response&&typeof response.text==="function"){const raw=await response.text();try{const parsed=JSON.parse(raw);html=typeof parsed?.result==="string"?parsed.result:typeof parsed?.result?.content==="string"?parsed.result.content:typeof parsed?.content==="string"?parsed.content:raw;}catch{html=raw;}}
+      else if(typeof response==="string")html=response;else if(typeof response?.result==="string")html=response.result;else if(typeof response?.html==="string")html=response.html;
+      if(!html||html.length<120)throw new Error("Browser Run não retornou HTML útil para a fonte");
+      return {html,durationMs:Date.now()-started,sourceId:feed?.id||null};
+    }finally{release();}
+  };
+}
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -1139,10 +1159,35 @@ async function processRoundQueueMessage(message, env, body = {}) {
 }
 
 
+async function performSourceRevalidation(env,sourceId){
+  const db=requireDatabase(env);
+  const feed=FEEDS.find(item=>item.id===String(sourceId||""));
+  if(!feed)throw new Error(`Fonte desconhecida para revalidação: ${sourceId}`);
+  const states=await getSourceStates(db,[feed.id]);const state=states.get(feed.id)||null;
+  const previousRound=await getLatestRound(db).catch(()=>null);
+  const browserFetcher=createSourceBrowserFetcher(env,{concurrency:1});
+  const outcome=await collectSourceRevalidation({feed,state,previousRound,browserFetcher});
+  await saveSourceStates(db,[outcome.update]);
+  await saveSourceDiscoveryItems(db,[outcome.update]).catch(()=>null);
+  structuredLog("source_revalidated",{sourceId:feed.id,status:outcome.update.status,circuitState:outcome.update.circuitState,route:outcome.update.route,failureCount:outcome.update.failureCount});
+  return outcome.update;
+}
+
+async function processSourceRevalidationMessage(message,env,body){
+  try{await performSourceRevalidation(env,body.sourceId);message?.ack?.();}
+  catch(error){
+    const attempts=Number(message?.attempts||1);
+    structuredLog("source_revalidation_failed",{sourceId:body?.sourceId||null,attempts,detail:error instanceof Error?error.message:String(error)});
+    if(attempts<2&&message?.retry){message.retry({delaySeconds:Math.min(60,15*attempts)});return;}
+    message?.ack?.();
+  }
+}
+
 async function processQueueBatch(batch, env) {
   for (const message of batch.messages || []) {
     const body = message?.body && typeof message.body === "object" ? message.body : {};
     if (body.type === "round") await processRoundQueueMessage(message, env, body);
+    else if(body.type === "source-revalidate") await processSourceRevalidationMessage(message,env,body);
     else await processIntelligentQueueMessage(message, env, body);
   }
 }
@@ -1184,6 +1229,7 @@ async function performRound(env, triggerType, options = {}) {
       });
       const requestedBudget = Number(env.ROUND_EXTERNAL_REQUEST_BUDGET);
       const externalRequestLimit = Number.isFinite(requestedBudget) && requestedBudget > 0 ? requestedBudget : 120;
+      const sourceBrowserFetcher=createSourceBrowserFetcher(env,{concurrency:Math.max(1,Math.min(2,Number(env.ROUND_BROWSER_CONCURRENCY)||2))});
       payload = await collectRound({
         feeds: roundFeeds,
         monitoringTerms,
@@ -1194,6 +1240,8 @@ async function performRound(env, triggerType, options = {}) {
         externalRequestLimit,
         earlySourceTarget: Number(env.ROUND_EARLY_SOURCE_TARGET) || 25,
         earlyFreshMinimum: Number(env.ROUND_EARLY_FRESH_MINIMUM) || 8,
+        browserFetcher:sourceBrowserFetcher,
+        onRevalidateSource:env.ROUND_JOBS_QUEUE?.send?async(sourceId)=>{await env.ROUND_JOBS_QUEUE.send({type:"source-revalidate",sourceId,queuedAt:new Date().toISOString()});}:null,
         onEarlySnapshot: mode === "full" ? async (preview) => {
           let safePreview = portugueseOnlyFallback(preview);
           safePreview = withEditorias(safePreview);
@@ -1458,19 +1506,19 @@ async function handleApi(request, env, url, ctx) {
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
       if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.7", job:reusable, pollAfterMs:0 },200);
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.8", job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.7",job:active,pollAfterMs:450},202);
+      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.8",job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
     // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
     // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
     const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.7", job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.8", job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
@@ -1890,7 +1938,7 @@ async function handleApi(request, env, url, ctx) {
       topics: latestSuccess?.topics || 0,
       sources: latestSuccess?.sources || 0,
       schedulerHealthy: latestSuccess?.completedAt
-        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 6 * 60 * 1000
+        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 12 * 60 * 1000
         : false,
     };
     return conditionalJson(request, payload, `${latest?.id || "none"}-${latest?.status || "idle"}-${latestSuccess?.id || "none"}`);
@@ -1914,7 +1962,7 @@ async function handleApi(request, env, url, ctx) {
       database: dbOk ? "connected" : "error",
       scheduleMinutes: 1,
       fullRoundMinutes: 3,
-      schedulerHealthy: ageMs <= 6 * 60 * 1000,
+      schedulerHealthy: ageMs <= 12 * 60 * 1000,
       lastSuccessAt,
       lastRunId: latest?.id ?? null,
       manualAuthRequired: Boolean(env.MANUAL_ROUND_TOKEN),
@@ -1943,7 +1991,7 @@ async function handleApi(request, env, url, ctx) {
         discoveryClock: "firstSeenAt",
         directHtmlScraping: true,
         fastLaneSources: FAST_LANE_FEEDS.length,
-        statusModes: ["direct", "scrape", "direct+scrape", "fallback", "not-modified", "cache", "no-new", "blocked", "rate-limited", "timeout", "failed"],
+        statusModes: ["direct", "scrape", "browser", "fallback", "not-modified", "cache", "circuit-open", "no-new", "blocked", "rate-limited", "tls-upstream", "timeout", "failed"],
       },
       editorialClassification: {
         specializedCategories: [
@@ -2525,7 +2573,7 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok: true, queued: false, runId, status: "success", data });
   }
 
-  throw new HttpError(404, "Rota não encontrada.");
+  throw new HttpError(404, "Rota não encontrada.", {code:"ROUTE_NOT_FOUND",workerReachable:true});
 }
 
 async function handleRequest(request, env, ctx) {
@@ -2548,7 +2596,8 @@ export default {
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : "Erro interno do serviço.";
       const detail = error instanceof HttpError ? error.detail : error instanceof Error ? error.message.slice(0, 300) : null;
-      return json({ ok: false, error: message, ...(detail ? { detail } : {}) }, status);
+      const routeMissing=status===404&&message==="Rota não encontrada.";
+      return json({ ok: false, error: message, ...(routeMissing?{code:"ROUTE_NOT_FOUND",workerReachable:true}:{}), ...(detail ? { detail } : {}) }, status);
     }
   },
 
