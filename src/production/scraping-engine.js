@@ -184,6 +184,7 @@ export const PORTAL_ADAPTERS = Object.freeze([
   { id:"metropoles", label:"Metrópoles", hosts:["metropoles.com"], signals:[/post-content/i,/article-content/i,/entry-content/i] },
   { id:"uol", label:"UOL", hosts:["uol.com.br"], signals:[/article-content/i,/text\-content/i,/content-body/i] },
   { id:"infomoney", label:"InfoMoney", hosts:["infomoney.com.br"], signals:[/article-content/i,/post-content/i,/entry-content/i] },
+  { id:"band", label:"Band", hosts:["band.com.br"], signals:[/article-content/i,/post-content/i,/entry-content/i,/news-content/i,/article-body/i] },
 ]);
 
 export function portalAdapterForUrl(url) {
@@ -224,7 +225,7 @@ async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, {
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.4.5",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.4.6",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -305,6 +306,7 @@ function collectedFallback(item) {
     content,
     wordCount: words,
     extractionMethod: "collected-fallback",
+    transport: "snapshot",
     adapter: null,
     contentLevel: words >= 90 ? "summary" : "partial",
     readMode: "partial",
@@ -333,6 +335,7 @@ function collectedArticleFastPath(item) {
     content:content.slice(0,MAX_ARTICLE_CHARS),
     wordCount:words,
     extractionMethod:"ronda-collected-article-fastpath",
+    transport:"cache",
     adapter:portalAdapterForUrl(url)?.id || null,
     contentLevel:"article",
     readMode:"full-article-cache",
@@ -365,11 +368,13 @@ export async function scrapeArticle(item, {
   allowCollectedFastPath = true,
   slideCount = 7,
   includeVisuals = true,
+  transportPreference = "direct-first",
 } = {}) {
   const startedAt = Date.now();
   const inputUrl = normalizeArticleIdentity(item?.url);
   const attempts = [];
   let best = null;
+  let browserAttempted = false;
   const adapter = portalAdapterForUrl(inputUrl);
 
   if (allowCollectedFastPath) {
@@ -392,8 +397,62 @@ export async function scrapeArticle(item, {
     return Boolean(candidate.evidenceSufficiency.ready && candidate.readingQuality >= 55);
   };
 
+  const tryBrowserTransport = async () => {
+    if (browserAttempted || typeof browserFetcher !== "function") return false;
+    browserAttempted = true;
+    const browserStartedAt = Date.now();
+    try {
+      const rendered = await browserFetcher(inputUrl);
+      const html = String(rendered?.html || "");
+      if (!html) {
+        attempts.push({method:"browser",transport:"browser",ok:false,error:"Browser Run não retornou HTML"});
+        return false;
+      }
+      const resolved = normalizeArticleIdentity(rendered?.url || inputUrl);
+      const jsonLd = extractJsonLdFastArticle(html);
+      const adapted = jsonLd ? null : adapterExtract(html, resolved);
+      const generic = (!jsonLd && !adapted) ? extractArticleFromHtml(html,item) : null;
+      const source = jsonLd || adapted || generic;
+      const words = Number(source?.wordCount) || wordCount(source?.content || "");
+      if (!source || words < MIN_USEFUL_WORDS) {
+        attempts.push({method:"browser",transport:"browser",ok:false,error:"HTML renderizado sem conteúdo editorial suficiente",durationMs:Date.now()-browserStartedAt,browserMsUsed:Number(rendered?.browserMsUsed)||0});
+        return false;
+      }
+      const method = jsonLd?.method || adapted?.method || `generic:${generic?.method || "html"}`;
+      const candidate = {
+        ok:true,url:inputUrl,canonicalUrl:normalizeArticleIdentity(canonicalUrl(html,resolved)),resolvedUrl:resolved,
+        sourceName:item?.sourceName||item?.collectorName||hostname(resolved)||"Fonte",
+        title:jsonLd?.title||generic?.title||metaContent(html,"og:title")||plainText(item?.title)||"Notícia sem título",
+        subtitle:jsonLd?.subtitle||generic?.description||metaContent(html,"og:description")||metaContent(html,"description")||plainText(item?.description),
+        author:jsonLd?.author||generic?.byline||metaContent(html,"author")||null,
+        publishedAt:jsonLd?.publishedAt||generic?.publishedAt||item?.publishedAt||null,
+        content:plainText(source?.content).slice(0,MAX_ARTICLE_CHARS),wordCount:words,
+        extractionMethod:`browser:${method}`,adapter:adapted?.adapter||portalAdapterForUrl(resolved)?.id||null,
+        transport:"browser",contentLevel:"article",readMode:"full",images:null,degraded:false,error:null,
+        browserMsUsed:Number(rendered?.browserMsUsed)||0,
+      };
+      attempts.push({method:candidate.extractionMethod,transport:"browser",ok:true,wordCount:candidate.wordCount,durationMs:Date.now()-browserStartedAt,browserMsUsed:candidate.browserMsUsed});
+      const sufficient = consider(candidate);
+      if (includeVisuals) {
+        try { candidate.images = extractArticleVisualsFromHtml(html,{articleUrl:resolved,resolvedUrl:resolved,sourceName:candidate.sourceName}); } catch {}
+      }
+      return sufficient;
+    } catch (error) {
+      attempts.push({method:"browser",transport:"browser",ok:false,error:String(error?.message||error).slice(0,160),durationMs:Date.now()-browserStartedAt});
+      return false;
+    }
+  };
+
+  // Domínios que historicamente respondem melhor via navegador podem pular a espera
+  // do fetch direto. Se o Browser Run falhar, o caminho direto continua disponível.
+  if (transportPreference === "browser-first" && typeof browserFetcher === "function") {
+    if (await tryBrowserTransport()) {
+      return {...best,attempts,durationMs:Date.now()-startedAt,readingQuality:readingQualityScore(best),evidenceSufficiency:best.evidenceSufficiency||evidenceSufficiency(best.content,slideCount)};
+    }
+  }
+
   try {
-    const directBudget = Math.min(adapter ? 3_800 : 4_500, Math.max(1_500, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+    const directBudget = Math.min(browserFetcher ? (adapter ? 2_800 : 3_200) : (adapter ? 3_800 : 4_500), Math.max(1_500, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
     const fetched = await fetchHtml(inputUrl, fetcher, directBudget, { slideCount });
     const html = fetched.html;
     const finalUrl = fetched.finalUrl;
@@ -413,6 +472,7 @@ export async function scrapeArticle(item, {
       contentLevel:"article",
       degraded:false,
       error:null,
+      transport:"direct",
       bytesRead:Number(fetched.bytesRead)||0,
       streamEarlyStop:Boolean(fetched.earlyStop),
     };
@@ -431,7 +491,7 @@ export async function scrapeArticle(item, {
         extractionMethod:jsonLd.method,
         adapter:null,
       };
-      attempts.push({method:jsonLd.method,ok:true,wordCount:jsonLd.wordCount,bytesRead:fetched.bytesRead});
+      attempts.push({method:jsonLd.method,transport:"direct",ok:true,wordCount:jsonLd.wordCount,bytesRead:fetched.bytesRead});
       if (consider(candidate)) {
         if (includeVisuals) {
           try { candidate.images = extractArticleVisualsFromHtml(html,{articleUrl:finalUrl,resolvedUrl:finalUrl,sourceName:candidate.sourceName}); } catch {}
@@ -443,7 +503,7 @@ export async function scrapeArticle(item, {
     const adapted = adapterExtract(html, finalUrl);
     if (adapted) {
       const candidate = {...baseMeta,content:adapted.content,wordCount:adapted.wordCount,extractionMethod:adapted.method,adapter:adapted.adapter};
-      attempts.push({method:adapted.method,ok:true,wordCount:adapted.wordCount,bytesRead:fetched.bytesRead});
+      attempts.push({method:adapted.method,transport:"direct",ok:true,wordCount:adapted.wordCount,bytesRead:fetched.bytesRead});
       if (consider(candidate)) {
         if (includeVisuals) {
           try { candidate.images = extractArticleVisualsFromHtml(html,{articleUrl:finalUrl,resolvedUrl:finalUrl,sourceName:candidate.sourceName}); } catch {}
@@ -464,7 +524,7 @@ export async function scrapeArticle(item, {
       extractionMethod:`generic:${generic.method || "html"}`,
       adapter:null,
     };
-    attempts.push({method:genericCandidate.extractionMethod,ok:generic.wordCount>=MIN_USEFUL_WORDS,wordCount:generic.wordCount,bytesRead:fetched.bytesRead});
+    attempts.push({method:genericCandidate.extractionMethod,transport:"direct",ok:generic.wordCount>=MIN_USEFUL_WORDS,wordCount:generic.wordCount,bytesRead:fetched.bytesRead});
     if (generic.wordCount >= MIN_USEFUL_WORDS) consider(genericCandidate);
 
     // AMP só é aberto quando ainda não há evidência suficiente para os slides pedidos.
@@ -481,7 +541,7 @@ export async function scrapeArticle(item, {
           const source = ampJson || ampAdapted || (ampGeneric ? {content:ampGeneric.content,wordCount:ampGeneric.wordCount,method:`generic:${ampGeneric.method||"html"}`} : null);
           if (source) {
             const candidate = {...baseMeta,canonicalUrl:normalizeArticleIdentity(canonicalUrl(ampFetched.html,finalUrl)),resolvedUrl:ampFetched.finalUrl,content:source.content,wordCount:source.wordCount,extractionMethod:`amp:${source.method||"html"}`,adapter:ampAdapted?.adapter||null};
-            attempts.push({method:candidate.extractionMethod,ok:candidate.wordCount>=MIN_USEFUL_WORDS,wordCount:candidate.wordCount,bytesRead:ampFetched.bytesRead});
+            attempts.push({method:candidate.extractionMethod,transport:"direct",ok:candidate.wordCount>=MIN_USEFUL_WORDS,wordCount:candidate.wordCount,bytesRead:ampFetched.bytesRead});
             if(candidate.wordCount>=MIN_USEFUL_WORDS)consider(candidate);
           }
         } catch (error) { attempts.push({method:"amp",ok:false,error:String(error?.message||error).slice(0,120)}); }
@@ -492,7 +552,15 @@ export async function scrapeArticle(item, {
       try { best.images = extractArticleVisualsFromHtml(html,{articleUrl:finalUrl,resolvedUrl:finalUrl,sourceName:best.sourceName}); } catch {}
     }
   } catch (error) {
-    attempts.push({method:"direct-html",ok:false,error:String(error?.message||error).slice(0,160)});
+    attempts.push({method:"direct-html",transport:"direct",ok:false,error:String(error?.message||error).slice(0,160)});
+  }
+
+  // A versão híbrida recupera a tolerância antiga sem trocar de fonte cedo demais:
+  // antes de aceitar snapshot parcial, tenta um segundo transporte para a MESMA URL.
+  if ((!best || !best.evidenceSufficiency?.ready || best.readingQuality < 55) && !browserAttempted && typeof browserFetcher === "function") {
+    if (await tryBrowserTransport()) {
+      return {...best,attempts,durationMs:Date.now()-startedAt,readingQuality:readingQualityScore(best),evidenceSufficiency:best.evidenceSufficiency||evidenceSufficiency(best.content,slideCount)};
+    }
   }
 
   if (!best) {
@@ -504,26 +572,6 @@ export async function scrapeArticle(item, {
     } else attempts.push({method:"collected-fallback",ok:false,error:"snapshot/RSS sem conteúdo suficiente"});
   }
 
-  // Browser rendering continua sendo último recurso e nunca tenta burlar paywall/CAPTCHA.
-  if ((!best || !best.evidenceSufficiency?.ready || best.readingQuality < 55) && typeof browserFetcher === "function") {
-    try {
-      const rendered = await browserFetcher(inputUrl);
-      const html = String(rendered?.html || "");
-      if (html) {
-        const fast = extractJsonLdFastArticle(html) || adapterExtract(html, rendered?.url || inputUrl);
-        const generic = fast ? null : extractArticleFromHtml(html,item);
-        const source = fast || generic;
-        const candidate = {
-          ok:Number(source?.wordCount)>=MIN_USEFUL_WORDS,url:inputUrl,canonicalUrl:rendered?.url||inputUrl,
-          sourceName:item?.sourceName||item?.collectorName||hostname(inputUrl)||"Fonte",title:source?.title||item?.title||"Notícia sem título",
-          subtitle:source?.description||item?.description||"",author:source?.author||source?.byline||null,publishedAt:source?.publishedAt||item?.publishedAt||null,
-          content:source?.content||"",wordCount:Number(source?.wordCount)||0,extractionMethod:`browser:${source?.method||"html"}`,adapter:null,contentLevel:"article",readMode:"full",images:null,degraded:false,error:null,
-        };
-        attempts.push({method:candidate.extractionMethod,ok:candidate.ok,wordCount:candidate.wordCount});
-        if(candidate.ok)consider(candidate);
-      }
-    } catch(error){attempts.push({method:"browser",ok:false,error:String(error?.message||error).slice(0,120)});}
-  }
 
   if (!best) {
     const summary = attemptSummary(attempts);
@@ -584,7 +632,7 @@ export function buildEvidencePack(record, { sourceType="url", sourceRef=null, to
     numbers:extractNumbers(content),
     dates:extractDates(content),
     images:record?.images||null,
-    reading:{method:record?.extractionMethod||record?.readMode||"unknown",adapter:record?.adapter||null,quality:Number(record?.readingQuality)||0,mode:record?.readMode||"unknown",degraded:Boolean(record?.degraded),resolvedUrl:record?.resolvedUrl||record?.canonicalUrl||record?.url||null,attempts:record?.attempts||[],durationMs:Number(record?.durationMs)||0},
+    reading:{method:record?.extractionMethod||record?.readMode||"unknown",transport:record?.transport||"unknown",adapter:record?.adapter||null,quality:Number(record?.readingQuality)||0,mode:record?.readMode||"unknown",degraded:Boolean(record?.degraded),resolvedUrl:record?.resolvedUrl||record?.canonicalUrl||record?.url||null,attempts:record?.attempts||[],durationMs:Number(record?.durationMs)||0},
     createdAt:now,
   };
 }
@@ -629,7 +677,7 @@ export async function scrapeTopicToEvidence(topic, options = {}) {
   };
 
   const register=(role,item,record)=>{
-    const attempt={role,url:item?.url||null,sourceName:item?.sourceName||item?.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,wordCount:Number(record?.wordCount)||0,method:record?.extractionMethod||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0,routes:Array.isArray(record?.attempts)?record.attempts.slice(0,8):[]};
+    const attempt={role,url:item?.url||null,sourceName:item?.sourceName||item?.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,wordCount:Number(record?.wordCount)||0,method:record?.extractionMethod||null,transport:record?.transport||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0,routes:Array.isArray(record?.attempts)?record.attempts.slice(0,10):[]};
     attempts.push(attempt);
     if(record&&typeof record==="object")record.sourceSelection={...selection,selectedRole:role,attempts:[...attempts]};
     return attempt;
@@ -645,9 +693,12 @@ export async function scrapeTopicToEvidence(topic, options = {}) {
     try{
       const adapterKnown=Boolean(portalAdapterForUrl(item?.url));
       const candidateTimeout=Math.min(Number(options.timeoutMs)||4_500,adapterKnown?3_800:4_500);
-      record=await scrapeArticle(item,{...options,timeoutMs:candidateTimeout,slideCount:Number(options.slideCount)||7,allowCollectedFastPath:false});
+      let transportPreference=options.transportPreference||"direct-first";
+      if(typeof options.transportPreferenceFor==="function"){try{transportPreference=await options.transportPreferenceFor(item,role)||"direct-first";}catch{transportPreference="direct-first";}}
+      record=await scrapeArticle(item,{...options,timeoutMs:candidateTimeout,slideCount:Number(options.slideCount)||7,allowCollectedFastPath:false,transportPreference});
     }
     catch(error){record={ok:false,url:item.url,error:String(error?.message||error),readingQuality:0,wordCount:0,durationMs:0};}
+    if (typeof options.onTransportResult === "function") await options.onTransportResult(item,record,role).catch(()=>null);
     register(role,item,record);
     return record?.ok&&(Number(record.readingQuality)>=55||record?.evidenceSufficiency?.ready&&Number(record.readingQuality)>=40)?record:null;
   };

@@ -1,3 +1,15 @@
+# v0.9.7.4.6 — Hybrid Multi-Transport Reader
+
+- combina redundância de aquisição com Single Source controlado;
+- mesma fonte: cache → direct fetch → Browser Run → snapshot/RSS;
+- somente depois abre uma única fonte backup;
+- adiciona Browser Run binding `BROWSER` com Quick Action `content`;
+- adiciona aprendizado por domínio em `production_transport_stats`;
+- browser-first automático para domínios com fetch direto degradado e navegador saudável;
+- adiciona adapter Band;
+- registra transporte vencedor no Evidence Pack;
+- preserva Adaptive Scraping, Evidence Sufficiency, Terminal Completion e todos os fallbacks anteriores.
+
 # v0.9.7.4.5 — Adaptive Scraping + Evidence Sufficiency
 
 - leitura adaptativa em uma única tentativa: cache/snapshot → JSON-LD → adapter → parser genérico → AMP → backup → fallback parcial seguro;

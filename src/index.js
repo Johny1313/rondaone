@@ -41,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.7.4.5',
+      version:'0.9.7.4.6',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4.5',
+        editorialVersion:'2.9.7.4.6',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -194,6 +194,7 @@ export default {
       interactiveFastPathV0973:{enabled:true,manualProductionQueueBypass:true,interactiveDeadlineSeconds:12,evidencePackDirectGeneration:true,compactEvidencePrompt:true,maximumPromptEvidence:18,fullArticleRetranslation:false,secondaryAiOnlyOnQualityFailure:true,queueRecoveryFallback:true,targetTypicalSeconds:'5-12'},
       fastRonda25PlusV0974:{enabled:true,sourceTarget:Number(env.ROUND_EARLY_SOURCE_TARGET)||25,minimumFreshBeforePreview:Number(env.ROUND_EARLY_FRESH_MINIMUM)||8,fullSourceConcurrency:14,fastLaneConcurrency:8,rssFirst:true,skipHtmlWhenRssHealthy:true,earlyPreview:true,finalRecoveryContinues:true,registeredSources:39},
       adaptiveScrapingV09745:{enabled:true,streamingHtml:true,maxHtmlBytes:2500000,jsonLdFirst:true,adapterFirst:true,evidenceSufficiency:true,ampOnlyWhenNeeded:true,singleBackupAutomatic:true,retryChangesStrategy:true,schemaHotPathMemoized:true},
+      hybridMultiTransportV09746:{enabled:true,policy:'same-source-transports-before-backup',transports:['cache','direct-fetch','browser-run','snapshot-rss'],browserRunBinding:!!env.BROWSER,directFirstDefault:true,transportLearning:true,browserFirstForDegradedDomains:true,singleEditorialBackup:true,bandAdapter:true,noManualRetryLoop:true},
       consistencyAsyncFastPathV09741:{enabled:true,productionPostAsync:true,transportRetryStatuses:[502,503,504],activeJobDeduplication:true,deferredSourceSnapshotContinuity:true,forceRefreshWhenSnapshotMissing:true,editorialChangesSinceLastCompletedRound:true},
       roundStabilityV0951:{
         enabled:true,

@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.5";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.6";
 const PRODUCTION_READ_STALE_MS = 8_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 20_000;
@@ -28,6 +28,71 @@ function parseJson(value,fallback=null){ try{return JSON.parse(String(value||"")
 function clipJson(value,limit,label){const text=safeJson(value,{});if(text.length>limit)throw new Error(`${label} excedeu o limite seguro de armazenamento.`);return text;}
 function queueForRead(env){return env?.ARTICLE_READ_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null;}
 function queueForCarousel(env){return env?.CAROUSEL_AI_QUEUE || env?.CAROUSEL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null;}
+
+function transportHost(value){try{return new URL(String(value||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return "";}}
+
+function browserQuickActionAvailable(env){return Boolean(env?.BROWSER&&typeof env.BROWSER.quickAction==="function");}
+
+async function browserQuickActionArticle(env,url,{timeoutMs=5_500}={}){
+  if(!browserQuickActionAvailable(env))throw new Error("Browser Run não configurado");
+  const started=Date.now();
+  const task=(async()=>{
+    const response=await env.BROWSER.quickAction("content",{
+      url,
+      gotoOptions:{waitUntil:"domcontentloaded",timeout:Math.max(2_000,Math.min(8_000,Number(timeoutMs)||5_500))},
+      rejectResourceTypes:["image","media","font","stylesheet"],
+    });
+    let html="",browserMsUsed=0;
+    if(response&&typeof response.text==="function"){
+      browserMsUsed=Number(response.headers?.get?.("x-browser-ms-used"))||0;
+      const raw=await response.text();
+      const type=String(response.headers?.get?.("content-type")||"");
+      if(/json/i.test(type)||/^\s*[{[]/.test(raw)){
+        try{const parsed=JSON.parse(raw);html=typeof parsed?.result==="string"?parsed.result:typeof parsed?.result?.content==="string"?parsed.result.content:typeof parsed?.content==="string"?parsed.content:raw;}catch{html=raw;}
+      }else html=raw;
+    }else if(typeof response==="string")html=response;
+    else if(typeof response?.result==="string")html=response.result;
+    else if(typeof response?.html==="string")html=response.html;
+    if(!html||html.length<120)throw new Error("Browser Run não retornou HTML útil");
+    return {html,url,durationMs:Date.now()-started,browserMsUsed};
+  })();
+  const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("Browser Run excedeu o limite de leitura")),Math.max(2_500,Number(timeoutMs)||5_500)));
+  return Promise.race([task,timeout]);
+}
+
+async function getTransportPreference(db,url,browserAvailable){
+  if(!browserAvailable)return "direct-first";
+  const host=transportHost(url);if(!host)return "direct-first";
+  await ensureProductionSchema(db);
+  const row=await db.prepare("SELECT direct_success,direct_fail,browser_success,browser_fail FROM production_transport_stats WHERE host=? LIMIT 1").bind(host).first().catch(()=>null);
+  if(!row)return "direct-first";
+  const directSuccess=Number(row.direct_success)||0,directFail=Number(row.direct_fail)||0,browserSuccess=Number(row.browser_success)||0,browserFail=Number(row.browser_fail)||0;
+  const directTotal=directSuccess+directFail,browserTotal=browserSuccess+browserFail;
+  const directRate=directTotal?directSuccess/directTotal:1,browserRate=browserTotal?browserSuccess/browserTotal:0;
+  return directFail>=2&&browserSuccess>=2&&directRate<0.5&&browserRate>=0.65?"browser-first":"direct-first";
+}
+
+async function recordTransportOutcome(db,url,record){
+  const host=transportHost(url);if(!host||!record)return;
+  await ensureProductionSchema(db);
+  const attempts=Array.isArray(record?.attempts)?record.attempts:[];
+  const directTried=attempts.some(x=>x?.transport==="direct"||(!x?.transport&&!String(x?.method||"").startsWith("browser")));
+  const browserTried=attempts.some(x=>x?.transport==="browser"||String(x?.method||"").startsWith("browser"));
+  const directOk=record?.transport==="direct"?1:0;
+  const browserOk=record?.transport==="browser"?1:0;
+  const directFail=directTried&&!directOk?1:0;
+  const browserFail=browserTried&&!browserOk?1:0;
+  if(!directTried&&!browserTried)return;
+  await db.prepare(`INSERT INTO production_transport_stats(host,direct_success,direct_fail,browser_success,browser_fail,updated_at)
+    VALUES(?,?,?,?,?,?)
+    ON CONFLICT(host) DO UPDATE SET
+      direct_success=direct_success+excluded.direct_success,
+      direct_fail=direct_fail+excluded.direct_fail,
+      browser_success=browser_success+excluded.browser_success,
+      browser_fail=browser_fail+excluded.browser_fail,
+      updated_at=excluded.updated_at`)
+    .bind(host,directOk,directFail,browserOk,browserFail,nowIso()).run().catch(()=>null);
+}
 
 function detectProductionLanguage(value, sourceName=""){
   const text=plainText(value).slice(0,4200);
@@ -188,6 +253,14 @@ export async function ensureProductionSchema(db){
         PRIMARY KEY(job_id, stage)
       )`,
       "CREATE INDEX IF NOT EXISTS idx_production_stage_leases_expiry ON production_stage_leases(expires_at)",
+      `CREATE TABLE IF NOT EXISTS production_transport_stats (
+        host TEXT PRIMARY KEY,
+        direct_success INTEGER NOT NULL DEFAULT 0,
+        direct_fail INTEGER NOT NULL DEFAULT 0,
+        browser_success INTEGER NOT NULL DEFAULT 0,
+        browser_fail INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )`,
       `CREATE TABLE IF NOT EXISTS production_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -370,7 +443,7 @@ function bestTopicItem(topic){return (Array.isArray(topic?.items)?topic.items:[]
 export async function processProductionRead(env,jobId,{force=false}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result)return job;
-  const lease=await acquireProductionLease(db,jobId,"reading",12_000);
+  const lease=await acquireProductionLease(db,jobId,"reading",20_000);
   if(!lease){
     await event(db,jobId,"reading","deduplicated","Leitura já está em execução; tentativa duplicada ignorada",{sameJob:true}).catch(()=>null);
     return getProductionJob(db,jobId);
@@ -381,16 +454,24 @@ export async function processProductionRead(env,jobId,{force=false}={}){
     let evidenceResult;
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
-      let record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||5_000,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force});
-      if(!record.ok){const error=new Error(record.error||"A matéria externa não forneceu leitura útil.");error.readAttempts=record.attempts||[];throw error;}
+      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
+      const transportPreference=await getTransportPreference(db,item.url,Boolean(browserFetcher));
+      let record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force,browserFetcher,transportPreference});
+      await recordTransportOutcome(db,item.url,record).catch(()=>null);
+      if(!record.ok){const error=new Error(record.error||"A matéria externa não forneceu leitura útil por nenhuma rota disponível.");error.readAttempts=record.attempts||[];throw error;}
       let pack=buildEvidencePack(record,{sourceType:"url",sourceRef:job.sourceRef});
       pack=await translateEvidencePackToPtBrFast(env,pack,{slideCount:job.input?.slideCount||7});
       evidenceResult={ok:true,evidence:pack};
       if(!evidencePtBrReady(pack))throw new Error("A tradução da matéria para português do Brasil não pôde ser concluída.");
     }else if(job.sourceType==="topic"||job.sourceType==="event"){
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
-      evidenceResult=await scrapeTopicToEvidence(topic,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||4_500,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force});
-      if(!evidenceResult.ok){const error=new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil.");error.readAttempts=evidenceResult.attempts||[];throw error;}
+      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
+      evidenceResult=await scrapeTopicToEvidence(topic,{
+        timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force,browserFetcher,
+        transportPreferenceFor:async(item)=>getTransportPreference(db,item?.url,Boolean(browserFetcher)),
+        onTransportResult:async(item,record)=>recordTransportOutcome(db,item?.url,record),
+      });
+      if(!evidenceResult.ok){const error=new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil por nenhuma rota disponível.");error.readAttempts=evidenceResult.attempts||[];throw error;}
       let translatedPack=evidenceResult.evidence||buildEvidencePack(evidenceResult.record,{sourceType:job.sourceType,sourceRef:job.sourceRef,topicId:job.sourceRef});
       translatedPack.sourceType=job.sourceType;translatedPack.sourceRef=job.sourceRef;translatedPack.topicId=job.sourceRef;
       translatedPack.sourceSelection=evidenceResult.selection||translatedPack.sourceSelection||evidenceResult.record?.sourceSelection||null;
@@ -440,7 +521,7 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.5",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.6",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     const alreadyReady=await getProductionJob(db,jobId);if(alreadyReady?.status==="ready"&&alreadyReady?.result?.slides?.length)return alreadyReady;
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score,deterministicOnly:Boolean(deterministicOnly)});return job;
   }catch(error){

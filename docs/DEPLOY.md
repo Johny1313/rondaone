@@ -154,3 +154,12 @@ Ação manual no FORMA não espera Queue para começar. `POST /api/production/jo
 ## Fast Ronda 25+ — v0.9.7.4
 
 A coleta completa usa concorrência controlada de até 14 fontes, RSS-first e timeout de primeira passada de 4,5 s. Quando há 25+ fontes disponíveis e o mínimo de respostas frescas configurado, o Worker grava `latest_round_preview`; `/api/latest` pode servir essa prévia enquanto a mesma ronda continua até o resultado final. Não há nova Queue nem nova binding obrigatória nesta versão.
+
+## v0.9.7.4.6 — Browser Run
+
+A versão declara `browser.binding = BROWSER` no `wrangler.jsonc`. O fallback de navegador usa Cloudflare Browser Run Quick Actions e não exige API token no código.
+
+- Produção: `npx wrangler deploy` usa o binding configurado.
+- Desenvolvimento local: Quick Actions podem exigir `wrangler dev --remote`.
+- Se Browser Run falhar, o leitor continua com fetch direto, snapshot/RSS e a única fonte backup; o recurso não remove os fallbacks existentes.
+

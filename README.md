@@ -1,3 +1,51 @@
+# RONDA ONE Cloud v0.9.7.4.6 — Hybrid Multi-Transport Reader
+
+A v0.9.7.4.6 combina a tolerância de aquisição das versões que retornavam mais conteúdo com o controle editorial consolidado nas versões atuais. A regra é: **tentar vários transportes para a mesma fonte antes de trocar de publisher**.
+
+## Fluxo híbrido
+
+```text
+Evidence Pack / cache
+        ↓
+fetch direto
+        ↓ falhou ou insuficiente
+Browser Run na mesma URL
+        ↓ falhou ou insuficiente
+snapshot / RSS já capturado
+        ↓ insuficiente
+única fonte backup (pauta RONDA)
+        ↓
+Evidence Pack → PT-BR → Multi-AI → Quality Gate → FORMA
+```
+
+### O que foi acrescentado
+
+- binding `BROWSER` do Cloudflare Browser Run usando `quickAction("content")`;
+- Browser Run bloqueia imagens, mídia, fontes e CSS durante a leitura para reduzir tempo de renderização;
+- o Browser Run nunca tenta contornar paywall, CAPTCHA ou autenticação;
+- `production_transport_stats` aprende a taxa de sucesso por domínio;
+- domínios com histórico ruim no fetch direto e bom no navegador passam para `browser-first`;
+- a fonte backup editorial só é aberta depois que os transportes da fonte principal falham;
+- adapter específico da Band (`band.com.br`);
+- a rota vencedora (`cache`, `direct`, `browser` ou `snapshot`) fica registrada no Evidence Pack;
+- não há retorno ao comportamento antigo de abrir múltiplos publishers em paralelo.
+
+### Garantias preservadas
+
+Single Source + um backup, escolha obrigatória de slides, Content First, PT-BR, Evidence Pack, créditos de imagem, Multi-AI, Quality Gate, Confidence Score, Content Lock, Projects, Retry Same Job, Terminal Completion, No-Hang e Fast Ronda 25+ continuam ativos.
+
+## Browser Run
+
+O `wrangler.jsonc` já contém:
+
+```json
+"browser": { "binding": "BROWSER" }
+```
+
+Não é necessário colocar token de Browser Run no frontend. O Worker usa o binding autenticado da Cloudflare. Para desenvolvimento local com Quick Actions, use ambiente remoto da Cloudflare quando necessário.
+
+---
+
 # RONDA ONE Cloud v0.9.7.4.5 — Adaptive Scraping + Evidence Sufficiency
 
 A v0.9.7.4.5 é cumulativa sobre a v0.9.7.4.4 e ataca o principal gargalo observado no FORMA: matérias que ficavam presas em **Leitura** e exigiam múltiplas tentativas manuais. A primeira produção agora percorre uma escada adaptativa de leitura e muda de rota automaticamente.
