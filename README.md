@@ -1,3 +1,51 @@
+# RONDA ONE Cloud v0.9.7.4.12 — Newsroom Operating System Hardening
+
+Build consolidada para quem não baixou as duas versões anteriores. Inclui integralmente **v0.9.7.4.10 (FORMA Download Flex + All Slides)** e **v0.9.7.4.11 (Newsroom Operating System · Phase 1)**, mais a camada de hardening de performance e estabilidade.
+
+## Incluído nesta build
+- download de carrossel sem obrigatoriedade de revisão;
+- download de todos os slides;
+- Kanban editorial, trava de dupla produção e histórico operacional;
+- Principal/Novidades/Mesa sobre a mesma base;
+- evolução do mesmo evento;
+- scheduler adaptativo, saúde e cobertura das fontes;
+- handoff profundo Ronda → FORMA e retorno FORMA → Ronda com projeto/preview;
+- redução de renderizações e requisições redundantes;
+- redução de gravações redundantes no D1;
+- preview FORMA mais leve e sincronização deduplicada.
+
+# RONDA ONE Cloud v0.9.7.4.11 — Newsroom Operating System · Phase 1
+
+Atualização incremental sobre a v0.9.7.4.10, preservando HOTFIX LOCK, scraping híbrido, Evidence Pack, filas e integração FORMA.
+
+## Prioridades implementadas
+- Mesa em **Kanban editorial**: Disponível → Em produção → FORMA → Revisão → Concluído, com drag-and-drop;
+- **trava de produção** no backend para evitar duas pessoas assumindo a mesma pauta;
+- Principal, Novidades e Mesa mantidas como visões da **mesma base editorial**;
+- **Evolução do evento** consolidada em timeline;
+- scheduler de fontes passa a adaptar a próxima leitura conforme volume e cobertura;
+- saúde das fontes e **captado/meta 1h** visíveis na Mesa;
+- handoff Ronda → FORMA leva snapshot editorial, fontes e evolução do evento;
+- retorno FORMA → Ronda grava projeto, preview e permite reabrir a arte diretamente pela pauta.
+
+# RONDA ONE Cloud v0.9.7.4.10 — FORMA Download Flex + All Slides
+
+Atualização incremental sobre a v0.9.7.4.9. Não redesenha interface, não troca a arquitetura editorial e não remove cache, fallback, filas, scraping híbrido, Browser Run, Evidence Pack ou mecanismos de recuperação.
+
+## Objetivo
+
+Liberar a exportação operacional do FORMA sem depender da etapa de revisão e acelerar a saída de carrosséis completos.
+
+## FORMA Download Flex
+- permite baixar o slide atual mesmo quando o carrossel não foi enviado para revisão;
+- adiciona botão dedicado para **baixar todos os slides** do projeto em sequência com um único clique;
+- mantém a revisão como etapa opcional do fluxo, sem bloquear a exportação da arte;
+- ao exportar um conteúdo ligado à Mesa, tenta concluir a pauta automaticamente sem impedir o download caso o registro editorial falhe.
+
+## Compatibilidade
+- mantém a rastreabilidade da Mesa editorial da v0.9.7.4.9;
+- mantém o HOTFIX LOCK v0.9.7.4.8, circuit breaker, SWR, Browser Run limitado e descoberta de alto volume sem reescrita arquitetural.
+
 # RONDA ONE Cloud v0.9.7.4.9 — Editorial Desk Tracking + Main/Novidades
 
 Atualização incremental sobre a v0.9.7.4.7. Não redesenha interface, não troca a arquitetura editorial e não remove cache, fallback, filas, scraping híbrido, Browser Run, Evidence Pack ou mecanismos de recuperação.

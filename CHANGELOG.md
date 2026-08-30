@@ -1,3 +1,54 @@
+# v0.9.7.4.12 — Newsroom OS Hardening
+
+## Performance e estabilidade
+- consolida integralmente as versões 0.9.7.4.10 e 0.9.7.4.11 em uma única build;
+- Mesa passa a coalescer renderizações com requestAnimationFrame, evitando reconstruções repetidas no mesmo frame;
+- impede cargas concorrentes da Mesa e reutiliza a requisição em andamento;
+- diagnóstico de fontes recebe TTL de 3 minutos na interface, reduzindo requisições repetitivas sem esconder atualização manual;
+- ações idempotentes da Mesa não geram UPDATE e histórico redundantes no D1;
+- sincronização FORMA → Mesa evita reenvio do mesmo projeto/preview dentro de 2 minutos;
+- preview do FORMA é reduzido para miniatura operacional, diminuindo payload e armazenamento;
+- download continua não bloqueante caso a sincronização editorial falhe.
+
+## Compatibilidade acumulada
+- mantém download sem revisão e download de todos os slides da 0.9.7.4.10;
+- mantém Kanban, lock de produção, evolução de evento, scheduler adaptativo, saúde/cobertura de fontes e integração Ronda ↔ FORMA da 0.9.7.4.11;
+- preserva HOTFIX LOCK, Evidence Pack, scraping adaptativo e multi-transport.
+
+# v0.9.7.4.11 — Newsroom Operating System · Phase 1
+
+## Mesa / colaboração
+- Kanban operacional com cinco estágios e drag-and-drop;
+- ownership lock server-side: uma pauta em produção informa o responsável e bloqueia tomada paralela;
+- etapa Revisão incorporada sem bloquear downloads do FORMA;
+- cards mostram projeto FORMA vinculado e preview quando disponível.
+
+## Inteligência editorial
+- timeline passa a ser apresentada como Evolução do Evento;
+- mantém Principal, Novidades e Mesa sobre a mesma entidade editorial, sem mover registros entre bases.
+
+## Fontes
+- intervalo da próxima checagem passa a responder ao perfil de volume e à cobertura recente;
+- painel da Mesa exibe saúde, captado/meta 1h, score de cobertura e próxima checagem.
+
+## Ronda ↔ FORMA
+- envio ao FORMA carrega snapshot do evento, fontes, atualizações e timeline;
+- salvar/exportar um projeto vinculado devolve projectId + preview à Mesa;
+- a Mesa pode reabrir diretamente o projeto FORMA existente.
+
+# v0.9.7.4.10 — FORMA Download Flex + All Slides
+
+## FORMA / exportação
+- download do slide atual fica liberado independentemente do envio para revisão;
+- novo botão **Baixar todos os slides** exporta todas as pranchetas em sequência com um clique;
+- exportação não é bloqueada caso o registro de conclusão na Mesa falhe; o download continua e a interface informa a falha de rastreio;
+- exportação individual continua marcando pauta concluída automaticamente quando existir vínculo com evento editorial;
+- exportação em lote também conclui a pauta vinculada quando aplicável.
+
+## UX operacional
+- botão principal do FORMA passa a representar o download do slide atual;
+- nomenclatura do download fica mais clara para operação rápida em redação.
+
 # v0.9.7.4.9 — Editorial Desk Tracking + Main/Novidades
 
 ## Mesa editorial operacional
