@@ -65,7 +65,7 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.4.12',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
     jobs:{stuckIntelligent,stuckProduction,healthy:stuckIntelligent===0&&stuckProduction===0},
@@ -85,10 +85,10 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.4.12',
+      version:'0.9.7.5',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4.12',
+        editorialVersion:'2.9.7.5',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -242,6 +242,7 @@ export default {
       highVolumeDiscoveryV09747:{enabled:true,sourceVolumeProfiles:true,veryHighSources:['g1','cnn-brasil','folha','estadao','o-globo','metropoles','ge'],multiRouteBeforeStop:true,undatedHomepageFirstSeen:true,canonicalUrlDedup:true,discoveryPersistence:'D1 source_discovery_items',coverageWindows:['15m','1h','6h','24h'],coverageScore:true,coverageTargetPerProfile:true,lowCoverageAlert:true},
       hotfixLockV09748:{enabled:true,circuitBreaker:['CLOSED','OPEN','HALF_OPEN'],staleWhileRevalidate:true,routeAwareTimeouts:true,http525:'tls-upstream',platformStatusOperational:true,queueStatus:true,sourceIsolation:true,limitedBrowserRecovery:true,noArchitectureRewrite:true},
       editorialDeskTrackingV09749:{enabled:true,statuses:['available','production','forma','completed'],userAttribution:true,formaHandoff:true,exportAutoComplete:true,mainIncludesEditorialUpdates:true},
+      adaptiveRetryV0975:{enabled:true,sameJob:true,avoidSameRoute:true,retryModes:['alternate','deep','snapshot'],firstRetryChangesTransport:true,secondRetryDeepRead:true,thirdRetryUsesSnapshotFallback:true},
       formaDownloadFlowV097410:{enabled:true,downloadBeforeReview:true,currentSlideDownload:true,bulkSlideDownload:true,allSlidesAtOnce:true,downloadCompletesTrackedDesk:true},
       newsroomOperatingSystemV097411:{enabled:true,sharedEditorialBase:true,kanban:true,productionOwnershipLock:true,eventEvolution:true,adaptiveSourceScheduler:true,sourceHealth:true,coverageMetrics:true,formaDeepHandoff:true,formaReturnPreview:true,statuses:['available','production','forma','review','completed']},
       newsroomOperatingSystemHardeningV097412:{enabled:true,mesaRenderCoalescing:true,inFlightLoadDedup:true,sourceDiagnosticsTtlSeconds:180,idempotentDeskWrites:true,compressedFormaPreview:true,formaSyncDedupSeconds:120,downloadNonBlocking:true},

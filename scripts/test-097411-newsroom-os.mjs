@@ -24,5 +24,5 @@ assert.match(css,/event-kanban-column/);
 assert.match(design,/editorialEventSnapshot/);
 assert.match(design,/linkFormaProjectToDesk/);
 assert.match(design,/buildDeskProjectPreview/);
-assert.match(shell,/0\.9\.7\.4\.(?:11-newsroom-os-phase-1|12-newsroom-os-hardening)/);
+assert.match(shell,/(?:0\.9\.7\.4\.(?:11-newsroom-os-phase-1|12-newsroom-os-hardening)|0\.9\.7\.5-adaptive-retry-no-repeat)/);
 console.log('RONDA ONE v0.9.7.4.11 Newsroom Operating System Phase 1: OK');

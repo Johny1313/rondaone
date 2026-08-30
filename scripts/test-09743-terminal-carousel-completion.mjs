@@ -5,7 +5,7 @@ const engine=fs.readFileSync(new URL('../src/production/engine.js',import.meta.u
 const forma=fs.readFileSync(new URL('../public/design/index.html',import.meta.url),'utf8');
 const index=fs.readFileSync(new URL('../src/ronda/v285/index.js',import.meta.url),'utf8');
 
-assert.match(engine,/PRODUCTION_SCHEMA_VERSION = "0\.9\.7\.4\.[345678]"/);
+assert.match(engine,/PRODUCTION_SCHEMA_VERSION = "(?:0\.9\.7\.4\.[345678]|0\.9\.7\.5)"/);
 assert.match(engine,/production_stage_leases/);
 assert.match(engine,/acquireProductionLease/);
 assert.match(engine,/Geração já está em execução; tentativa duplicada ignorada/);

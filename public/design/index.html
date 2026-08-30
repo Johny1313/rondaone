@@ -126,7 +126,7 @@
       <div class="brand-wrap">
         <div class="brand-mark">F</div>
         <div>
-          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.4.12</b></div>
+          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.5</b></div>
           <div class="brand-sub">Editor visual integrado à Ronda Editorial</div>
         </div>
       </div>
@@ -207,7 +207,7 @@
               <label class="direct-article-check"><input id="directArticleForce" type="checkbox"> Releitura completa · ignorar carrossel em cache</label>
               <div class="direct-article-actions"><button class="primary-btn" id="directArticleGenerate">Gerar conteúdo</button><button class="mini-btn" id="directArticleClear" type="button">Limpar</button></div><button class="mini-btn" id="directArticleApplyTemplate" type="button" disabled style="width:100%;margin-top:6px">Aplicar template ao carrossel pronto</button>
               <div class="direct-article-status" id="directArticleStatus"><span id="directArticleStatusText"></span><div class="direct-article-progress"><i id="directArticleProgress"></i></div></div>
-              <div id="directArticleRetryRow" class="hidden" style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="primary-btn" id="directArticleRetry" type="button" style="flex:1">↻ Tentar novamente</button><span id="directArticleRetryHint" style="font-size:9px;line-height:1.25;opacity:.72;max-width:45%">Retoma o mesmo job do ponto salvo.</span></div>
+              <div id="directArticleRetryRow" class="hidden" style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="primary-btn" id="directArticleRetry" type="button" style="flex:1">↻ Tentar novamente</button><span id="directArticleRetryHint" style="font-size:9px;line-height:1.25;opacity:.72;max-width:45%">Retoma o mesmo job mudando a estratégia de leitura.</span></div>
               <div id="productionStages" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px;font-size:8px"><span data-prod-stage="source">1 Fonte</span><span data-prod-stage="reading">2 Leitura</span><span data-prod-stage="evidence">3 Evidências</span><span data-prod-stage="generating">4 Multi-AI</span><span data-prod-stage="quality">5 Qualidade</span><span data-prod-stage="ready">6 FORMA</span></div>
               <div class="production-source-summary hidden" id="productionSourceSummary"><strong>Matéria efetivamente lida</strong><a id="productionSourceLink" href="#" target="_blank" rel="noopener noreferrer"></a><span id="productionSourceMeta"></span><div class="production-image-credits" id="productionImageCredits"></div></div>
             </div>
@@ -1434,7 +1434,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.4.12',
+      sourceVersion:'0.9.7.5',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
@@ -1488,7 +1488,7 @@
     if(directArticleState.busy)return;
     const retryButton=$('#directArticleRetry'),generateButton=$('#directArticleGenerate');directArticleState.busy=true;if(retryButton)retryButton.disabled=true;if(generateButton)generateButton.disabled=true;
     const stage=directArticleState.lastStage||'reading';const retryStage=['generating','quality','fallback'].includes(stage)?'generate':null;
-    setProductionRetryVisible(false);setDirectArticleStatus(retryStage==='generate'?'Retomando a geração com o Evidence Pack salvo…':'Tentando novamente a leitura no mesmo job…','',Math.max(4,retryStage==='generate'?52:6));
+    setProductionRetryVisible(false);setDirectArticleStatus(retryStage==='generate'?'Retomando a geração com o Evidence Pack salvo…':'Tentando novamente no mesmo job com uma rota de leitura diferente…','',Math.max(4,retryStage==='generate'?52:6));
     try{
       const out=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage:retryStage})});
       const data=out?.job?.status==='ready'&&out?.job?.result?.slides?.length?out.job.result:await waitFormaProductionJob(jobId,450);

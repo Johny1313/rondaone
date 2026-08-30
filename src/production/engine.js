@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.8";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.5";
 const PRODUCTION_READ_STALE_MS = 8_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 20_000;
@@ -440,7 +440,7 @@ export async function findActiveProductionJob(db,{sourceType,sourceRef,createdBy
 
 function bestTopicItem(topic){return (Array.isArray(topic?.items)?topic.items:[]).find((item)=>/^https?:\/\//i.test(String(item?.url||""))&&item?.kind!=="social")||null;}
 
-export async function processProductionRead(env,jobId,{force=false}={}){
+export async function processProductionRead(env,jobId,{force=false,retryMode=null}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result)return job;
   const lease=await acquireProductionLease(db,jobId,"reading",20_000);
@@ -455,8 +455,11 @@ export async function processProductionRead(env,jobId,{force=false}={}){
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
       const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
-      const transportPreference=await getTransportPreference(db,item.url,Boolean(browserFetcher));
-      let record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force,browserFetcher,transportPreference});
+      let transportPreference=await getTransportPreference(db,item.url,Boolean(browserFetcher));
+      if(retryMode==='alternate')transportPreference=transportPreference==='browser-first'?'direct-first':(browserFetcher?'browser-first':'direct-first');
+      if(retryMode==='deep'&&browserFetcher)transportPreference='browser-first';
+      const retryTimeout=retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500);
+      let record=await scrapeArticle(item,{timeoutMs:retryTimeout,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,transportPreference});
       await recordTransportOutcome(db,item.url,record).catch(()=>null);
       if(!record.ok){const error=new Error(record.error||"A matéria externa não forneceu leitura útil por nenhuma rota disponível.");error.readAttempts=record.attempts||[];throw error;}
       let pack=buildEvidencePack(record,{sourceType:"url",sourceRef:job.sourceRef});
@@ -467,8 +470,8 @@ export async function processProductionRead(env,jobId,{force=false}={}){
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
       const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
       evidenceResult=await scrapeTopicToEvidence(topic,{
-        timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force,browserFetcher,
-        transportPreferenceFor:async(item)=>getTransportPreference(db,item?.url,Boolean(browserFetcher)),
+        timeoutMs:retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500),slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,
+        transportPreferenceFor:async(item)=>{let pref=await getTransportPreference(db,item?.url,Boolean(browserFetcher));if(retryMode==='alternate')pref=pref==='browser-first'?'direct-first':(browserFetcher?'browser-first':'direct-first');if(retryMode==='deep'&&browserFetcher)pref='browser-first';return pref;},
         onTransportResult:async(item,record)=>recordTransportOutcome(db,item?.url,record),
       });
       if(!evidenceResult.ok){const error=new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil por nenhuma rota disponível.");error.readAttempts=evidenceResult.attempts||[];throw error;}
@@ -566,17 +569,17 @@ export async function startProductionPipeline(env,jobId,{force=false,ctx=null}={
 }
 
 
-async function executeInteractiveProduction(env,jobId,{force=false}={}){
-  let current=await processProductionRead(env,jobId,{force});
+async function executeInteractiveProduction(env,jobId,{force=false,retryMode=null}={}){
+  let current=await processProductionRead(env,jobId,{force,retryMode});
   if(current?.status==="failed")return current;
   return processProductionGenerate(env,jobId);
 }
 
-export async function launchInteractiveProduction(env,jobId,{force=false,ctx=null}={}){
+export async function launchInteractiveProduction(env,jobId,{force=false,ctx=null,retryMode=null}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result?.slides?.length)return {job,completed:true,interactive:true,launched:false};
   await event(db,jobId,"interactive","queued","Interactive Fast Path assíncrono iniciado",{transport:"waitUntil-direct"}).catch(()=>null);
-  const task=executeInteractiveProduction(env,jobId,{force}).catch(async(error)=>{
+  const task=executeInteractiveProduction(env,jobId,{force,retryMode}).catch(async(error)=>{
     await event(db,jobId,"interactive","failed",String(error?.message||error).slice(0,500),{transport:"waitUntil-direct"}).catch(()=>null);
     return getProductionJob(db,jobId).catch(()=>null);
   });
@@ -714,9 +717,13 @@ export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
     await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; retomando diretamente do Evidence Pack",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
     return runDirectProductionRecovery(env,id,{stage:"generating",ctx});
   }
+  const retryRows=(await env.DB.prepare("SELECT metadata_json FROM production_stage_events WHERE job_id=? AND stage='reading' AND status='recovery' ORDER BY created_at ASC LIMIT 12").bind(id).all().catch(()=>({results:[]})))?.results||[];
+  const retryNumber=retryRows.length+1;
+  const retryMode=retryNumber===1?'alternate':retryNumber===2?'deep':'snapshot';
+  const labels={alternate:'transporte alternativo',deep:'leitura profunda com rota alternativa',snapshot:'snapshot/cache + rotas disponíveis'};
   await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});
-  await event(env.DB,id,"reading","recovery","Nova tentativa solicitada pelo operador; relendo no mesmo job",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
-  const launched=await launchInteractiveProduction(env,id,{force:false,ctx});
+  await event(env.DB,id,"reading","recovery",`Nova tentativa ${retryNumber}: ${labels[retryMode]}; mesmo job, estratégia diferente`,{sameJob:true,retryNumber,retryMode,avoidRepeat:true}).catch(()=>null);
+  const launched=await launchInteractiveProduction(env,id,{force:retryMode!=='snapshot',ctx,retryMode});
   return launched.job||getProductionJob(env.DB,id);
 }
 

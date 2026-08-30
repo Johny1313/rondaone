@@ -19,5 +19,5 @@ assert.match(design,/toDataURL\('image\/jpeg',\.52\)/);
 assert.match(design,/let deskFormaSync=/);
 assert.match(design,/Date\.now\(\)-deskFormaSync\.at<120000/);
 assert.match(platform,/newsroomOperatingSystemHardeningV097412/);
-assert.match(shell,/0\.9\.7\.4\.12-newsroom-os-hardening/);
+assert.match(shell,/(?:0\.9\.7\.4\.12-newsroom-os-hardening|0\.9\.7\.5-adaptive-retry-no-repeat)/);
 console.log('RONDA ONE v0.9.7.4.12 Newsroom OS Hardening: OK');
