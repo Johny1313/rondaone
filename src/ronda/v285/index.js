@@ -70,6 +70,9 @@ import {
   addNewsroomStoryNote,
   toggleNewsroomStoryFollow,
   getNewsroomHandoff,
+  listEditorialProductionTracking,
+  getEditorialProductionTracking,
+  updateEditorialProductionTracking,
   ensureUserAccess,
   cleanupIdleUserSessions,
   userHasActiveSeat,
@@ -143,7 +146,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.4.8";
+const VERSION = "2.9.7.4.9";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -2087,6 +2090,30 @@ async function handleApi(request, env, url, ctx) {
   const workflowRoute=/^\/api\/workflow\/([a-z0-9-]{16,100})$/i.exec(url.pathname);
   if(workflowRoute&&request.method==='GET'){const {user}=await requireEditorialUser(request,env);const item=await getWorkflowItem(requireDatabase(env),workflowRoute[1]);if(!item)throw new HttpError(404,'Item de workflow não encontrado.');return json({ok:true,item,viewer:{id:user.id,role:user.role}});}
   if(workflowRoute&&request.method==='PATCH'){const {user}=await requireEditorialUser(request,env);const body=await readJsonBody(request);try{const item=await transitionWorkflowItem(requireDatabase(env),workflowRoute[1],{action:body.action,userId:user.id,role:isAdminUser(user)?'admin':(user.role||'user'),note:body.note,assigneeUserId:body.assigneeUserId,groupId:body.groupId});if(!item)throw new HttpError(404,'Item de workflow não encontrado.');return json({ok:true,item});}catch(error){if(error instanceof HttpError)throw error;throw new HttpError(409,error?.message||'Transição não permitida.');}}
+
+
+  if (url.pathname === "/api/newsroom/event-production" && request.method === "GET") {
+    await requireEditorialUser(request, env);
+    const ids = String(url.searchParams.get("eventIds") || "").split(",").map(value => value.trim()).filter(Boolean).slice(0,150);
+    const items = await listEditorialProductionTracking(requireDatabase(env), ids);
+    return json({ ok:true, items });
+  }
+
+  const editorialProductionRoute = /^\/api\/newsroom\/event-production\/([a-z0-9-]{8,140})$/i.exec(url.pathname);
+  if (editorialProductionRoute && request.method === "GET") {
+    await requireEditorialUser(request, env);
+    return json({ ok:true, item:await getEditorialProductionTracking(requireDatabase(env),editorialProductionRoute[1],{includeHistory:true}) });
+  }
+  if (editorialProductionRoute && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await readJsonBody(request);
+    try {
+      const item = await updateEditorialProductionTracking(requireDatabase(env),editorialProductionRoute[1],{action:String(body?.action||""),userId:user.id});
+      return json({ ok:true, item });
+    } catch (error) {
+      throw new HttpError(409,error instanceof Error?error.message:"Não foi possível atualizar a produção editorial.");
+    }
+  }
 
   if (url.pathname === "/api/newsroom" && request.method === "GET") {
     const db = requireDatabase(env);

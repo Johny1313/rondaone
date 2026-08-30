@@ -1,8 +1,8 @@
-# Deploy — RONDA ONE v0.9.7.4.8 HOTFIX LOCK Stability
+# Deploy — RONDA ONE v0.9.7.4.9 Editorial Desk Tracking
 
 ## 1. Princípio de atualização
 
-A v0.9.7.4.8 é incremental sobre a v0.9.7.4.7. Não remova bindings, Queues, D1, Browser Run, cache ou arquivos funcionais já existentes.
+A v0.9.7.4.9 é incremental sobre a v0.9.7.4.8. Não remova bindings, Queues, D1, Browser Run, cache ou arquivos funcionais já existentes.
 
 ## 2. Bindings necessários
 
@@ -69,7 +69,7 @@ npm run deploy
 `GET /api/platform/status` deve retornar HTTP 200 e incluir:
 
 ```text
-version: 0.9.7.4.8
+version: 0.9.7.4.9
 database: connected
 schedulerHealthy: true
 queues.ROUND: available

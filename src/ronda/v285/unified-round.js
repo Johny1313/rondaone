@@ -51,7 +51,8 @@ function eventMaterialItem(material,event,index=0){
   const firstSeen=safeDate(event?.criadoEm)||safeDate(event?.primeiraPublicacao)||safeDate(material?.publishedAt)||new Date().toISOString();
   const eventUpdated=safeDate(event?.atualizadoEm)||safeDate(event?.ultimaAtualizacao)||firstSeen;
   const updateUrls=eventUpdateUrls(event);
-  const isNewEvidence=Boolean(event?.mudouDesdeUltimaRonda)&&updateUrls.has(url);
+  const eventChanged=Boolean(event?.mudouDesdeUltimaRonda);
+  const isNewEvidence=eventChanged&&updateUrls.has(url);
   return {
     id:clean(material?.articleKey||`${event?.eventId||'event'}-material-${index}`,180),
     kind:material?.kind||'portal',
@@ -70,7 +71,10 @@ function eventMaterialItem(material,event,index=0){
     firstSeenAt:firstSeen,
     discoveredAt:firstSeen,
     lastSeenAt:eventUpdated,
-    radarAt:isNewEvidence?eventUpdated:firstSeen,
+    // Se o evento mudou, a Principal deve enxergar a atividade editorial recente.
+    // publishedAt continua intacto como data original da fonte.
+    radarAt:eventChanged?eventUpdated:firstSeen,
+    editorialNewEvidence:isNewEvidence,
     editorialEventId:event?.eventId||null,
     editorialStatus:event?.status||null,
     collectionRoute:'editorial-event-overlay',

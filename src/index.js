@@ -65,7 +65,7 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.4.8',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.4.9',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
     jobs:{stuckIntelligent,stuckProduction,healthy:stuckIntelligent===0&&stuckProduction===0},
@@ -85,10 +85,10 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.4.8',
+      version:'0.9.7.4.9',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4.8',
+        editorialVersion:'2.9.7.4.9',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -241,6 +241,7 @@ export default {
       hybridMultiTransportV09746:{enabled:true,policy:'same-source-transports-before-backup',transports:['cache','direct-fetch','browser-run','snapshot-rss'],browserRunBinding:!!env.BROWSER,directFirstDefault:true,transportLearning:true,browserFirstForDegradedDomains:true,singleEditorialBackup:true,bandAdapter:true,noManualRetryLoop:true},
       highVolumeDiscoveryV09747:{enabled:true,sourceVolumeProfiles:true,veryHighSources:['g1','cnn-brasil','folha','estadao','o-globo','metropoles','ge'],multiRouteBeforeStop:true,undatedHomepageFirstSeen:true,canonicalUrlDedup:true,discoveryPersistence:'D1 source_discovery_items',coverageWindows:['15m','1h','6h','24h'],coverageScore:true,coverageTargetPerProfile:true,lowCoverageAlert:true},
       hotfixLockV09748:{enabled:true,circuitBreaker:['CLOSED','OPEN','HALF_OPEN'],staleWhileRevalidate:true,routeAwareTimeouts:true,http525:'tls-upstream',platformStatusOperational:true,queueStatus:true,sourceIsolation:true,limitedBrowserRecovery:true,noArchitectureRewrite:true},
+      editorialDeskTrackingV09749:{enabled:true,statuses:['available','production','forma','completed'],userAttribution:true,formaHandoff:true,exportAutoComplete:true,mainIncludesEditorialUpdates:true},
       consistencyAsyncFastPathV09741:{enabled:true,productionPostAsync:true,transportRetryStatuses:[502,503,504],activeJobDeduplication:true,deferredSourceSnapshotContinuity:true,forceRefreshWhenSnapshotMissing:true,editorialChangesSinceLastCompletedRound:true},
       roundStabilityV0951:{
         enabled:true,

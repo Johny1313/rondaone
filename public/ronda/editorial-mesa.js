@@ -10,6 +10,7 @@
   let radar=[];
   let alerts=[];
   let sourceDiagnostics=[];
+  let productionTracking=new Map();
   let lastLoad=0;
   let lastLoadedAt=null;
   const filterRules=window.RondaMesaFilters;
@@ -62,6 +63,23 @@
     const data=await response.json().catch(()=>({}));
     if(!response.ok||!data.ok)throw new Error(data.error||`HTTP ${response.status}`);
     return data;
+  }
+
+  const deskStatusLabel=status=>({available:'Disponível',production:'Em produção',forma:'No FORMA',completed:'Concluída'})[status]||'Disponível';
+  const deskTracking=eventId=>productionTracking.get(eventId)||{eventId,status:'available'};
+  function deskPeople(tracking){
+    const rows=[];
+    if(tracking?.pautaBy?.name)rows.push(`Pauta: ${tracking.pautaBy.name}`);
+    if(tracking?.productionBy?.name)rows.push(`Produção: ${tracking.productionBy.name}`);
+    if(tracking?.formaBy?.name)rows.push(`FORMA: ${tracking.formaBy.name}`);
+    if(tracking?.completedBy?.name)rows.push(`Concluído por: ${tracking.completedBy.name}`);
+    return rows;
+  }
+  async function updateDeskTracking(eventId,action){
+    const data=await request(`/api/newsroom/event-production/${encodeURIComponent(eventId)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+    if(data.item)productionTracking.set(eventId,data.item);
+    renderFilteredMesa();
+    return data.item;
   }
 
   function filteredEvents(){
@@ -194,18 +212,22 @@
       const source=bestApuracaoSource(event);
       const decision=decisionLabel(event);
       const quality=qualityLabel(event);
+      const tracking=deskTracking(event.eventId);
+      const people=deskPeople(tracking);
       return `<article class="event-card" data-status="${esc(event.status)}" data-decision="${esc(decision)}" data-quality="${esc(quality)}">
         <div class="event-card-top"><span class="event-status">● ${esc(event.status)}</span><span class="event-editoria">${esc(event.editoria)}</span></div>
         <div class="event-decision-row"><span class="event-decision">${esc(decision)}</span><span class="event-quality">BASE ${esc(quality)}</span></div>
         <h3>${esc(event.titulo)}</h3>
+        <div class="event-desk-row"><span class="event-desk-status ${esc(tracking.status||'available')}">${esc(deskStatusLabel(tracking.status))}</span>${people.length?`<small>${people.map(esc).join(' · ')}</small>`:'<small>Sem responsável definido</small>'}</div>
         <div class="event-card-meta"><span><b>${event.fontes?.length||0}</b> fontes</span><span><b>${event.materias?.length||0}</b> matérias</span><span>atualizado ${esc(relative(event.ultimaAtualizacao))}</span></div>
         <div class="event-metrics"><div class="event-metric"><strong>${event.relevancia||0}</strong><span>relevância</span></div><div class="event-metric"><strong>${event.tracao?.score||0}</strong><span>tração</span></div><div class="event-metric"><strong>${esc(event.nivelConfirmacao?.level||'—')}</strong><span>confirmação</span></div></div>
         ${info?`<div class="event-new"><strong>Nova informação</strong>${esc(info)}</div>`:''}
         <div class="event-decision-reason">${esc(event.acaoEditorial?.reason||'Acompanhe os sinais editoriais do evento.')}</div>
-        <div class="event-card-actions"><small>${growth>0?`↑ ${growth}% em 30 min`:event.divergencias?.length?`${event.divergencias.length} divergência(s)`:event.subeditoria||event.tema||''}</small><div class="event-card-action-buttons">${source?`<a class="event-apurar" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Apurar ↗</a>`:''}<button type="button" data-open-event="${esc(event.eventId)}">Abrir evento →</button></div></div>
+        <div class="event-card-actions"><small>${growth>0?`↑ ${growth}% em 30 min`:event.divergencias?.length?`${event.divergencias.length} divergência(s)`:event.subeditoria||event.tema||''}</small><div class="event-card-action-buttons">${tracking.status==='completed'?`<button class="event-desk-action" type="button" data-desk-action="reopen" data-desk-event="${esc(event.eventId)}">Reabrir</button>`:tracking.status==='available'?`<button class="event-desk-action" type="button" data-desk-action="start" data-desk-event="${esc(event.eventId)}">Iniciar produção</button>`:''}${source?`<a class="event-apurar" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Apurar ↗</a>`:''}<button type="button" data-open-event="${esc(event.eventId)}">Abrir evento →</button></div></div>
       </article>`;
     }).join('');
     grid.querySelectorAll('[data-open-event]').forEach(button=>button.addEventListener('click',()=>openEvent(button.dataset.openEvent)));
+    grid.querySelectorAll('[data-desk-action]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{await updateDeskTracking(button.dataset.deskEvent,button.dataset.deskAction);}catch(error){alert(error.message);}finally{button.disabled=false;}}));
   }
 
   function renderChanges(items){
@@ -232,7 +254,11 @@
   function sourceRows(event){return (event.fontes||[]).map(source=>`<div class="event-source-row"><span class="event-source-role">${esc(source.role)}</span><div><strong>${esc(source.sourceName)}</strong><br><small>${source.publishedAt?`${esc(fmtDate(source.publishedAt))} · `:''}${esc(source.title||'')}</small></div>${source.url?`<a href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Abrir para apuração ↗</a>`:''}</div>`).join('');}
 
   async function produce(eventId,type){
-    if(type==='carousel'){window.location.href=`/design/?productionTopic=${encodeURIComponent(eventId)}`;return;}
+    if(type==='carousel'){
+      try{await updateDeskTracking(eventId,'send_to_forma');window.location.href=`/design/?productionTopic=${encodeURIComponent(eventId)}&editorialEvent=${encodeURIComponent(eventId)}`;}
+      catch(error){alert(error.message||'Não foi possível registrar o envio ao FORMA.');}
+      return;
+    }
     const output=document.getElementById('eventProductionOutput');
     if(output)output.textContent='Preparando conteúdo com as evidências do evento…';
     try{
@@ -250,7 +276,8 @@
     const detail=document.getElementById('eventDetail');
     detail.innerHTML='<div class="event-detail-body"><div class="event-empty"><div><strong>Carregando evento</strong><span>Lendo timeline, fontes e evidências.</span></div></div></div>';
     try{
-      const {event}=await request(`/api/editorial-events/${encodeURIComponent(eventId)}`);
+      const [{event},trackingData]=await Promise.all([request(`/api/editorial-events/${encodeURIComponent(eventId)}`),request(`/api/newsroom/event-production/${encodeURIComponent(eventId)}`).catch(()=>({item:deskTracking(eventId)}))]);
+      const tracking=trackingData.item||deskTracking(eventId);if(tracking)productionTracking.set(eventId,tracking);
       const decision=decisionLabel(event);
       const quality=qualityLabel(event);
       const apuracaoSource=bestApuracaoSource(event);
@@ -259,6 +286,7 @@
         <div class="event-detail-body">
           <div class="event-detail-stats"><div class="event-detail-stat"><strong>${event.relevancia||0}</strong><span>Relevância</span></div><div class="event-detail-stat"><strong>${event.tracao?.score||0}</strong><span>Tração</span></div><div class="event-detail-stat"><strong>${esc(event.nivelConfirmacao?.level||'—')}</strong><span>Confirmação</span></div><div class="event-detail-stat"><strong>${esc(quality)}</strong><span>Base de apuração</span></div><div class="event-detail-stat"><strong>${event.fontes?.length||0}</strong><span>Fontes</span></div><div class="event-detail-stat"><strong>${event.leitura?.completas||0}/${event.leitura?.total||event.materias?.length||0}</strong><span>Leituras completas</span></div></div>
           <section class="event-detail-section wide event-action-panel"><h3>Ação editorial recomendada</h3><div class="event-action-call"><strong>${esc(decision)}</strong><p>${esc(event.acaoEditorial?.reason||'Acompanhe o evento e confirme os dados nas fontes vinculadas.')}</p></div></section>
+          <section class="event-detail-section wide event-desk-panel"><h3>Fluxo da mesa</h3><div class="event-desk-detail"><span class="event-desk-status ${esc(tracking.status||'available')}">${esc(deskStatusLabel(tracking.status))}</span><div>${deskPeople(tracking).length?deskPeople(tracking).map(value=>`<span>${esc(value)}</span>`).join(''):'<span>Sem responsável definido.</span>'}</div></div><div class="event-produce event-desk-controls">${tracking.status==='completed'?`<button data-desk-detail-action="reopen" type="button">Reabrir pauta</button>`:`<button data-desk-detail-action="start" type="button">Marcar em produção</button>`}<button class="primary" data-produce="carousel" type="button">Enviar / abrir no FORMA</button></div><div class="event-desk-history">${(tracking.history||[]).length?(tracking.history||[]).slice(0,12).map(entry=>`<div><b>${esc(entry.user?.name||'Redação')}</b><span>${esc((entry.action==='start'?'iniciou a produção':entry.action==='send_to_forma'?'enviou ao FORMA':entry.action==='complete'?'concluiu por exportação/download':entry.action==='reopen'?'reabriu a pauta':entry.action))} · ${esc(fmtDate(entry.createdAt))}</span></div>`).join(''):'<small>Nenhuma movimentação registrada ainda.</small>'}</div></section>
           <section class="event-detail-section wide"><h3>Resumo</h3><div class="event-detail-item">${esc(event.resumoEditorial?.oQueAconteceu||event.resumo)}</div></section>
           <div class="event-detail-sections">
             <section class="event-detail-section"><h3>Qualidade da apuração</h3><div class="event-quality-detail"><strong>${esc(quality)} · ${event.qualidadeApuracao?.score||0}/100</strong><div class="event-detail-list">${(event.qualidadeApuracao?.reasons||[]).map(text=>`<div class="event-detail-item">${esc(text)}</div>`).join('')}</div></div></section>
@@ -275,6 +303,7 @@
         </div>`;
       detail.querySelector('.event-detail-close').onclick=()=>{modal.hidden=true;};
       detail.querySelectorAll('[data-produce]').forEach(button=>button.addEventListener('click',()=>produce(event.eventId,button.dataset.produce)));
+      detail.querySelectorAll('[data-desk-detail-action]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{await updateDeskTracking(event.eventId,button.dataset.deskDetailAction);await openEvent(event.eventId);}catch(error){alert(error.message);}finally{button.disabled=false;}}));
     }catch(error){detail.innerHTML=`<div class="event-detail-body"><div class="event-empty"><div><strong>Falha ao abrir evento</strong><span>${esc(error.message)}</span></div></div></div>`;}
   }
 
@@ -291,6 +320,11 @@
         request('/api/sources/diagnostics').catch(()=>({diagnostics:[]})),
       ]);
       events=eventData.events||[];
+      const ids=events.map(event=>event.eventId).filter(Boolean);
+      if(ids.length){
+        const trackingData=await request(`/api/newsroom/event-production?eventIds=${encodeURIComponent(ids.join(','))}`).catch(()=>({items:[]}));
+        productionTracking=new Map((trackingData.items||[]).map(item=>[item.eventId,item]));
+      }else productionTracking=new Map();
       changes=changesData.items||[];
       radar=radarData.items||[];
       alerts=alertsData.items||[];

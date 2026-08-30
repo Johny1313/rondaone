@@ -134,10 +134,15 @@ function itemMatchesSource(item) {
 }
 
 function itemRadarTime(item) {
-  // Em janelas de tempo curto importa quando a redação descobriu a notícia,
-  // não apenas quando o portal declarou a publicação no RSS.
+  // Eventos editoriais atualizados precisam permanecer visíveis na Principal.
+  // radarAt representa descoberta/novidade real da redação e não substitui o publishedAt original.
+  const radar = Date.parse(item?.radarAt || "");
+  const published = Date.parse(item?.publishedAt || "");
+  if (item?.editorialEventId && Number.isFinite(radar)) {
+    if (!Number.isFinite(published) || radar > published) return item.radarAt;
+  }
   if (state.period <= 60) return item.radarAt || item.firstSeenAt || item.discoveredAt || item.publishedAt;
-  return item.publishedAt || item.firstSeenAt || item.discoveredAt;
+  return item.publishedAt || item.radarAt || item.firstSeenAt || item.discoveredAt;
 }
 
 function itemWithinPeriod(item) {
@@ -495,7 +500,7 @@ function render() {
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<span class="source-badge">${escapeHtml(source)}</span>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>${state.period <= 60 ? "Última detecção" : "Última postagem"}</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Produção FORMA</span><strong>Leitura → Evidence Pack → Multi-AI → Quality Gate → Design</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-forma-topic="${escapeHtml(topic.id)}" type="button">Produzir no FORMA →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<span class="source-badge">${escapeHtml(source)}</span>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>${state.period <= 60 ? "Última detecção" : "Última postagem"}</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Produção FORMA</span><strong>Leitura → Evidence Pack → Multi-AI → Quality Gate → Design</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-forma-topic="${escapeHtml(topic.id)}" data-editorial-event="${escapeHtml(topic.editorialEvent?.eventId||'')}" type="button">Produzir no FORMA →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -1565,9 +1570,12 @@ document.getElementById("topicsGrid").addEventListener("click", (event) => {
   const button = event.target.closest("[data-forma-topic]");
   if (!button) return;
   const topicId=button.dataset.formaTopic;
+  const editorialEventId=button.dataset.editorialEvent||"";
   const runId=state.data?.runId||state.lastRunId||"";
-  const target=`/design/?productionTopic=${encodeURIComponent(topicId)}${runId?`&runId=${encodeURIComponent(runId)}`:""}`;
-  window.location.href=target;
+  const go=()=>{const target=`/design/?productionTopic=${encodeURIComponent(topicId)}${runId?`&runId=${encodeURIComponent(runId)}`:""}${editorialEventId?`&editorialEvent=${encodeURIComponent(editorialEventId)}`:""}`;window.location.href=target;};
+  if(editorialEventId){
+    api(`/api/newsroom/event-production/${encodeURIComponent(editorialEventId)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send_to_forma"})}).then(go).catch(error=>{if(error.status===401){showView("profile");alert("Entre no perfil editorial para registrar quem enviou a pauta ao FORMA.");return;}alert(error.message);});
+  }else go();
 });
 document.getElementById("copyCarousel").addEventListener("click", copyCarouselText);
 document.getElementById("approveCarouselLearning")?.addEventListener("click", approveCarouselLearning);

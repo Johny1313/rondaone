@@ -2,7 +2,7 @@ import { getReliabilitySummary } from "../../reliability/core.js";
 import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.9.7.4.8";
+export const DATABASE_SCHEMA_VERSION = "2.9.7.4.9";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -282,6 +282,17 @@ const SCHEMA_STATEMENTS = [
     created_by TEXT NOT NULL, reviewed_by TEXT, approved_by TEXT, published_by TEXT, rejection_reason TEXT, note TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, submitted_at TEXT, reviewed_at TEXT, approved_at TEXT, published_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS editorial_production_tracking (
+    event_id TEXT PRIMARY KEY, desk_status TEXT NOT NULL DEFAULT 'available',
+    pauta_by_user_id TEXT, production_by_user_id TEXT, forma_by_user_id TEXT, completed_by_user_id TEXT,
+    started_at TEXT, forma_at TEXT, completed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_editorial_production_status ON editorial_production_tracking(desk_status, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS editorial_production_events (
+    id TEXT PRIMARY KEY, event_id TEXT NOT NULL, event_type TEXT NOT NULL, from_status TEXT, to_status TEXT,
+    user_id TEXT, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_editorial_production_events ON editorial_production_events(event_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_production_workflow_status ON production_workflow(status, updated_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_production_workflow_owner ON production_workflow(owner_user_id, updated_at DESC)",
   `CREATE TABLE IF NOT EXISTS production_workflow_events (
@@ -318,6 +329,7 @@ const STORAGE_GUARD = Object.freeze({
   maxCarouselVersions: 800,
   maxWorkflowItems: 1200,
   maxWorkflowEvents: 5000,
+  maxEditorialProductionEvents: 6000,
   maxWatchdogEvents: 2000,
 });
 
@@ -1549,6 +1561,7 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
     db.prepare(`DELETE FROM carousel_versions WHERE id NOT IN (SELECT id FROM carousel_versions ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxCarouselVersions})`),
     db.prepare(`DELETE FROM production_workflow_events WHERE id NOT IN (SELECT id FROM production_workflow_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxWorkflowEvents})`),
     db.prepare(`DELETE FROM production_workflow WHERE status IN ('published','rejected') AND id NOT IN (SELECT id FROM production_workflow ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxWorkflowItems})`),
+    db.prepare(`DELETE FROM editorial_production_events WHERE id NOT IN (SELECT id FROM editorial_production_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxEditorialProductionEvents})`),
     db.prepare(`DELETE FROM watchdog_events WHERE id NOT IN (SELECT id FROM watchdog_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxWatchdogEvents})`),
     db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
@@ -1724,6 +1737,130 @@ export async function toggleNewsroomStoryFollow(db, id, userId) {
   if (existing) await db.prepare("DELETE FROM newsroom_story_followers WHERE story_id=? AND user_id=?").bind(id,userId).run();
   else await db.prepare("INSERT INTO newsroom_story_followers (story_id,user_id,created_at) VALUES (?,?,?)").bind(id,userId,new Date().toISOString()).run();
   return { following: !existing, story: await getNewsroomStory(db,id) };
+}
+
+
+function editorialProductionRow(row) {
+  if (!row) return null;
+  return {
+    eventId: row.event_id,
+    status: row.desk_status || "available",
+    pautaBy: row.pauta_by_user_id ? { id:row.pauta_by_user_id, name:row.pauta_by_name || "Redação" } : null,
+    productionBy: row.production_by_user_id ? { id:row.production_by_user_id, name:row.production_by_name || "Redação" } : null,
+    formaBy: row.forma_by_user_id ? { id:row.forma_by_user_id, name:row.forma_by_name || "Redação" } : null,
+    completedBy: row.completed_by_user_id ? { id:row.completed_by_user_id, name:row.completed_by_name || "Redação" } : null,
+    startedAt: row.started_at || null,
+    formaAt: row.forma_at || null,
+    completedAt: row.completed_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+const EDITORIAL_PRODUCTION_SELECT = `
+  SELECT t.*,
+    pauta.display_name AS pauta_by_name,
+    prod.display_name AS production_by_name,
+    forma.display_name AS forma_by_name,
+    done.display_name AS completed_by_name
+  FROM editorial_production_tracking t
+  LEFT JOIN users pauta ON pauta.id=t.pauta_by_user_id
+  LEFT JOIN users prod ON prod.id=t.production_by_user_id
+  LEFT JOIN users forma ON forma.id=t.forma_by_user_id
+  LEFT JOIN users done ON done.id=t.completed_by_user_id
+`;
+
+export async function listEditorialProductionTracking(db, eventIds = []) {
+  await ensureSchema(db);
+  const ids = [...new Set((Array.isArray(eventIds) ? eventIds : []).map(value => String(value || "").trim()).filter(Boolean))].slice(0,150);
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const result = await db.prepare(`${EDITORIAL_PRODUCTION_SELECT} WHERE t.event_id IN (${placeholders}) ORDER BY t.updated_at DESC`).bind(...ids).all();
+  return (result?.results || []).map(editorialProductionRow);
+}
+
+export async function getEditorialProductionTracking(db, eventId, { includeHistory = true } = {}) {
+  await ensureSchema(db);
+  const id = String(eventId || "").trim();
+  if (!id) return null;
+  const row = await db.prepare(`${EDITORIAL_PRODUCTION_SELECT} WHERE t.event_id=? LIMIT 1`).bind(id).first();
+  const item = editorialProductionRow(row) || { eventId:id, status:"available", pautaBy:null, productionBy:null, formaBy:null, completedBy:null, startedAt:null, formaAt:null, completedAt:null, createdAt:null, updatedAt:null };
+  if (includeHistory) {
+    const result = await db.prepare(`SELECT e.*,u.display_name FROM editorial_production_events e LEFT JOIN users u ON u.id=e.user_id WHERE e.event_id=? ORDER BY e.created_at DESC LIMIT 80`).bind(id).all();
+    item.history = (result?.results || []).map(event => ({
+      id:event.id, action:event.event_type, fromStatus:event.from_status || null, toStatus:event.to_status || null,
+      user:event.user_id ? { id:event.user_id, name:event.display_name || "Redação" } : null,
+      payload:parseJsonObject(event.payload_json, {}), createdAt:event.created_at,
+    }));
+  }
+  return item;
+}
+
+export async function updateEditorialProductionTracking(db, eventId, { action, userId } = {}) {
+  await ensureSchema(db);
+  const id = String(eventId || "").trim();
+  if (!id) throw new Error("Evento editorial inválido.");
+  if (!userId) throw new Error("Usuário editorial não identificado.");
+  const current = await getEditorialProductionTracking(db,id,{includeHistory:false});
+  const fromStatus = current?.status || "available";
+  const now = new Date().toISOString();
+  const allowed = new Set(["start","send_to_forma","complete","reopen"]);
+  if (!allowed.has(action)) throw new Error("Ação de produção inválida.");
+
+  let toStatus = fromStatus;
+  let pautaBy = current?.pautaBy?.id || null;
+  let productionBy = current?.productionBy?.id || null;
+  let formaBy = current?.formaBy?.id || null;
+  let completedBy = current?.completedBy?.id || null;
+  let startedAt = current?.startedAt || null;
+  let formaAt = current?.formaAt || null;
+  let completedAt = current?.completedAt || null;
+
+  if (action === "start") {
+    toStatus = "production";
+    pautaBy = pautaBy || userId;
+    productionBy = userId;
+    startedAt = startedAt || now;
+    completedBy = null;
+    completedAt = null;
+  } else if (action === "send_to_forma") {
+    toStatus = "forma";
+    pautaBy = pautaBy || userId;
+    productionBy = productionBy || userId;
+    formaBy = userId;
+    startedAt = startedAt || now;
+    formaAt = now;
+    completedBy = null;
+    completedAt = null;
+  } else if (action === "complete") {
+    toStatus = "completed";
+    pautaBy = pautaBy || userId;
+    productionBy = productionBy || userId;
+    completedBy = userId;
+    startedAt = startedAt || now;
+    completedAt = now;
+  } else if (action === "reopen") {
+    toStatus = "production";
+    productionBy = userId;
+    startedAt = startedAt || now;
+    completedBy = null;
+    completedAt = null;
+  }
+
+  await db.prepare(`INSERT INTO editorial_production_tracking (
+      event_id,desk_status,pauta_by_user_id,production_by_user_id,forma_by_user_id,completed_by_user_id,
+      started_at,forma_at,completed_at,created_at,updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(event_id) DO UPDATE SET
+      desk_status=excluded.desk_status,pauta_by_user_id=excluded.pauta_by_user_id,
+      production_by_user_id=excluded.production_by_user_id,forma_by_user_id=excluded.forma_by_user_id,
+      completed_by_user_id=excluded.completed_by_user_id,started_at=excluded.started_at,forma_at=excluded.forma_at,
+      completed_at=excluded.completed_at,updated_at=excluded.updated_at`).bind(
+        id,toStatus,pautaBy,productionBy,formaBy,completedBy,startedAt,formaAt,completedAt,current?.createdAt || now,now
+      ).run();
+  await db.prepare(`INSERT INTO editorial_production_events (id,event_id,event_type,from_status,to_status,user_id,payload_json,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+    .bind(crypto.randomUUID(),id,action,fromStatus,toStatus,userId,JSON.stringify({source:"ronda-one-desk"}),now).run();
+  return getEditorialProductionTracking(db,id,{includeHistory:true});
 }
 
 export async function getNewsroomHandoff(db, { hours = 8 } = {}) {
