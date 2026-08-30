@@ -1,3 +1,10 @@
+# v0.9.7.5 — Adaptive Retry No Repeat
+
+- corrige repetição de tentativas idênticas na leitura de matéria;
+- retry agora escala entre transporte alternativo, leitura profunda e snapshot/cache;
+- mantém same-job recovery para não perder trabalho já concluído;
+- preserva Hybrid Multi-Transport, HOTFIX LOCK, Newsroom OS e FORMA Download Flex.
+
 # v0.9.7.4.12 — Newsroom OS Hardening
 
 ## Performance e estabilidade

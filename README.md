@@ -1,3 +1,15 @@
+# RONDA ONE Cloud v0.9.7.5 — Adaptive Retry No Repeat
+
+Correção de regressão na recuperação de leitura do FORMA. Mantém o mesmo job, mas cada nova tentativa muda automaticamente a estratégia para não repetir a mesma rota que acabou de falhar.
+
+## Retry adaptativo
+- 1ª nova tentativa: troca o transporte preferido;
+- 2ª nova tentativa: leitura profunda com janela maior e Browser Run primeiro quando disponível;
+- 3ª e seguintes: recupera snapshot/cache e reaplica todas as rotas disponíveis;
+- preserva o mesmo job e Evidence Pack;
+- registra retryNumber, retryMode e avoidRepeat no histórico operacional;
+- a interface informa que a nova tentativa está usando uma rota diferente.
+
 # RONDA ONE Cloud v0.9.7.4.12 — Newsroom Operating System Hardening
 
 Build consolidada para quem não baixou as duas versões anteriores. Inclui integralmente **v0.9.7.4.10 (FORMA Download Flex + All Slides)** e **v0.9.7.4.11 (Newsroom Operating System · Phase 1)**, mais a camada de hardening de performance e estabilidade.
