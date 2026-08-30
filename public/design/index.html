@@ -126,7 +126,7 @@
       <div class="brand-wrap">
         <div class="brand-mark">F</div>
         <div>
-          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.5.3</b></div>
+          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.5.4</b></div>
           <div class="brand-sub">Editor visual integrado à Ronda Editorial</div>
         </div>
       </div>
@@ -1285,6 +1285,18 @@
       const i=order.indexOf(node.dataset.prodStage);node.style.opacity=i<=index?'1':'.38';node.style.fontWeight=i===index?'800':'500';node.title=i===index?detail:'';
     });
   }
+  function productionFailureDiagnostics(bundle){
+    const events=Array.isArray(bundle?.events)?bundle.events:[];
+    const failed=[...events].reverse().find(event=>event?.stage==='reading'&&event?.status==='failed');
+    const attempts=Array.isArray(failed?.metadata?.attempts)?failed.metadata.attempts:[];
+    if(!attempts.length)return '';
+    const parts=attempts.slice(0,3).map(attempt=>{
+      const source=attempt?.sourceName||'';const role=attempt?.role==='backup'?'backup':attempt?.role==='primary'?'principal':'';
+      const routes=Array.isArray(attempt?.routes)?attempt.routes.slice(0,4).map(route=>route?.ok?`${route.method||route.transport||'rota'} ok`:`${route.method||route.transport||'rota'} ${route.error||'falhou'}`).join(' → '):'';
+      return [source,role,routes||attempt?.error].filter(Boolean).join(' · ');
+    }).filter(Boolean);
+    return parts.length?` Diagnóstico: ${parts.join(' | ')}`:'';
+  }
   async function waitFormaProductionJob(jobId,pollAfterMs=900){
     const startedAt=Date.now(),clientSafetyCeiling=startedAt+65*1000;
     let networkErrors=0,lastProgress=-1,lastStage='',lastUpdatedAt='',lastActivityAt=Date.now();
@@ -1301,7 +1313,7 @@
       setDirectArticleStatus(label,job.status==='failed'?'error':'',progress);
       if(job.status==='ready'&&job.result?.slides?.length){directArticleState.lastStage='ready';directArticleState.lastError=null;setProductionRetryVisible(false);setProductionStage('ready');return job.result;}
       if(job.status==='failed'){
-        const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id||jobId;error.productionStage=job.stage||stage;registerProductionFailure(error);throw error;
+        const error=new Error(`${job.error||'A produção foi encerrada.'}${productionFailureDiagnostics(bundle)}`);error.productionJobId=job.id||jobId;error.productionStage=job.stage||stage;registerProductionFailure(error);throw error;
       }
       const idle=Date.now()-lastActivityAt;
       if(idle>=12000)setDirectArticleStatus('Sem mudança visual recente; o backend está executando a recuperação do mesmo job…','',progress);
@@ -1309,7 +1321,7 @@
     try{
       const bundle=await directArticleApi(`/api/production/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`),job=bundle?.job||{};
       if(job.status==='ready'&&job.result?.slides?.length){setProductionRetryVisible(false);setProductionStage('ready');return job.result;}
-      if(job.status==='failed'){const error=new Error(job.error||'A produção foi encerrada.');error.productionJobId=job.id||jobId;error.productionStage=job.stage||lastStage||'reading';registerProductionFailure(error);throw error;}
+      if(job.status==='failed'){const error=new Error(`${job.error||'A produção foi encerrada.'}${productionFailureDiagnostics(bundle)}`);error.productionJobId=job.id||jobId;error.productionStage=job.stage||lastStage||'reading';registerProductionFailure(error);throw error;}
       const error=new Error('O backend ainda não encerrou o job após a margem máxima de segurança. O job foi preservado para nova consulta.');error.productionJobId=job.id||jobId;error.productionStage=job.stage||lastStage||'reading';registerProductionFailure(error);throw error;
     }catch(error){if(!error.productionJobId){error.productionJobId=jobId;error.productionStage=lastStage||directArticleState.lastStage||'reading';registerProductionFailure(error);}throw error;}
   }
@@ -1417,7 +1429,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.5.3',
+      sourceVersion:'0.9.7.5.4',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),

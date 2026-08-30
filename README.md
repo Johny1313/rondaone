@@ -1,6 +1,6 @@
-# RONDA ONE Cloud v0.9.7.5.3 — Read Budget Regression Fix
+# RONDA ONE Cloud v0.9.7.5.4 — Carousel Open Recovery Fix
 
-Corrige uma regressão de orçamento de leitura introduzida entre as versões 0.9.7.4.5 e 0.9.7.4.6, preservando o Unified No-Hang Coordinator, Mesa e Produção separadas.
+Corrige erros repetidos ao abrir matérias para gerar carrosséis. A recuperação automática agora respeita a leitura já em andamento, renova o lock durante fetch/Browser Run, evita avançar para geração sem Evidence Pack e faz o retry manual realmente trocar de estratégia. Preserva o Unified No-Hang Coordinator, o scraping híbrido e a separação entre Mesa e Produção.
 
 # RONDA ONE Cloud v0.9.7.5.3 — Unified No-Hang Coordinator
 

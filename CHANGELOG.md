@@ -1,3 +1,14 @@
+## 0.9.7.5.4 — Carousel Open Recovery
+
+- impede o recovery automático de competir com uma leitura ainda ativa: leitura passa a renovar lease + `updated_at` durante fetch/Browser Run;
+- aumenta a janela de stale de leitura para 15 s, compatível com o orçamento híbrido de abertura da matéria;
+- recovery consulta lease ativo antes de registrar uma nova tentativa, evitando consumir o único recovery quando o worker original ainda está lendo;
+- caminho deduplicado não tenta mais iniciar geração sem Evidence Pack;
+- retry manual passa a contar apenas retries manuais, sem ser deslocado por recoveries automáticos anteriores;
+- URL externa só avança para Evidence Pack quando a leitura tem qualidade/evidência mínima;
+- snapshot/RSS é comparado também quando existe uma leitura direta parcial, em vez de ser ignorado apenas porque `best` já existe;
+- falhas de leitura persistem as rotas tentadas e o FORMA exibe diagnóstico resumido de fonte, papel e transporte.
+
 # v0.9.7.5.3 — Unified No-Hang Coordinator
 
 - restaura o princípio No-Hang da v0.9.7.2.2 sem perder o Fast Path atual;
@@ -389,3 +400,14 @@ A validação real pós-deploy deve ser executada com `BASE_URL=https://... npm 
 - Fast Lane de descoberta;
 - RSS + scraping HTML leve + fallback;
 - `firstSeenAt`, `discoveredAt`, `lastSeenAt`.
+
+## 0.9.7.5.4 — Carousel Open Recovery
+
+- impede o recovery automático de competir com uma leitura ainda ativa: leitura passa a renovar lease + `updated_at` durante fetch/Browser Run;
+- aumenta a janela de stale de leitura para 15 s, compatível com o orçamento híbrido de abertura da matéria;
+- recovery consulta lease ativo antes de registrar uma nova tentativa, evitando consumir o único recovery quando o worker original ainda está lendo;
+- caminho deduplicado não tenta mais iniciar geração sem Evidence Pack;
+- retry manual passa a contar apenas retries manuais, sem ser deslocado por recoveries automáticos anteriores;
+- URL externa só avança para Evidence Pack quando a leitura tem qualidade/evidência mínima;
+- snapshot/RSS é comparado também quando existe uma leitura direta parcial, em vez de ser ignorado apenas porque `best` já existe;
+- falhas de leitura persistem as rotas tentadas e o FORMA exibe diagnóstico resumido de fonte, papel e transporte.
