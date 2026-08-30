@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.3";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.4.5";
 const PRODUCTION_READ_STALE_MS = 8_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 20_000;
@@ -19,6 +19,7 @@ const JOB_TTL_HOURS = 48;
 const EVIDENCE_TTL_DAYS = 7;
 const MAX_RESULT_JSON = 900_000;
 const MAX_EVIDENCE_JSON = 1_100_000;
+const PRODUCTION_SCHEMA_READY = new WeakMap();
 
 function nowIso(){ return new Date().toISOString(); }
 function clamp(value,min,max){ return Math.max(min,Math.min(max,Number(value)||0)); }
@@ -129,70 +130,75 @@ async function ensureEvidencePackPtBr(env,evidence){
 
 export async function ensureProductionSchema(db){
   if(!db)throw new Error("Binding D1 'DB' não configurado.");
-  const statements=[
-    `CREATE TABLE IF NOT EXISTS production_jobs (
-      id TEXT PRIMARY KEY,
-      source_type TEXT NOT NULL,
-      source_ref TEXT,
-      status TEXT NOT NULL,
-      stage TEXT NOT NULL,
-      progress INTEGER NOT NULL DEFAULT 0,
-      input_json TEXT NOT NULL,
-      evidence_id TEXT,
-      result_json TEXT,
-      error TEXT,
-      fallback_level INTEGER NOT NULL DEFAULT 0,
-      created_by TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL
-    )`,
-    "CREATE INDEX IF NOT EXISTS idx_production_jobs_status ON production_jobs(status, updated_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_production_jobs_creator ON production_jobs(created_by, updated_at DESC)",
-    `CREATE TABLE IF NOT EXISTS evidence_packages (
-      id TEXT PRIMARY KEY,
-      source_type TEXT NOT NULL,
-      source_ref TEXT,
-      topic_id TEXT,
-      canonical_url TEXT,
-      source_name TEXT,
-      title TEXT,
-      reading_quality REAL NOT NULL DEFAULT 0,
-      word_count INTEGER NOT NULL DEFAULT 0,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL
-    )`,
-    "CREATE INDEX IF NOT EXISTS idx_evidence_packages_source ON evidence_packages(source_type, source_ref, updated_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_evidence_packages_canonical ON evidence_packages(canonical_url, updated_at DESC)",
-    `CREATE TABLE IF NOT EXISTS production_stage_events (
-      id TEXT PRIMARY KEY,
-      job_id TEXT NOT NULL,
-      stage TEXT NOT NULL,
-      status TEXT NOT NULL,
-      detail TEXT,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL
-    )`,
-    "CREATE INDEX IF NOT EXISTS idx_production_stage_events_job ON production_stage_events(job_id, created_at DESC)",
-    `CREATE TABLE IF NOT EXISTS production_stage_leases (
-      job_id TEXT NOT NULL,
-      stage TEXT NOT NULL,
-      token TEXT NOT NULL,
-      expires_at INTEGER NOT NULL,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY(job_id, stage)
-    )`,
-    "CREATE INDEX IF NOT EXISTS idx_production_stage_leases_expiry ON production_stage_leases(expires_at)",
-    `CREATE TABLE IF NOT EXISTS production_state (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-  ];
-  for(const statement of statements) await db.prepare(statement).run();
-  await db.prepare(`INSERT INTO production_state(key,value,updated_at) VALUES('schema_version',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(PRODUCTION_SCHEMA_VERSION,nowIso()).run();
+  if((typeof db==="object"||typeof db==="function")&&PRODUCTION_SCHEMA_READY.has(db))return PRODUCTION_SCHEMA_READY.get(db);
+  const task=(async()=>{
+    const statements=[
+      `CREATE TABLE IF NOT EXISTS production_jobs (
+        id TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL,
+        source_ref TEXT,
+        status TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        progress INTEGER NOT NULL DEFAULT 0,
+        input_json TEXT NOT NULL,
+        evidence_id TEXT,
+        result_json TEXT,
+        error TEXT,
+        fallback_level INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_production_jobs_status ON production_jobs(status, updated_at DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_production_jobs_creator ON production_jobs(created_by, updated_at DESC)",
+      `CREATE TABLE IF NOT EXISTS evidence_packages (
+        id TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL,
+        source_ref TEXT,
+        topic_id TEXT,
+        canonical_url TEXT,
+        source_name TEXT,
+        title TEXT,
+        reading_quality REAL NOT NULL DEFAULT 0,
+        word_count INTEGER NOT NULL DEFAULT 0,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_evidence_packages_source ON evidence_packages(source_type, source_ref, updated_at DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_evidence_packages_canonical ON evidence_packages(canonical_url, updated_at DESC)",
+      `CREATE TABLE IF NOT EXISTS production_stage_events (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        status TEXT NOT NULL,
+        detail TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_production_stage_events_job ON production_stage_events(job_id, created_at DESC)",
+      `CREATE TABLE IF NOT EXISTS production_stage_leases (
+        job_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        token TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(job_id, stage)
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_production_stage_leases_expiry ON production_stage_leases(expires_at)",
+      `CREATE TABLE IF NOT EXISTS production_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    ];
+    for(const statement of statements) await db.prepare(statement).run();
+    await db.prepare(`INSERT INTO production_state(key,value,updated_at) VALUES('schema_version',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(PRODUCTION_SCHEMA_VERSION,nowIso()).run();
+  })();
+  if(typeof db==="object"||typeof db==="function")PRODUCTION_SCHEMA_READY.set(db,task);
+  try{return await task;}catch(error){if(typeof db==="object"||typeof db==="function")PRODUCTION_SCHEMA_READY.delete(db);throw error;}
 }
 
 async function event(db,jobId,stage,status,detail=null,metadata=null){
@@ -375,16 +381,16 @@ export async function processProductionRead(env,jobId,{force=false}={}){
     let evidenceResult;
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
-      let record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||5_000,allowCollectedFastPath:!force});
-      if(!record.ok)throw new Error(record.error||"A matéria externa não forneceu leitura útil.");
+      let record=await scrapeArticle(item,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||5_000,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force});
+      if(!record.ok){const error=new Error(record.error||"A matéria externa não forneceu leitura útil.");error.readAttempts=record.attempts||[];throw error;}
       let pack=buildEvidencePack(record,{sourceType:"url",sourceRef:job.sourceRef});
       pack=await translateEvidencePackToPtBrFast(env,pack,{slideCount:job.input?.slideCount||7});
       evidenceResult={ok:true,evidence:pack};
       if(!evidencePtBrReady(pack))throw new Error("A tradução da matéria para português do Brasil não pôde ser concluída.");
     }else if(job.sourceType==="topic"||job.sourceType==="event"){
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
-      evidenceResult=await scrapeTopicToEvidence(topic,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||4_500,allowCollectedFastPath:!force});
-      if(!evidenceResult.ok)throw new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil.");
+      evidenceResult=await scrapeTopicToEvidence(topic,{timeoutMs:Number(env.ARTICLE_READ_TIMEOUT_MS)||4_500,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:!force});
+      if(!evidenceResult.ok){const error=new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil.");error.readAttempts=evidenceResult.attempts||[];throw error;}
       let translatedPack=evidenceResult.evidence||buildEvidencePack(evidenceResult.record,{sourceType:job.sourceType,sourceRef:job.sourceRef,topicId:job.sourceRef});
       translatedPack.sourceType=job.sourceType;translatedPack.sourceRef=job.sourceRef;translatedPack.topicId=job.sourceRef;
       translatedPack.sourceSelection=evidenceResult.selection||translatedPack.sourceSelection||evidenceResult.record?.sourceSelection||null;
@@ -434,7 +440,7 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.4",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.4.5",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     const alreadyReady=await getProductionJob(db,jobId);if(alreadyReady?.status==="ready"&&alreadyReady?.result?.slides?.length)return alreadyReady;
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score,deterministicOnly:Boolean(deterministicOnly)});return job;
   }catch(error){
@@ -629,7 +635,7 @@ export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
   }
   await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});
   await event(env.DB,id,"reading","recovery","Nova tentativa solicitada pelo operador; relendo no mesmo job",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
-  const launched=await launchInteractiveProduction(env,id,{force:true,ctx});
+  const launched=await launchInteractiveProduction(env,id,{force:false,ctx});
   return launched.job||getProductionJob(env.DB,id);
 }
 

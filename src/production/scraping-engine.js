@@ -2,8 +2,9 @@ import { extractArticleFromHtml, validateArticleUrl } from "../ronda/v285/articl
 import { extractArticleVisualsFromHtml } from "../ronda/article-visuals.js";
 import { plainText, stableHash } from "../ronda/v285/parser.js";
 
-const MAX_HTML_BYTES = 4_500_000;
-const DEFAULT_TIMEOUT_MS = 8_000;
+const MAX_HTML_BYTES = 2_500_000;
+const FAST_HTML_CHECK_BYTES = 700_000;
+const DEFAULT_TIMEOUT_MS = 5_000;
 const MIN_USEFUL_WORDS = 45;
 const MAX_ARTICLE_CHARS = 24_000;
 
@@ -81,6 +82,80 @@ function canonicalUrl(html, baseUrl) {
   return linkedUrl(html, baseUrl, "canonical") || baseUrl;
 }
 
+function jsonLdNodes(value, output = []) {
+  if (!value || typeof value !== "object") return output;
+  if (Array.isArray(value)) {
+    for (const item of value) jsonLdNodes(item, output);
+    return output;
+  }
+  output.push(value);
+  if (value["@graph"]) jsonLdNodes(value["@graph"], output);
+  return output;
+}
+
+function jsonLdImage(value) {
+  const values = Array.isArray(value) ? value : [value];
+  for (const entry of values) {
+    const candidate = typeof entry === "string" ? entry : entry?.url || entry?.contentUrl;
+    if (/^https?:\/\//i.test(String(candidate || ""))) return String(candidate);
+  }
+  return null;
+}
+
+function extractJsonLdFastArticle(html) {
+  const scripts = String(html || "").match(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const script of scripts.slice(0, 16)) {
+    const raw = script.replace(/^<script\b[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
+    if (!raw || raw.length > 1_600_000) continue;
+    let parsed = null;
+    try { parsed = JSON.parse(decodeEntities(raw)); } catch { try { parsed = JSON.parse(raw); } catch {} }
+    if (!parsed) continue;
+    for (const node of jsonLdNodes(parsed)) {
+      const types = Array.isArray(node?.["@type"]) ? node["@type"] : [node?.["@type"]];
+      if (!types.some((type) => /^(NewsArticle|Article|Reportage|AnalysisNewsArticle|BlogPosting)$/i.test(String(type || "")))) continue;
+      const content = plainText(node?.articleBody || "");
+      const words = wordCount(content);
+      if (words < MIN_USEFUL_WORDS) continue;
+      const authors = (Array.isArray(node.author) ? node.author : [node.author]).map((author) => plainText(author?.name || author)).filter(Boolean);
+      return {
+        content: content.slice(0, MAX_ARTICLE_CHARS),
+        wordCount: words,
+        title: plainText(node.headline || node.name),
+        subtitle: plainText(node.description).slice(0, 800),
+        author: authors.join(", ") || null,
+        publishedAt: plainText(node.datePublished || node.dateModified) || null,
+        imageUrl: jsonLdImage(node.image),
+        method: "json-ld-fast",
+      };
+    }
+  }
+  return null;
+}
+
+export function evidenceSufficiency(value, slideCount = 7) {
+  const content = typeof value === "string" ? plainText(value) : plainText(value?.content || value?.articleText || "");
+  const words = wordCount(content);
+  const count = Math.max(3, Math.min(15, Number(slideCount) || 7));
+  const requiredFacts = Math.max(3, Math.min(12, count - 1));
+  const facts = sentenceFacts(content, 24);
+  const minimumWords = Math.max(65, count * 15);
+  const ready = words >= minimumWords && facts.length >= requiredFacts;
+  return { ready, facts: facts.length, requiredFacts, words, minimumWords };
+}
+
+function attemptSummary(attempts = []) {
+  const unique = [];
+  const seen = new Set();
+  for (const attempt of attempts) {
+    const method = String(attempt?.method || "rota");
+    const key = `${method}:${attempt?.ok ? "ok" : attempt?.error || "fail"}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(attempt?.ok ? `${method} ok` : `${method}: ${String(attempt?.error || "sem conteúdo").slice(0, 70)}`);
+  }
+  return unique.slice(0, 5).join(" · ");
+}
+
 function cleanParagraphs(fragment) {
   const paragraphs = [];
   const seen = new Set();
@@ -139,7 +214,7 @@ function adapterExtract(html, url) {
   };
 }
 
-async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, { slideCount = 7 } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort("scrape-timeout"), Math.max(800, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
   try {
@@ -149,15 +224,67 @@ async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.4.4",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.4.5",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const contentType = response.headers.get("content-type") || "";
     if (contentType && !/html|xhtml|text\//i.test(contentType)) throw new Error("A URL não retornou HTML");
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const html = decodeHtmlBuffer(bytes.slice(0, MAX_HTML_BYTES), contentType);
-    return { html, finalUrl: validateArticleUrl(response.url || url), status: response.status };
+
+    let bytes;
+    let truncated = false;
+    let earlyStop = false;
+    if (response.body?.getReader) {
+      const reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      let nextInspection = FAST_HTML_CHECK_BYTES;
+      while (total < MAX_HTML_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+        const remaining = MAX_HTML_BYTES - total;
+        const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
+        chunks.push(chunk);
+        total += chunk.byteLength;
+        if (value.byteLength > remaining) truncated = true;
+
+        if (total >= nextInspection) {
+          const joined = new Uint8Array(total);
+          let offset = 0;
+          for (const part of chunks) { joined.set(part, offset); offset += part.byteLength; }
+          const partial = decodeHtmlBuffer(joined, contentType);
+          const fast = extractJsonLdFastArticle(partial) || adapterExtract(partial, response.url || url);
+          if (fast && evidenceSufficiency(fast.content, slideCount).ready) {
+            bytes = joined;
+            earlyStop = true;
+            try { await reader.cancel("ronda-evidence-sufficient"); } catch {}
+            break;
+          }
+          nextInspection += 550_000;
+        }
+      }
+      if (!bytes) {
+        const joined = new Uint8Array(total);
+        let offset = 0;
+        for (const part of chunks) { joined.set(part, offset); offset += part.byteLength; }
+        bytes = joined;
+      }
+    } else {
+      const all = new Uint8Array(await response.arrayBuffer());
+      truncated = all.byteLength > MAX_HTML_BYTES;
+      bytes = all.slice(0, MAX_HTML_BYTES);
+    }
+
+    const html = decodeHtmlBuffer(bytes, contentType);
+    return {
+      html,
+      finalUrl: validateArticleUrl(response.url || url),
+      status: response.status,
+      bytesRead: bytes.byteLength,
+      truncated,
+      earlyStop,
+    };
   } finally { clearTimeout(timer); }
 }
 
@@ -226,102 +353,171 @@ function readingQualityScore(record) {
   if (record.author) score += 4;
   if (record.images?.primary || record.images?.alternatives?.length) score += 8;
   if (/^adapter:/.test(record.extractionMethod || "")) score += 5;
+  if (record.evidenceSufficiency?.ready) score += 12;
   if (record.readMode === "partial") score -= 18;
   return Math.max(0, Math.min(100, score));
 }
 
 export async function scrapeArticle(item, {
   fetcher = fetch,
-  timeoutMs = 12_000,
+  timeoutMs = 7_000,
   browserFetcher = null,
   allowCollectedFastPath = true,
+  slideCount = 7,
+  includeVisuals = true,
 } = {}) {
   const startedAt = Date.now();
   const inputUrl = normalizeArticleIdentity(item?.url);
   const attempts = [];
   let best = null;
+  const adapter = portalAdapterForUrl(inputUrl);
 
   if (allowCollectedFastPath) {
     const warm = collectedArticleFastPath(item);
     if (warm) {
+      const sufficiency = evidenceSufficiency(warm.content, slideCount);
+      warm.evidenceSufficiency = sufficiency;
       warm.readingQuality = readingQualityScore(warm);
-      return {...warm, attempts:[{method:warm.extractionMethod,ok:true,wordCount:warm.wordCount,fastPath:true}],durationMs:Date.now()-startedAt};
+      return {...warm, evidenceSufficiency:sufficiency, attempts:[{method:warm.extractionMethod,ok:true,wordCount:warm.wordCount,fastPath:true}],durationMs:Date.now()-startedAt};
     }
   }
 
   const consider = (candidate) => {
-    if (!candidate?.ok) return;
+    if (!candidate?.ok) return false;
+    candidate.evidenceSufficiency = evidenceSufficiency(candidate.content, slideCount);
     candidate.readingQuality = readingQualityScore(candidate);
-    if (!best || candidate.readingQuality > best.readingQuality || (candidate.readingQuality === best.readingQuality && candidate.wordCount > best.wordCount)) best = candidate;
+    if (!best || candidate.evidenceSufficiency.ready && !best.evidenceSufficiency?.ready
+      || candidate.readingQuality > best.readingQuality
+      || (candidate.readingQuality === best.readingQuality && candidate.wordCount > best.wordCount)) best = candidate;
+    return Boolean(candidate.evidenceSufficiency.ready && candidate.readingQuality >= 55);
   };
 
   try {
-    const fetched = await fetchHtml(inputUrl, fetcher, Math.min(6_500, timeoutMs));
+    const directBudget = Math.min(adapter ? 3_800 : 4_500, Math.max(1_500, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+    const fetched = await fetchHtml(inputUrl, fetcher, directBudget, { slideCount });
     const html = fetched.html;
     const finalUrl = fetched.finalUrl;
-    const generic = extractArticleFromHtml(html, item);
-    let visuals = null;
-    try { visuals = extractArticleVisualsFromHtml(html, { articleUrl: finalUrl, resolvedUrl: finalUrl, sourceName:item?.sourceName || item?.collectorName || "" }); } catch {}
-    const common = {
+
+    const baseMeta = {
       ok:true,
       url: inputUrl,
       canonicalUrl: normalizeArticleIdentity(canonicalUrl(html, finalUrl)),
       resolvedUrl: finalUrl,
       sourceName: item?.sourceName || item?.collectorName || hostname(finalUrl) || "Fonte",
-      title: generic.title || metaContent(html,"og:title") || plainText(item?.title) || "Notícia sem título",
-      subtitle: generic.description || metaContent(html,"og:description") || metaContent(html,"description") || plainText(item?.description),
-      author: generic.byline || metaContent(html,"author") || null,
-      publishedAt: generic.publishedAt || item?.publishedAt || null,
-      images: visuals,
+      title: metaContent(html,"og:title") || plainText(item?.title) || "Notícia sem título",
+      subtitle: metaContent(html,"og:description") || metaContent(html,"description") || plainText(item?.description),
+      author: metaContent(html,"author") || null,
+      publishedAt: item?.publishedAt || null,
+      images: null,
       readMode:"full",
       contentLevel:"article",
       degraded:false,
       error:null,
+      bytesRead:Number(fetched.bytesRead)||0,
+      streamEarlyStop:Boolean(fetched.earlyStop),
     };
-    const genericCandidate = { ...common, content:generic.content, wordCount:generic.wordCount, extractionMethod:`generic:${generic.method || "html"}`, adapter:null };
-    attempts.push({method:genericCandidate.extractionMethod,ok:generic.wordCount>=MIN_USEFUL_WORDS,wordCount:generic.wordCount});
-    if (generic.wordCount >= MIN_USEFUL_WORDS) consider(genericCandidate);
+
+    // Escada adaptativa: JSON-LD e adapter conhecido vêm antes do parser genérico.
+    const jsonLd = extractJsonLdFastArticle(html);
+    if (jsonLd) {
+      const candidate = {
+        ...baseMeta,
+        title:jsonLd.title || baseMeta.title,
+        subtitle:jsonLd.subtitle || baseMeta.subtitle,
+        author:jsonLd.author || baseMeta.author,
+        publishedAt:jsonLd.publishedAt || baseMeta.publishedAt,
+        content:jsonLd.content,
+        wordCount:jsonLd.wordCount,
+        extractionMethod:jsonLd.method,
+        adapter:null,
+      };
+      attempts.push({method:jsonLd.method,ok:true,wordCount:jsonLd.wordCount,bytesRead:fetched.bytesRead});
+      if (consider(candidate)) {
+        if (includeVisuals) {
+          try { candidate.images = extractArticleVisualsFromHtml(html,{articleUrl:finalUrl,resolvedUrl:finalUrl,sourceName:candidate.sourceName}); } catch {}
+        }
+        return {...candidate,attempts,durationMs:Date.now()-startedAt,readingQuality:readingQualityScore(candidate)};
+      }
+    } else attempts.push({method:"json-ld-fast",ok:false,error:"articleBody não disponível"});
 
     const adapted = adapterExtract(html, finalUrl);
     if (adapted) {
-      const adapterCandidate = { ...common, content:adapted.content, wordCount:adapted.wordCount, extractionMethod:adapted.method, adapter:adapted.adapter };
-      attempts.push({method:adapted.method,ok:true,wordCount:adapted.wordCount});
-      consider(adapterCandidate);
-    }
+      const candidate = {...baseMeta,content:adapted.content,wordCount:adapted.wordCount,extractionMethod:adapted.method,adapter:adapted.adapter};
+      attempts.push({method:adapted.method,ok:true,wordCount:adapted.wordCount,bytesRead:fetched.bytesRead});
+      if (consider(candidate)) {
+        if (includeVisuals) {
+          try { candidate.images = extractArticleVisualsFromHtml(html,{articleUrl:finalUrl,resolvedUrl:finalUrl,sourceName:candidate.sourceName}); } catch {}
+        }
+        return {...candidate,attempts,durationMs:Date.now()-startedAt,readingQuality:readingQualityScore(candidate)};
+      }
+    } else if (adapter) attempts.push({method:`adapter:${adapter.id}`,ok:false,error:"conteúdo principal insuficiente"});
 
-    if ((!best || best.wordCount < 90) && Date.now() - startedAt < timeoutMs - 1_500) {
+    const generic = extractArticleFromHtml(html, item);
+    const genericCandidate = {
+      ...baseMeta,
+      title:generic.title || baseMeta.title,
+      subtitle:generic.description || baseMeta.subtitle,
+      author:generic.byline || baseMeta.author,
+      publishedAt:generic.publishedAt || baseMeta.publishedAt,
+      content:generic.content,
+      wordCount:generic.wordCount,
+      extractionMethod:`generic:${generic.method || "html"}`,
+      adapter:null,
+    };
+    attempts.push({method:genericCandidate.extractionMethod,ok:generic.wordCount>=MIN_USEFUL_WORDS,wordCount:generic.wordCount,bytesRead:fetched.bytesRead});
+    if (generic.wordCount >= MIN_USEFUL_WORDS) consider(genericCandidate);
+
+    // AMP só é aberto quando ainda não há evidência suficiente para os slides pedidos.
+    const sufficient = best?.evidenceSufficiency?.ready && Number(best?.readingQuality) >= 55;
+    if (!sufficient && Date.now() - startedAt < timeoutMs - 900) {
       const amp = linkedUrl(html, finalUrl, "amphtml");
       if (amp && amp !== finalUrl) {
         try {
-          const ampFetched = await fetchHtml(amp, fetcher, Math.min(4_000, Math.max(1_000, timeoutMs - (Date.now()-startedAt))));
-          const ampGeneric = extractArticleFromHtml(ampFetched.html, item);
-          let ampVisuals = visuals;
-          try { ampVisuals = extractArticleVisualsFromHtml(ampFetched.html,{articleUrl:ampFetched.finalUrl,resolvedUrl:ampFetched.finalUrl,sourceName:common.sourceName}) || visuals; } catch {}
-          const ampCandidate = {...common,canonicalUrl:canonicalUrl(ampFetched.html,finalUrl),content:ampGeneric.content,wordCount:ampGeneric.wordCount,images:ampVisuals,extractionMethod:`amp:${ampGeneric.method || "html"}`};
-          attempts.push({method:ampCandidate.extractionMethod,ok:ampCandidate.wordCount>=MIN_USEFUL_WORDS,wordCount:ampCandidate.wordCount});
-          if (ampCandidate.wordCount>=MIN_USEFUL_WORDS) consider(ampCandidate);
+          const remaining = Math.max(900, Math.min(2_500, timeoutMs - (Date.now()-startedAt)));
+          const ampFetched = await fetchHtml(amp, fetcher, remaining, { slideCount });
+          const ampJson = extractJsonLdFastArticle(ampFetched.html);
+          const ampAdapted = adapterExtract(ampFetched.html, ampFetched.finalUrl);
+          const ampGeneric = (!ampJson && !ampAdapted) ? extractArticleFromHtml(ampFetched.html, item) : null;
+          const source = ampJson || ampAdapted || (ampGeneric ? {content:ampGeneric.content,wordCount:ampGeneric.wordCount,method:`generic:${ampGeneric.method||"html"}`} : null);
+          if (source) {
+            const candidate = {...baseMeta,canonicalUrl:normalizeArticleIdentity(canonicalUrl(ampFetched.html,finalUrl)),resolvedUrl:ampFetched.finalUrl,content:source.content,wordCount:source.wordCount,extractionMethod:`amp:${source.method||"html"}`,adapter:ampAdapted?.adapter||null};
+            attempts.push({method:candidate.extractionMethod,ok:candidate.wordCount>=MIN_USEFUL_WORDS,wordCount:candidate.wordCount,bytesRead:ampFetched.bytesRead});
+            if(candidate.wordCount>=MIN_USEFUL_WORDS)consider(candidate);
+          }
         } catch (error) { attempts.push({method:"amp",ok:false,error:String(error?.message||error).slice(0,120)}); }
-      }
+      } else attempts.push({method:"amp",ok:false,error:"não disponível"});
+    }
+
+    if (best && includeVisuals) {
+      try { best.images = extractArticleVisualsFromHtml(html,{articleUrl:finalUrl,resolvedUrl:finalUrl,sourceName:best.sourceName}); } catch {}
     }
   } catch (error) {
     attempts.push({method:"direct-html",ok:false,error:String(error?.message||error).slice(0,160)});
   }
 
-  if (!best) consider(collectedFallback(item));
+  if (!best) {
+    const fallback = collectedFallback(item);
+    if (fallback) {
+      fallback.evidenceSufficiency = evidenceSufficiency(fallback.content, slideCount);
+      attempts.push({method:"collected-fallback",ok:true,wordCount:fallback.wordCount});
+      consider(fallback);
+    } else attempts.push({method:"collected-fallback",ok:false,error:"snapshot/RSS sem conteúdo suficiente"});
+  }
 
-  // Browser rendering é deliberadamente último recurso. Só é executado quando um
-  // browserFetcher explícito estiver configurado; a v0.9.7 não tenta contornar paywall/CAPTCHA.
-  if ((!best || best.readingQuality < 55) && typeof browserFetcher === "function") {
+  // Browser rendering continua sendo último recurso e nunca tenta burlar paywall/CAPTCHA.
+  if ((!best || !best.evidenceSufficiency?.ready || best.readingQuality < 55) && typeof browserFetcher === "function") {
     try {
       const rendered = await browserFetcher(inputUrl);
       const html = String(rendered?.html || "");
       if (html) {
-        const generic = extractArticleFromHtml(html,item);
+        const fast = extractJsonLdFastArticle(html) || adapterExtract(html, rendered?.url || inputUrl);
+        const generic = fast ? null : extractArticleFromHtml(html,item);
+        const source = fast || generic;
         const candidate = {
-          ok:generic.wordCount>=MIN_USEFUL_WORDS,url:inputUrl,canonicalUrl:rendered?.url||inputUrl,
-          sourceName:item?.sourceName||item?.collectorName||hostname(inputUrl)||"Fonte",title:generic.title||item?.title||"Notícia sem título",
-          subtitle:generic.description||item?.description||"",author:generic.byline||null,publishedAt:generic.publishedAt||item?.publishedAt||null,
-          content:generic.content,wordCount:generic.wordCount,extractionMethod:`browser:${generic.method||"html"}`,adapter:null,contentLevel:"article",readMode:"full",images:null,degraded:false,error:null,
+          ok:Number(source?.wordCount)>=MIN_USEFUL_WORDS,url:inputUrl,canonicalUrl:rendered?.url||inputUrl,
+          sourceName:item?.sourceName||item?.collectorName||hostname(inputUrl)||"Fonte",title:source?.title||item?.title||"Notícia sem título",
+          subtitle:source?.description||item?.description||"",author:source?.author||source?.byline||null,publishedAt:source?.publishedAt||item?.publishedAt||null,
+          content:source?.content||"",wordCount:Number(source?.wordCount)||0,extractionMethod:`browser:${source?.method||"html"}`,adapter:null,contentLevel:"article",readMode:"full",images:null,degraded:false,error:null,
         };
         attempts.push({method:candidate.extractionMethod,ok:candidate.ok,wordCount:candidate.wordCount});
         if(candidate.ok)consider(candidate);
@@ -330,9 +526,10 @@ export async function scrapeArticle(item, {
   }
 
   if (!best) {
-    return {ok:false,url:inputUrl,canonicalUrl:inputUrl,sourceName:item?.sourceName||item?.collectorName||hostname(inputUrl)||"Fonte",title:item?.title||"Notícia sem título",content:"",wordCount:0,readingQuality:0,readMode:"failed",extractionMethod:null,adapter:null,attempts,error:attempts.at(-1)?.error||"Conteúdo principal indisponível"};
+    const summary = attemptSummary(attempts);
+    return {ok:false,url:inputUrl,canonicalUrl:inputUrl,sourceName:item?.sourceName||item?.collectorName||hostname(inputUrl)||"Fonte",title:item?.title||"Notícia sem título",content:"",wordCount:0,readingQuality:0,readMode:"failed",extractionMethod:null,adapter:null,attempts,error:`Conteúdo principal indisponível${summary?`. Rotas: ${summary}`:""}`.slice(0,500)};
   }
-  return {...best,attempts,durationMs:Date.now()-startedAt,readingQuality:readingQualityScore(best)};
+  return {...best,attempts,durationMs:Date.now()-startedAt,readingQuality:readingQualityScore(best),evidenceSufficiency:best.evidenceSufficiency||evidenceSufficiency(best.content,slideCount)};
 }
 
 function sentenceFacts(text, limit = 32) {
@@ -432,7 +629,7 @@ export async function scrapeTopicToEvidence(topic, options = {}) {
   };
 
   const register=(role,item,record)=>{
-    const attempt={role,url:item?.url||null,sourceName:item?.sourceName||item?.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,wordCount:Number(record?.wordCount)||0,method:record?.extractionMethod||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0};
+    const attempt={role,url:item?.url||null,sourceName:item?.sourceName||item?.collectorName||"Fonte",ok:Boolean(record?.ok),quality:Number(record?.readingQuality)||0,wordCount:Number(record?.wordCount)||0,method:record?.extractionMethod||null,error:record?.error||null,durationMs:Number(record?.durationMs)||0,routes:Array.isArray(record?.attempts)?record.attempts.slice(0,8):[]};
     attempts.push(attempt);
     if(record&&typeof record==="object")record.sourceSelection={...selection,selectedRole:role,attempts:[...attempts]};
     return attempt;
@@ -445,17 +642,24 @@ export async function scrapeTopicToEvidence(topic, options = {}) {
       if(warm){warm.readingQuality=readingQualityScore(warm);warm.durationMs=0;register(role,item,warm);if(warm.readingQuality>=55)return warm;}
     }
     let record;
-    try{record=await scrapeArticle(item,{...options,allowCollectedFastPath:false});}
+    try{
+      const adapterKnown=Boolean(portalAdapterForUrl(item?.url));
+      const candidateTimeout=Math.min(Number(options.timeoutMs)||4_500,adapterKnown?3_800:4_500);
+      record=await scrapeArticle(item,{...options,timeoutMs:candidateTimeout,slideCount:Number(options.slideCount)||7,allowCollectedFastPath:false});
+    }
     catch(error){record={ok:false,url:item.url,error:String(error?.message||error),readingQuality:0,wordCount:0,durationMs:0};}
     register(role,item,record);
-    return record?.ok&&Number(record.readingQuality)>=55?record:null;
+    return record?.ok&&(Number(record.readingQuality)>=55||record?.evidenceSufficiency?.ready&&Number(record.readingQuality)>=40)?record:null;
   };
 
   // Política v0.9.7.2: uma única matéria é lida. Uma segunda fonte só é aberta
   // se a principal realmente não produzir leitura útil; nunca fazemos leitura paralela de várias fontes.
   let selected=await readCandidate(primary,"primary");
   if(!selected&&backup)selected=await readCandidate(backup,"backup");
-  if(!selected)return {ok:false,error:"A fonte principal e a única fonte de backup não forneceram leitura útil.",attempts,selection};
+  if(!selected){
+    const detail=attempts.map((attempt)=>`${attempt.sourceName}: ${attempt.error||attempt.routes?.map((route)=>route.method).filter(Boolean).join(" → ")||"sem conteúdo útil"}`).join(" · ");
+    return {ok:false,error:`A fonte principal e a única fonte de backup não forneceram leitura útil.${detail?` ${detail}`:""}`.slice(0,600),attempts,selection};
+  }
   selected.sourceSelection={...selection,selectedRole:selected.sourceSelection?.selectedRole||attempts.at(-1)?.role||"primary",attempts:[...attempts]};
   const evidence=buildEvidencePack(selected,{sourceType:"topic",sourceRef:topic?.id||null,topicId:topic?.id||null});
   evidence.sourceSelection=selected.sourceSelection;

@@ -1,16 +1,38 @@
-# RONDA ONE Cloud v0.9.7.4.4 — Terminal Carousel Completion
+# RONDA ONE Cloud v0.9.7.4.5 — Adaptive Scraping + Evidence Sufficiency
 
-A v0.9.7.4.4 é uma correção cumulativa de conclusão do Production Engine. O foco é garantir que um carrossel com Evidence Pack válido chegue a um estado terminal sem disputa entre tentativas concorrentes.
+A v0.9.7.4.5 é cumulativa sobre a v0.9.7.4.4 e ataca o principal gargalo observado no FORMA: matérias que ficavam presas em **Leitura** e exigiam múltiplas tentativas manuais. A primeira produção agora percorre uma escada adaptativa de leitura e muda de rota automaticamente.
 
-## Correções principais
+## Leitura adaptativa
 
-- lease por etapa para impedir leitura/IA/fallback concorrentes no mesmo job;
-- `ready` tornou-se estado terminal protegido contra tentativas lentas que terminem depois;
-- falha da IA aciona automaticamente o gerador determinístico quando as evidências já existem;
-- jobs `failed` com Evidence Pack recebem uma tentativa automática de conclusão segura;
-- o FORMA não dispara outra IA apenas porque o polling ficou alguns segundos sem progresso;
-- frontend e backend usam deadlines compatíveis, com fallback antes do limite visual;
-- retry manual continua reutilizando o mesmo job e o mesmo Evidence Pack.
+```text
+Evidence/cache existente
+        ↓
+JSON-LD / NewsArticle
+        ↓
+Adapter do portal
+        ↓
+HTML genérico
+        ↓
+AMP somente se necessário
+        ↓
+1 fonte backup (pautas da Ronda)
+        ↓
+Fallback parcial seguro
+```
+
+O leitor para assim que o **Evidence Sufficiency Gate** identifica evidências distintas suficientes para a quantidade de slides pedida. Isso evita esperar uma matéria maior, abrir AMP ou repetir o mesmo parser apenas para elevar a contagem de palavras.
+
+## Performance
+
+- streaming do HTML com early-stop quando as evidências já bastam;
+- teto de leitura do HTML reduzido de 4,5 MB para 2,5 MB;
+- adapters conhecidos e JSON-LD vêm antes do parser genérico;
+- schema D1 do Production Engine é inicializado uma vez por isolate, em vez de repetir DDL em cada evento do job;
+- falhas registram as rotas tentadas para distinguir timeout, ausência de JSON-LD, adapter insuficiente e ausência de snapshot.
+
+## Política de retry
+
+O botão **Tentar novamente** continua no FORMA, mas não substitui a escada automática. Quando usado, o mesmo `jobId` é mantido e a recuperação pode reaproveitar cache/snapshot e Evidence Pack existente.
 
 # RONDA ONE Cloud v0.9.7.4.2 — Retry UX + Same Job Recovery
 

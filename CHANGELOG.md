@@ -1,3 +1,16 @@
+# v0.9.7.4.5 — Adaptive Scraping + Evidence Sufficiency
+
+- leitura adaptativa em uma única tentativa: cache/snapshot → JSON-LD → adapter → parser genérico → AMP → backup → fallback parcial seguro;
+- **Evidence Sufficiency Gate** encerra a leitura assim que há fatos suficientes para a quantidade de slides solicitada;
+- JSON-LD e adapter específico são tentados antes do parser genérico;
+- AMP deixa de ser uma segunda consulta automática quando a leitura já é editorialmente suficiente;
+- download HTML passa a usar streaming com interrupção antecipada quando o conteúdo já basta, com teto reduzido para 2,5 MB;
+- fonte principal falha e a única fonte backup é acionada automaticamente na mesma produção, sem exigir novo clique;
+- retry manual reutiliza cache/snapshot e a escada adaptativa em vez de repetir obrigatoriamente a mesma leitura forçada;
+- diagnóstico de falha passa a registrar as rotas realmente tentadas;
+- inicialização do schema do Production Engine é memoizada por isolate, removendo DDL repetitivo do hot path;
+- preservados Content First, Single Source, PT-BR, créditos, Multi-AI, Quality Gate, Retry Same Job e Terminal Completion.
+
 # v0.9.7.4.4 — Projects + UI Security Cleanup
 
 - **Salvar projeto** agora persiste o documento completo no D1 e o torna visível na aba **Projetos**.

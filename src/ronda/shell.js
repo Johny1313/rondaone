@@ -1,7 +1,7 @@
-export const PLATFORM_VERSION='0.9.7.4.4';
-export const RONDA_EDITORIAL_VERSION='2.9.7.4.4';
+export const PLATFORM_VERSION='0.9.7.4.5';
+export const RONDA_EDITORIAL_VERSION='2.9.7.4.5';
 export const ASSET_REV=`${RONDA_EDITORIAL_VERSION}-097-forma-production`;
-export const HOTFIX_REV='0.9.7.4.4-projects-ui-security-cleanup';
+export const HOTFIX_REV='0.9.7.4.5-adaptive-scraping';
 
 export const MODULE_BAR=`<div id="rondaOneBar"><strong>RONDA ONE <span>${PLATFORM_VERSION}</span></strong><a class="active" href="/ronda">RONDA</a><a href="/design/">DESIGN</a><a href="/projects/">PROJETOS</a><em>Ronda Editorial ${RONDA_EDITORIAL_VERSION} · Mesa Editorial Inteligente · Source Recovery · Full 39 Sources · Access & Stability · Carousel Stability · FORMA Production Engine · Evidence Pack · Scraping adapters · Multi-AI</em></div>`;
 export const SHELL_CSS=`<link rel="stylesheet" href="/ronda/ronda-one-shell.css?v=${HOTFIX_REV}">`;
