@@ -1,3 +1,21 @@
+# v0.9.7.4.9 — Editorial Desk Tracking + Main/Novidades
+
+## Mesa editorial operacional
+- adiciona status independente da classificação editorial: Disponível, Em produção, No FORMA e Concluída;
+- registra usuário da pauta/produção, envio ao FORMA e conclusão;
+- mantém histórico auditável por evento editorial com data/hora e responsável;
+- "Produzir no FORMA" registra o handoff antes de abrir o editor;
+- exportação final PNG de uma pauta rastreada marca a pauta como concluída com o usuário logado;
+- downloads auxiliares de imagens IA não concluem a pauta.
+
+## Principal + Novidades
+- atualizações editoriais recentes passam a participar da sessão Principal;
+- radarAt de eventos editoriais é considerado em todas as janelas quando representa atividade mais nova que a publicação original;
+- preserva publishedAt para rastreabilidade da fonte.
+
+## Compatibilidade
+- mantém o HOTFIX LOCK v0.9.7.4.8, circuit breaker, SWR, Browser Run limitado e descoberta de alto volume sem reescrita arquitetural.
+
 # v0.9.7.4.8 — HOTFIX LOCK Stability
 
 - formaliza Circuit Breaker por fonte com `CLOSED`, `OPEN` e `HALF_OPEN`;

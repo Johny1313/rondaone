@@ -1,4 +1,4 @@
-# RONDA ONE Cloud v0.9.7.4.8 — HOTFIX LOCK Stability
+# RONDA ONE Cloud v0.9.7.4.9 — Editorial Desk Tracking + Main/Novidades
 
 Atualização incremental sobre a v0.9.7.4.7. Não redesenha interface, não troca a arquitetura editorial e não remove cache, fallback, filas, scraping híbrido, Browser Run, Evidence Pack ou mecanismos de recuperação.
 
