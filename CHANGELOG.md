@@ -1,3 +1,12 @@
+# v0.9.7.4.4 — Projects + UI Security Cleanup
+
+- **Salvar projeto** agora persiste o documento completo no D1 e o torna visível na aba **Projetos**.
+- Projetos criados diretamente no FORMA podem ser reabertos pelo mesmo editor, preservando pranchetas, camadas, Content Lock e metadados.
+- Controles visíveis de **Versões / Enviar revisão** saíram da operação do FORMA; infraestrutura de histórico permanece no backend.
+- Painel de **Integrações** removido da interface.
+- Remove.bg deixou de usar chave no navegador/localStorage e passa por endpoint autenticado com secret `REMOVEBG_API_KEY`.
+- GIPHY continua pelo backend e não exibe chave/configuração na interface.
+
 # RONDA ONE Cloud v0.9.7.4.3 — Terminal Carousel Completion
 
 ## 0.9.7.4.3

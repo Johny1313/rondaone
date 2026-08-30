@@ -35,7 +35,7 @@
 #customSizeBtn{display:inline-flex!important;align-items:center}
 .stage-viewport{min-height:320px}
 @media(max-width:1280px){
-  .topbar #integrationBtn,.topbar #saveProjectBtn{display:none}
+  .topbar #integrationBtn{display:none}
   .topbar #customSizeBtn{display:inline-flex!important}
 }
 
@@ -126,7 +126,7 @@
       <div class="brand-wrap">
         <div class="brand-mark">F</div>
         <div>
-          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.7</b></div>
+          <div class="brand">RONDA <span>ONE · DESIGN</span><b>0.9.7.4.4</b></div>
           <div class="brand-sub">Editor visual integrado à Ronda Editorial</div>
         </div>
       </div>
@@ -137,8 +137,8 @@
           <select id="presetSelect" title="Formato"></select>
         </div>
         <button class="secondary-btn" id="customSizeBtn">Tamanho personalizado</button>
-        <button class="secondary-btn" id="integrationBtn">Integrações</button>
-        <button class="secondary-btn" id="saveProjectBtn">Salvar projeto</button><button class="secondary-btn" id="saveRevisionBtn" title="Salvar uma versão editorial no RONDA">Salvar versão</button><button class="secondary-btn" id="versionsBtn" title="Ver versões salvas">Versões</button><button class="secondary-btn" id="submitReviewBtn" title="Enviar a versão atual para revisão">Enviar revisão</button>
+        <button class="secondary-btn" id="saveProjectBtn">Salvar projeto</button>
+        <span id="legacyWorkflowControls" hidden aria-hidden="true"><button id="saveRevisionBtn" type="button">Salvar versão</button><button id="versionsBtn" type="button">Versões</button><button id="submitReviewBtn" type="button">Enviar revisão</button></span>
         <button class="secondary-btn" id="saveTemplateBtn">Salvar template</button>
         <button class="primary-btn" id="exportBtn">Exportar PNG</button>
       </div>
@@ -231,7 +231,7 @@
             <div class="uploads-grid" id="uploadsGrid"></div>
           </div>
           <div class="panel-page" data-page="gifs">
-            <div class="panel-heading-row"><div><h2>GIFs</h2><p>Biblioteca online com busca via GIPHY.</p></div><button class="mini-btn" id="gifSettingsBtn">Status</button></div>
+            <div class="panel-heading-row"><div><h2>GIFs</h2><p>Biblioteca online com busca protegida pelo backend.</p></div></div>
             <div class="gif-search-row"><input class="search-input" id="gifSearch" maxlength="50" placeholder="Buscar GIF: reação, esporte..." /><button class="primary-btn" id="gifSearchBtn">Buscar</button></div>
             <div class="gif-actions"><button class="secondary-btn" id="gifTrendingBtn">Em alta</button><span id="gifApiHint">GIPHY direto no navegador</span></div>
             <div class="gif-grid" id="gifGrid"></div>
@@ -506,7 +506,7 @@
               <label class="field-label">Ajuste da imagem</label><select id="propObjectFit"><option value="cover">Preencher</option><option value="contain">Conter</option></select>
               <label class="secondary-btn full file-btn">Substituir imagem<input type="file" id="replaceImage" accept="image/*" hidden /></label>
               <div class="upscale-box"><strong>Upscale HQ</strong><p>Aumenta a resolução da imagem mantendo o tamanho do elemento no design e aplica nitidez leve.</p><div class="upscale-actions"><select id="upscaleFactor"><option value="2">2×</option><option value="4">4×</option></select><button type="button" class="primary-soft upscale-btn" id="upscaleImageBtn">Melhorar qualidade</button></div><div class="upscale-status" id="upscaleImageStatus"></div></div>
-              <button class="remove-bg-btn" id="removeBgBtn">✦ Remover fundo</button><button class="tiny-link" id="removeBgConfigFromImage">Configurar chave Remove.bg</button>
+              <button class="remove-bg-btn" id="removeBgBtn">✦ Remover fundo</button>
             </div>
 
             <div class="dynamic-fields" id="maskFields">
@@ -553,13 +553,6 @@
 
   <div class="modal-backdrop hidden" id="customSizeModal"><div class="modal"><button class="modal-x" data-close-modal="customSizeModal">×</button><h2>Área de trabalho personalizada</h2><p>Defina qualquer dimensão em pixels.</p><div class="field-grid two modal-fields"><label>Largura (px)<input id="customWidth" type="number" min="64" max="8192" value="1920" /></label><label>Altura (px)<input id="customHeight" type="number" min="64" max="8192" value="1080" /></label></div><label class="check-row"><input id="saveCustomPreset" type="checkbox" /> Salvar como preset</label><label id="customPresetNameWrap" class="hidden">Nome do preset<input id="customPresetName" placeholder="Ex.: Telão estúdio" /></label><div class="modal-actions"><button class="secondary-btn" id="swapCustomSize">↔ Inverter</button><button class="primary-btn" id="applyCustomSize">Criar área</button></div></div></div>
 
-  <div class="modal-backdrop hidden" id="integrationModal"><div class="modal"><button class="modal-x" data-close-modal="integrationModal">×</button><h2>Integrações</h2><p>Configurações salvas apenas neste navegador.</p>
-    <div class="integration-card"><div><strong>Remove.bg</strong><span>Recorte automático de fundo usando sua licença/API key.</span></div><span class="status-pill" id="removeBgStatus">não configurado</span></div>
-    <label>API Key Remove.bg<input id="removeBgKey" type="password" autocomplete="off" placeholder="Cole sua API key" /></label>
-    <div class="integration-card integration-gap"><div><strong>GIPHY</strong><span>A busca de GIFs é feita diretamente pelo navegador, seguindo a integração atual do GIPHY. A chave não é exibida na interface.</span></div><span class="status-pill" id="giphyStatus">verificando</span></div>
-    <div class="privacy-note">A chave do GIPHY fica no .env local e é entregue ao navegador apenas para a chamada client-side; por isso pode ser vista no DevTools. A chave do Remove.bg continua salva apenas neste navegador nesta versão.</div>
-    <div class="modal-actions"><button class="secondary-btn" id="clearIntegrationKeys">Limpar Remove.bg</button><button class="primary-btn" id="saveIntegrationKeys">Salvar Remove.bg</button></div></div></div>
-
   <div class="workspace-resize-badge hidden" id="workspaceResizeBadge">318 px</div>
   <script src="/design/smart-template-engine.js?v=0971-fast-carousel"></script>
   <script>
@@ -569,7 +562,6 @@
   const LS_PROJECT = 'rondaDesign.project.v2';
   const LS_TEMPLATES = 'rondaDesign.templates.v2';
   const LS_CUSTOM_PRESETS = 'rondaDesign.customPresets.v1';
-  const LS_REMOVEBG = 'rondaDesign.removeBgKey.v1';
   const DB_NAME = 'rondaDesign.assets.v1';
   const DB_VERSION = 1;
 
@@ -1124,7 +1116,6 @@
   function cleanFontFamily(name){return name.replace(/\.[^.]+$/,'').replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim().slice(0,60)||'Fonte personalizada';}
   $('#fontUpload').addEventListener('change',async e=>{for(const file of [...e.target.files]){if(!/\.(ttf|otf|woff2?|TTF|OTF|WOFF2?)$/.test(file.name))continue;const data=await readFile(file),font={id:'font_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),family:cleanFontFamily(file.name),name:file.name,data};const ok=await registerFont(font);if(ok){await saveFontDB(font);state.uploadedFonts.push(font);}else showToast(`Não foi possível carregar ${file.name}`);}e.target.value='';renderFonts();renderProperties();showToast('Fontes salvas no navegador');});
 
-  function getRemoveBgKey(){try{return localStorage.getItem(LS_REMOVEBG)||'';}catch{return '';}}
   async function imageNaturalSize(src){try{const img=await loadImage(src);return {w:img.naturalWidth||img.width,h:img.naturalHeight||img.height};}catch{return null;}}
   function updateImageResolutionStatus(e,selector){const out=$(selector);if(!out)return;if(!e?.src){out.textContent='';return;}if(e.sourceWidth&&e.sourceHeight){out.textContent=`Fonte: ${e.sourceWidth} × ${e.sourceHeight} px`;return;}const token=e.src;out.textContent='Lendo resolução…';imageNaturalSize(token).then(size=>{const cur=selected();if(!size||!cur||cur.src!==token)return;cur.sourceWidth=size.w;cur.sourceHeight=size.h;out.textContent=`Fonte: ${size.w} × ${size.h} px`;});}
   function sharpenCanvas(canvas,amount=.22){const w=canvas.width,h=canvas.height;if(w*h>12000000)return canvas;const ctx=canvas.getContext('2d',{willReadFrequently:true}),src=ctx.getImageData(0,0,w,h),d=src.data,out=new Uint8ClampedArray(d),row=w*4,a=clamp(amount,0,.5);for(let y=1;y<h-1;y++){for(let x=1;x<w-1;x++){const i=y*row+x*4;for(let c=0;c<3;c++){const avg=(d[i-row+c]+d[i+row+c]+d[i-4+c]+d[i+4+c]+d[i+c]*4)/8;out[i+c]=clamp(Math.round(d[i+c]+(d[i+c]-avg)*a),0,255);}}}ctx.putImageData(new ImageData(out,w,h),0,0);return canvas;}
@@ -1155,11 +1146,6 @@
       const msg=err?.message||'Falha no GIPHY';status.textContent='sem conexão';status.classList.remove('ok');hint.textContent=msg;return false;
     }
   }
-  function updateIntegrationStatus(){const r=getRemoveBgKey();$('#removeBgKey').value=r;$('#removeBgStatus').textContent=r?'configurado':'não configurado';$('#removeBgStatus').classList.toggle('ok',!!r);checkGiphyBackend();}
-  function updateRemoveBgStatus(){updateIntegrationStatus();}
-  $('#integrationBtn').onclick=()=>{updateIntegrationStatus();openModal('integrationModal');};$('#removeBgConfigFromImage').onclick=()=>{updateIntegrationStatus();openModal('integrationModal');};$('#gifSettingsBtn').onclick=()=>{updateIntegrationStatus();openModal('integrationModal');};
-  $('#saveIntegrationKeys').onclick=()=>{const r=$('#removeBgKey').value.trim();try{if(r)localStorage.setItem(LS_REMOVEBG,r);else localStorage.removeItem(LS_REMOVEBG);showToast('Remove.bg salvo');}catch{showToast('O navegador bloqueou o salvamento da chave');}updateIntegrationStatus();closeModal('integrationModal');};
-  $('#clearIntegrationKeys').onclick=()=>{try{localStorage.removeItem(LS_REMOVEBG);}catch{}updateIntegrationStatus();showToast('Chave Remove.bg removida');};
 
   function renderGifResults(){const grid=$('#gifGrid'),empty=$('#gifEmpty');grid.innerHTML='';if(!state.gifResults.length){empty.style.display='block';empty.textContent='Pesquise um termo ou veja os GIFs em alta.';return;}empty.style.display='none';state.gifResults.forEach(g=>{const b=document.createElement('button');b.className='gif-card';const preview=g.images?.fixed_width_small?.url||g.images?.fixed_width?.url||g.images?.downsized?.url||g.images?.original?.url;b.innerHTML=`<img src="${preview||''}" alt="${escapeHtml(g.title||'GIF')}">`;b.title='Adicionar GIF ao design';b.onclick=()=>{const src=g.images?.original?.url||preview;if(src){addImage(src,g.title||'GIF');showToast('GIF adicionado');}};grid.appendChild(b);});}
   async function loadGifs(mode='search'){let q=$('#gifSearch').value.trim();if(q.length>50){q=q.slice(0,50);$('#gifSearch').value=q;}if(mode==='search'&&!q){showToast('Digite um termo para buscar GIFs');return;}const btn=mode==='search'?$('#gifSearchBtn'):$('#gifTrendingBtn'),old=btn.textContent;btn.disabled=true;btn.textContent='Carregando…';try{const params={limit:'24',rating:'g'};if(mode==='search'){params.q=q;params.lang='pt';}const j=await giphyRequest(mode,params);state.gifResults=Array.isArray(j.data)?j.data:[];state.gifQuery=q;renderGifResults();if(!state.gifResults.length)showToast('O GIPHY não retornou resultados para esta busca',2200);}catch(err){showToast(`GIPHY: ${err.message||'falha na busca'}`,3400);}finally{btn.disabled=false;btn.textContent=old;}}
@@ -1168,16 +1154,24 @@
   async function dataUrlToBlob(src){const r=await fetch(proxyExternalAsset(src));if(!r.ok)throw new Error(`Imagem respondeu HTTP ${r.status}`);return await r.blob();}
   async function blobToDataUrl(blob){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});}
   async function removeBgForElement(el,button){
-    const key=getRemoveBgKey();if(!key){updateRemoveBgStatus();openModal('integrationModal');showToast('Configure sua licença/API key Remove.bg');return;}const src=el.src;if(!src){showToast('Este elemento ainda não tem imagem');return;}button.classList.add('busy');button.disabled=true;const old=button.textContent;button.textContent='Processando…';try{const blob=await dataUrlToBlob(src),form=new FormData();form.append('image_file',blob,'imagem.png');form.append('size','auto');const response=await fetch('https://api.remove.bg/v1.0/removebg',{method:'POST',headers:{'X-Api-Key':key},body:form});if(!response.ok){let detail='';try{const j=await response.json();detail=j?.errors?.[0]?.title||j?.errors?.[0]?.detail||'';}catch{}throw new Error(detail||`Erro ${response.status}`);}const out=await response.blob(),data=await blobToDataUrl(out);el.src=data;if(el.type==='mask')await setMaskImage(el,data);state.uploads.unshift({name:'remove-bg.png',src:data});pushHistory();renderAll();showToast('Fundo removido');}catch(err){showToast(`Remove.bg: ${err.message||'falha na requisição'}`,3200);}finally{button.classList.remove('busy');button.disabled=false;button.textContent=old;}}
-  $('#removeBgBtn').onclick=()=>{const e=selected();if(e?.type==='image')removeBgForElement(e,$('#removeBgBtn'));};$('#removeBgMaskBtn').onclick=()=>{const e=selected();if(e?.type==='mask')removeBgForElement(e,$('#removeBgMaskBtn'));};
-
-  $('#undoBtn').onclick=undo;$('#redoBtn').onclick=redo;window.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo();}if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();deleteSelected();}if(e.key==='Escape'&&state.maskEditingId){state.maskEditingId=null;renderAll();}});
-
-  async function saveCloudRevision(note=''){
-    syncActiveArtboard();const meta=state.platformMeta||{};if(!meta.jobId&&!meta.topicId){showToast('Este projeto ainda não está vinculado a um carrossel da RONDA');return null;}
-    const payload=projectSnapshot();const res=await fetch('/api/carousel-versions',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:meta.jobId||null,topicId:meta.topicId||null,kind:'design',title:state.docTitle,payload,qualityScore:meta.qualityGate?.score??null,confidenceScore:meta.confidence?.score??null,note})});const out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta={...(state.platformMeta||{}),versionId:out.version?.id||null,workflowId:out.workflow?.id||state.platformMeta?.workflowId||null,versionNumber:out.version?.versionNumber||null};try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}return out;
+    const src=el?.src;if(!src){showToast('Este elemento ainda não tem imagem');return;}button.classList.add('busy');button.disabled=true;const old=button.textContent;button.textContent='Processando…';try{const blob=await dataUrlToBlob(src),form=new FormData();form.append('image_file',blob,'imagem.png');form.append('size','auto');const response=await fetch('/api/remove-bg',{method:'POST',credentials:'same-origin',body:form});if(!response.ok){let detail='';try{const j=await response.json();detail=j?.error||j?.detail||'';}catch{}throw new Error(detail||`Erro ${response.status}`);}const out=await response.blob(),data=await blobToDataUrl(out);el.src=data;if(el.type==='mask')await setMaskImage(el,data);state.uploads.unshift({name:'remove-bg.png',src:data});pushHistory();renderAll();showToast('Fundo removido');}catch(err){showToast(`Remover fundo: ${err.message||'falha na requisição'}`,3200);}finally{button.classList.remove('busy');button.disabled=false;button.textContent=old;}}
+  async function saveProjectToProjects(){
+    syncActiveArtboard();ensureArtboards();
+    const currentId=state.platformMeta?.projectId||null;
+    const snapshot=projectSnapshot();
+    const payload={...snapshot,contractVersion:'forma-design-project-v1',source:'forma-design',title:state.docTitle||'Projeto FORMA',savedAt:new Date().toISOString()};
+    const endpoint=currentId?`/api/projects/${encodeURIComponent(currentId)}`:'/api/projects';
+    const method=currentId?'PUT':'POST';
+    const response=await fetch(endpoint,{method,credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const out=await response.json().catch(()=>({}));
+    if(!response.ok||!out.ok)throw new Error(out.error||`HTTP ${response.status}`);
+    const projectId=out.id||currentId;if(!projectId)throw new Error('O projeto foi salvo, mas o servidor não retornou o identificador.');
+    state.platformMeta={...(state.platformMeta||{}),projectId,source:state.platformMeta?.source||'forma-design'};
+    try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}
+    const next=new URL(location.href);next.search='';next.searchParams.set('project',projectId);history.replaceState({},'',next.pathname+next.search);
+    markSaved();showToast('Projeto salvo na aba Projetos');return projectId;
   }
-  $('#saveProjectBtn').onclick=()=>{try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));markSaved();showToast('Projeto e pranchetas salvos neste navegador');}catch{showToast('Projeto grande demais para o armazenamento local');}};
+  $('#saveProjectBtn').onclick=async()=>{const button=$('#saveProjectBtn'),old=button.textContent;button.disabled=true;button.textContent='Salvando…';try{await saveProjectToProjects();}catch(error){showToast(error.message||'Não foi possível salvar o projeto',3600);}finally{button.disabled=false;button.textContent=old;}};
   $('#saveRevisionBtn').onclick=async()=>{try{const out=await saveCloudRevision('Versão salva no FORMA');if(out){markSaved();showToast(`Versão ${out.version?.versionNumber||''} salva no RONDA`);}}catch(error){showToast(error.message||'Não foi possível salvar a versão',3200);}};
   $('#versionsBtn').onclick=async()=>{try{const meta=state.platformMeta||{};if(!meta.jobId&&!meta.topicId){showToast('Projeto sem histórico de versões');return;}const q=meta.jobId?`jobId=${encodeURIComponent(meta.jobId)}`:`topicId=${encodeURIComponent(meta.topicId)}`;const res=await fetch('/api/carousel-versions?'+q,{cache:'no-store',credentials:'same-origin'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Falha ao carregar versões');const list=out.versions||[];if(!list.length){showToast('Nenhuma versão salva ainda');return;}const text=list.slice(0,12).map(v=>`v${v.versionNumber} · ${new Date(v.createdAt).toLocaleString('pt-BR')} · ${v.kind}`).join('\n');const choice=prompt(`VERSÕES DO CARROSSEL\n\n${text}\n\nDigite o número da versão para restaurar:`);if(!choice)return;const v=list.find(x=>String(x.versionNumber)===String(choice).trim());if(!v?.payload?.artboards){showToast('Esta versão não contém snapshot visual do FORMA');return;}const parsed=v.payload;state.artboards=clone(parsed.artboards);state.activeArtboardId=parsed.activeArtboardId&&state.artboards.some(b=>b.id===parsed.activeArtboardId)?parsed.activeArtboardId:state.artboards[0].id;state.docTitle=parsed.docTitle||state.docTitle;state.platformMeta={...(parsed.platformMeta||{}),versionId:v.id,versionNumber:v.versionNumber};state.rondaContentModel=parsed.rondaContentModel||state.rondaContentModel;state.templateBinding=parsed.templateBinding||null;loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId));state.history=[snapshot()];state.historyIndex=0;renderAll();markDirty();showToast(`Versão ${v.versionNumber} restaurada`);}catch(error){showToast(error.message||'Falha ao abrir versões',3200);}};
   $('#submitReviewBtn').onclick=async()=>{try{let workflowId=state.platformMeta?.workflowId;if(!workflowId){const saved=await saveCloudRevision('Versão enviada para revisão');workflowId=saved?.workflow?.id;}if(!workflowId)throw new Error('Não foi possível criar o fluxo de aprovação.');const res=await fetch('/api/workflow/'+encodeURIComponent(workflowId),{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',note:'Enviado pelo FORMA Design'})}),out=await res.json().catch(()=>({}));if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);state.platformMeta.workflowStatus=out.item?.status||'in_review';try{localStorage.setItem(LS_PROJECT,JSON.stringify(projectSnapshot()));}catch{}showToast('Versão enviada para revisão editorial');}catch(error){showToast(error.message||'Falha ao enviar para revisão',3600);}};
@@ -1422,7 +1416,7 @@
     return {
       contractVersion:'ronda-one-production-v2',
       source:'forma-direct-article',
-      sourceVersion:'0.9.7.4.3',
+      sourceVersion:'0.9.7.4.4',
       title,
       editoria:data?.editoria||'Notícias',
       slides:(data?.slides||[]).map((slide,index)=>({...slide,number:Number(slide.number)||index+1})),
@@ -1703,6 +1697,13 @@
       setProductionRetryVisible(false);setDirectArticleStatus(`Pauta produzida no FORMA · conteúdo neutro PT-BR · ${project.slides.length} slides · Quality ${Math.round(data?.qualityGate?.score||0)}/100. Escolha o template depois.`,'ok',100);showToast('Pauta da RONDA pronta no FORMA',3200);return true;
     }catch(error){registerProductionFailure(error);setDirectArticleStatus(error.message||'Não foi possível produzir a pauta.','error',100);showToast(error.message||'Falha na produção da pauta',4200);return false;}
   }
+  function applySavedFormaProject(project,projectId=''){
+    if(!project||!Array.isArray(project.artboards)||!project.artboards.length)return false;
+    state.artboards=project.artboards.map((b,i)=>{const d=migrateSnapshot(b);return {...b,...d,id:b.id||('board_'+Date.now()+'_'+i),name:b.name||`Prancheta ${i+1}`};});
+    state.activeArtboardId=project.activeArtboardId&&state.artboards.some(b=>b.id===project.activeArtboardId)?project.activeArtboardId:state.artboards[0].id;
+    state.docTitle=project.docTitle||project.title||'Projeto FORMA';state.platformMeta={...(project.platformMeta||{}),projectId:projectId||project.platformMeta?.projectId||null};state.rondaContentModel=project.rondaContentModel||project.platformMeta?.rondaContentModel||null;state.templateBinding=project.templateBinding||null;
+    loadBoardToState(state.artboards.find(b=>b.id===state.activeArtboardId)||state.artboards[0]);state.history=[snapshot()];state.historyIndex=0;renderAll();fitZoom();markSaved();setPlatformImportStatus('Projeto carregado da aba Projetos');return true;
+  }
   async function importPlatformProjectFromUrl(){
     const params=new URLSearchParams(location.search),projectId=params.get('project'),handoff=params.get('handoff');if(!projectId&&!handoff)return;
     setPlatformImportStatus('Carregando Ronda…');
@@ -1710,7 +1711,8 @@
       let project=null;
       if(projectId){const res=await fetch('/api/projects/'+encodeURIComponent(projectId),{cache:'no-store'}),out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||'Projeto não encontrado');project=out.project;}
       else {const raw=localStorage.getItem('rondaOne.handoff');if(!raw)throw new Error('Handoff local não encontrado');const input=JSON.parse(raw),topic=input.topic||{},carousel=input.carousel||{};project={contractVersion:'ronda-one-import-v5-workflow',source:'ronda-editorial',sourceVersion:input.sourceVersion||'ronda-editorial',title:topic.title||carousel.topicTitle||'Projeto da Ronda',editoria:topic.editoria||'Notícias',jobId:carousel.cycle?.jobId||carousel.jobId||null,topicId:topic.id||carousel.topicId||null,qualityGate:carousel.qualityGate||null,confidence:carousel.confidence||null,slides:carousel.slides||[],questions:carousel.questions||{},entities:carousel.entities||{},reading:carousel.reading||{},verificationLinks:carousel.verificationLinks||[],disclaimer:carousel.disclaimer||'',visualPrompt:`Editorial documentary photograph illustrating ${String(topic.title||carousel.topicTitle||'news story').slice(0,220)}. Neutral realistic news context, natural light, credible environment, negative space for carousel text, no text, no watermark.`};localStorage.removeItem('rondaOne.handoff');}
-      if(!applyRondaProject(project,projectId||''))throw new Error('Projeto sem slides compatíveis');
+      if(projectId&&Array.isArray(project?.artboards)&&project.artboards.length){if(!applySavedFormaProject(project,projectId))throw new Error('Projeto FORMA incompatível');}
+      else if(!applyRondaProject(project,projectId||''))throw new Error('Projeto sem slides compatíveis');
     }catch(err){setPlatformImportStatus('Falha na importação','error');showToast(err.message||'Não foi possível importar a Ronda',3600);}
   }
 
@@ -1855,7 +1857,7 @@
   if(freeBankQuery)freeBankQuery.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();freeBankSearch();}});
 
   workspaceLoadWidths();
-  markSaved();updateUndoButtons();updateIntegrationStatus();initFonts();setTimeout(async()=>{const produced=await importProductionTopicFromUrl();if(!produced)await importPlatformProjectFromUrl();},120);
+  markSaved();updateUndoButtons();initFonts();setTimeout(async()=>{const produced=await importProductionTopicFromUrl();if(!produced)await importPlatformProjectFromUrl();},120);
 })();
 
   </script>

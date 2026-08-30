@@ -41,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.7.4.3',
+      version:'0.9.7.4.4',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4.2',
+        editorialVersion:'2.9.7.4.4',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,

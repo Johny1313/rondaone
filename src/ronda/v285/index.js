@@ -1,3 +1,4 @@
+import { handleSecureRemoveBg } from '../remove-bg.js';
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
 import { ARTICLE_ANALYSIS_MODEL, ARTICLE_SECONDARY_MODEL, ARTICLE_TERTIARY_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
 import { collectRound, FAST_LANE_FEEDS, FEEDS, summarizePortalStatuses } from "./collector.js";
@@ -141,7 +142,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.4.2";
+const VERSION = "2.9.7.4.4";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1498,6 +1499,11 @@ async function handleApi(request, env, url, ctx) {
     if(!isAdminUser(user)&&current.createdBy&&current.createdBy!==user.id)throw new HttpError(403,"Esta produção pertence a outro usuário.");
     if(!current.evidenceId)throw new HttpError(409,"O Evidence Pack ainda não está pronto para o fallback seguro.");
     return json({ok:true,job:await recoverStalledProductionJob(env,current.id,{ctx,forceFallback:true})},202);
+  }
+
+  if (url.pathname === "/api/remove-bg" && request.method === "POST") {
+    await requireEditorialUser(request, env);
+    return handleSecureRemoveBg(request,env);
   }
 
   if (url.pathname === "/api/production/image" && request.method === "POST") {

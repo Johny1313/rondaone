@@ -1,3 +1,5 @@
+import { parseCookies, SESSION_COOKIE_NAME, sha256Hex } from '../ronda/v285/profile.js';
+import { getUserBySessionHash } from '../ronda/v285/database.js';
 const PROJECT_TABLE = 'ronda_one_projects';
 
 function json(data, status = 200) {
@@ -237,6 +239,34 @@ function normalizeProject(input={}){
   };
 }
 
+
+async function requireProjectUser(request, env){
+  if(!env.DB) throw new Error("Binding D1 DB não configurado");
+  const token=parseCookies(request.headers.get('Cookie'))[SESSION_COOKIE_NAME];
+  if(!token)return null;
+  const hash=await sha256Hex(token);
+  return getUserBySessionHash(env.DB,hash);
+}
+
+function normalizeFormaProject(input={}){
+  if(!Array.isArray(input?.artboards)||!input.artboards.length) throw new Error('O projeto FORMA não possui pranchetas para salvar.');
+  return {
+    ...input,
+    contractVersion:'forma-design-project-v1',
+    source:'forma-design',
+    title:clean(input.title||input.docTitle||'Projeto FORMA',240),
+    savedAt:new Date().toISOString(),
+  };
+}
+
+async function createFromDesign(request, env){
+  const input=await request.json().catch(()=>null);if(!input)return json({ok:false,error:'Payload inválido'},400);
+  let project;try{project=normalizeFormaProject(input);}catch(error){return json({ok:false,error:error.message},400);}
+  await ensureTable(env.DB);const id=crypto.randomUUID(),now=new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO ${PROJECT_TABLE}(id,source,title,payload,created_at,updated_at) VALUES(?,?,?,?,?,?)`).bind(id,'forma-design',project.title,JSON.stringify(project),now,now).run();
+  return json({ok:true,id,project,createdAt:now,updatedAt:now},201);
+}
+
 async function createFromRonda(request, env){
   const input=await request.json().catch(()=>null);
   if(!input) return json({ok:false,error:'Payload inválido'},400);
@@ -270,15 +300,19 @@ async function saveProject(id, request, env){
   if(!env.DB) return json({ok:false,code:'DB_BINDING_REQUIRED',error:'Binding D1 DB não configurado'},503);
   await ensureTable(env.DB);
   const input=await request.json().catch(()=>null); if(!input) return json({ok:false,error:'Payload inválido'},400);
-  const now=new Date().toISOString(); const title=clean(input.title || input.docTitle || 'Projeto RONDA ONE',240);
-  const result=await env.DB.prepare(`UPDATE ${PROJECT_TABLE} SET title=?, payload=?, updated_at=? WHERE id=?`).bind(title,JSON.stringify(input),now,id).run();
+  let payload=input;if(Array.isArray(input?.artboards)&&input.artboards.length){try{payload=normalizeFormaProject(input);}catch(error){return json({ok:false,error:error.message},400);}}
+  const now=new Date().toISOString(); const title=clean(payload.title || payload.docTitle || 'Projeto RONDA ONE',240);
+  const result=await env.DB.prepare(`UPDATE ${PROJECT_TABLE} SET title=?, payload=?, updated_at=? WHERE id=?`).bind(title,JSON.stringify(payload),now,id).run();
   if(!result.meta?.changes) return json({ok:false,error:'Projeto não encontrado'},404);
   return json({ok:true,id,updatedAt:now});
 }
 
 export async function handleProjectsApi(request, env){
   const url=new URL(request.url);
+  if(!env.DB) return json({ok:false,code:'DB_BINDING_REQUIRED',error:'Binding D1 DB não configurado'},503);
+  const user=await requireProjectUser(request,env).catch(()=>null);if(!user)return json({ok:false,code:'AUTH_REQUIRED',error:'Sessão editorial necessária para acessar Projetos.'},401);
   if(url.pathname==='/api/projects/from-ronda' && request.method==='POST') return createFromRonda(request,env);
+  if(url.pathname==='/api/projects' && request.method==='POST') return createFromDesign(request,env);
   if(url.pathname==='/api/projects' && request.method==='GET') return listProjects(env);
   const m=/^\/api\/projects\/([a-f0-9-]{20,80})$/i.exec(url.pathname);
   if(m && request.method==='GET') return getProject(m[1],env);

@@ -1,6 +1,6 @@
-# RONDA ONE Cloud v0.9.7.4.3 — Terminal Carousel Completion
+# RONDA ONE Cloud v0.9.7.4.4 — Terminal Carousel Completion
 
-A v0.9.7.4.3 é uma correção cumulativa de conclusão do Production Engine. O foco é garantir que um carrossel com Evidence Pack válido chegue a um estado terminal sem disputa entre tentativas concorrentes.
+A v0.9.7.4.4 é uma correção cumulativa de conclusão do Production Engine. O foco é garantir que um carrossel com Evidence Pack válido chegue a um estado terminal sem disputa entre tentativas concorrentes.
 
 ## Correções principais
 
@@ -477,3 +477,8 @@ A regressão cobre desde a v0.8.0 até a v0.9.5, incluindo testes específicos d
 ## Deploy
 
 Consulte `docs/DEPLOY.md`.
+
+
+## v0.9.7.4.4 — Projetos e superfície operacional
+
+O botão **Salvar projeto** grava o projeto do FORMA no D1 e o item aparece em `/projects/`. Controles de versão/revisão e o painel de integrações não são exibidos no FORMA. Para manter Remove.bg sem expor credenciais no navegador, configure `REMOVEBG_API_KEY` como Cloudflare secret.
