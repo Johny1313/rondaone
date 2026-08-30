@@ -206,8 +206,11 @@ function portalCardMarkup(source) {
   const route = sourceRouteLabel(source);
   const collectedCount = Number(source.collectedCount ?? source.count) || 0;
   const translationPending = Number(source.translationPendingCount) || 0;
+  const coverage = source?.coverage || null;
+  const h1 = Number(coverage?.counts?.h1) || 0;
+  const coverageSuffix = coverage ? ` · ${h1}/h · cobertura ${coverage.label || "—"}` : "";
   const detail = available
-    ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo disponível" : "conteúdos disponíveis"}${route ? ` · ${route}` : ""}${translationPending ? ` · ${translationPending} aguardando tradução` : ""}`
+    ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo disponível" : "conteúdos disponíveis"}${coverageSuffix}${route ? ` · ${route}` : ""}${translationPending ? ` · ${translationPending} aguardando tradução` : ""}`
     : source.ok && translationPending ? `${collectedCount} coletados · aguardando tradução`
     : source.ok ? `Nenhuma notícia recente${source.nextCheckAt ? ` · próxima ${relativeTime(source.nextCheckAt)}` : ""}` : sourceFailureLabel(source);
   const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}${source.degraded ? " degraded" : ""}` : `error ${escapeHtml(source.errorCode || "failed")}`;
@@ -251,11 +254,13 @@ function renderSourceHealth(message = "", warning = false) {
   const translationPending = portals.filter((source) => Number(source.translationPendingCount) > 0).length;
   const cached = portals.filter((source) => source.ok && source.cached).length;
   const attention = portals.filter((source) => !source.ok || source.degraded).length;
+  const lowCoverage = portals.filter((source) => source?.coverage?.label === "baixa").length;
   const prefix = attemptSources.length ? "Última tentativa · dados da ronda válida preservados" : "Fontes";
   const parts = [`${operational}/${portals.length} operacionais`, `${collected} com coleta`, `${available} disponíveis`];
   if (translationPending) parts.push(`${translationPending} aguardando tradução`);
   if (cached) parts.push(`${cached} em cache`);
   if (attention) parts.push(`${attention} com atenção`);
+  if (lowCoverage) parts.push(`${lowCoverage} com cobertura baixa`);
   holder.innerHTML = `<span class="health-label"><strong>${escapeHtml(prefix)}</strong> · ${parts.map(escapeHtml).join(" · ")}</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button>`;
   bindSourceHealthLink();
 }

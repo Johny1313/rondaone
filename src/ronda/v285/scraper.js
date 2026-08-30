@@ -216,3 +216,73 @@ export function parseNewsHtml(htmlText, feed, baseUrl, cutoff = new Date(Date.no
     .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
     .slice(0, limit);
 }
+
+
+function headingLinkCandidate(href, title, feed, baseUrl, discoveredAt) {
+  const cleanTitle = plainText(title).replace(/\s+/g," ").trim();
+  if (!href || cleanTitle.length < 20 || cleanTitle.length > 320) return null;
+  const url = absoluteUrl(href, baseUrl);
+  if (!url || !sourceDomainAllowed(url, feed)) return null;
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const last = segments.at(-1) || "";
+    const articleish = segments.length >= 3 || /noticia|news|202\d|\.html?$|\.ghtml$/i.test(parsed.pathname) || last.length >= 24;
+    if (!articleish) return null;
+  } catch { return null; }
+  const now = normalizedDate(discoveredAt) || new Date().toISOString();
+  return {
+    id: `discover-${feed.id}-${stableHash(url)}`,
+    title: cleanTitle.slice(0,320),
+    description: "",
+    content: "",
+    contentSource: "homepage-heading",
+    contentWordCount: 0,
+    sourceName: feed.name,
+    collectorName: feed.name,
+    publisherHomepageUrl: baseUrl,
+    publisherDomain: hostname(baseUrl) || null,
+    articleDomain: hostname(url) || null,
+    directPublisherUrl: true,
+    aggregatorUrl: false,
+    region: feed.region || null,
+    editorialHints: Array.isArray(feed.editorialHints) ? [...feed.editorialHints] : [],
+    platform: "Portal",
+    kind: "portal",
+    publishedAt: now,
+    publishedAtEstimated: true,
+    firstSeenAt: now,
+    discoveredAt: now,
+    url,
+    views: null,
+    comments: null,
+    likes: null,
+    interactions: null,
+    discoveryMethod: "html-heading-first-seen",
+  };
+}
+
+export function parseDiscoveryHtml(htmlText, feed, baseUrl, { limit = 60, discoveredAt = new Date().toISOString(), existingUrls = [] } = {}) {
+  const html = String(htmlText || "").slice(0,4_500_000);
+  if (!html) return [];
+  const items = [];
+  const seen = new Set((Array.isArray(existingUrls) ? existingUrls : []).filter(Boolean));
+  const patterns = [
+    /<h[1-4]\b[^>]*>[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a>[\s\S]*?<\/h[1-4]>/gi,
+    /<a\b([^>]*)>[\s\S]*?<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>[\s\S]*?<\/a>/gi,
+  ];
+  for (const expression of patterns) {
+    let match;
+    let scanned = 0;
+    while ((match = expression.exec(html)) && scanned < 500 && items.length < Math.max(1,Number(limit)||60)) {
+      scanned += 1;
+      const href = attributeValue(match[1],"href");
+      const candidate = headingLinkCandidate(href,match[2],feed,baseUrl,discoveredAt);
+      if (!candidate || seen.has(candidate.url)) continue;
+      seen.add(candidate.url);
+      items.push(candidate);
+    }
+    if (items.length >= limit) break;
+  }
+  return items.slice(0,limit);
+}

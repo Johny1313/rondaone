@@ -225,7 +225,7 @@ async function fetchHtml(url, fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, {
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.4.6",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36 RondaOne/0.9.7.4.7",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

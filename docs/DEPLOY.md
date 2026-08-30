@@ -163,3 +163,14 @@ A versão declara `browser.binding = BROWSER` no `wrangler.jsonc`. O fallback de
 - Desenvolvimento local: Quick Actions podem exigir `wrangler dev --remote`.
 - Se Browser Run falhar, o leitor continua com fetch direto, snapshot/RSS e a única fonte backup; o recurso não remove os fallbacks existentes.
 
+## v0.9.7.4.7 — High-Volume Source Discovery
+
+Não há novo binding obrigatório. A migração D1 é automática via `ensureSchema()` e cria `source_discovery_items`.
+
+Após o deploy, valide `/api/sources/diagnostics` e confira em fontes de alto volume:
+
+- `volumeProfile` (`very-high`, `high` ou `normal`);
+- `discovery.h1` / `h6` / `h24`;
+- `coverageScore` e `coverageLabel`.
+
+No painel da Ronda, G1 e outras fontes de alto volume devem mostrar a produção captada da última hora. Uma fonte pode estar operacional e, ainda assim, ser marcada como **cobertura baixa** se estiver retornando pouco conteúdo.

@@ -1,3 +1,15 @@
+# v0.9.7.4.7 — High-Volume Source Discovery Engine
+
+- adiciona perfis de volume por fonte e limites de retenção maiores para portais de alta produção;
+- G1, CNN Brasil, Folha, Estadão, O Globo, Metrópoles e ge passam a exigir múltiplas rotas de descoberta antes de encerrar uma coleta;
+- RSS saudável deixa de ser sinônimo de cobertura suficiente em fontes de alto volume;
+- adiciona `parseDiscoveryHtml()` para headings editoriais sem data explícita, usando `firstSeenAt` sem envelhecer a mesma URL a cada ronda;
+- deduplicação passa a normalizar URLs e remover parâmetros de tracking;
+- nova tabela `source_discovery_items` persiste URLs por fonte e sustenta métricas 15m/1h/6h/24h;
+- `/api/sources/diagnostics` e `/api/admin/source-health` passam a expor score de cobertura e perfil de volume;
+- cards de fonte na Ronda mostram notícias/hora e cobertura baixa;
+- preserva Hybrid Multi-Transport Reader, Fast Ronda 25+, Production Engine e toda a regressão anterior.
+
 # v0.9.7.4.6 — Hybrid Multi-Transport Reader
 
 - combina redundância de aquisição com Single Source controlado;

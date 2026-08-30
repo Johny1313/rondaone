@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const read=p=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8');
 const design=read('public/design/index.html');const projects=read('src/projects/service.js');const worker=read('src/ronda/v285/index.js');const removeBg=read('src/ronda/remove-bg.js');const pkg=JSON.parse(read('package.json'));
-assert.ok(['0.9.7.4.4','0.9.7.4.5','0.9.7.4.6'].includes(pkg.version));
+assert.ok(['0.9.7.4.4','0.9.7.4.5','0.9.7.4.6','0.9.7.4.7'].includes(pkg.version));
 assert.match(design,/saveProjectToProjects/);assert.match(design,/\/api\/projects/);assert.match(design,/Projeto salvo na aba Projetos/);assert.match(design,/applySavedFormaProject/);
 assert.doesNotMatch(design,/<button class="secondary-btn" id="integrationBtn">/);assert.doesNotMatch(design,/id="integrationModal"/);assert.doesNotMatch(design,/LS_REMOVEBG/);assert.doesNotMatch(design,/api\.remove\.bg\/v1\.0\/removebg/);
 assert.match(design,/\/api\/remove-bg/);assert.match(projects,/createFromDesign/);assert.match(projects,/request\.method==='POST'\) return createFromDesign/);assert.match(projects,/forma-design-project-v1/);assert.match(projects,/requireProjectUser/);

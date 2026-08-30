@@ -1,3 +1,25 @@
+# RONDA ONE Cloud v0.9.7.4.7 — High-Volume Source Discovery Engine
+
+A v0.9.7.4.7 mantém o Hybrid Multi-Transport Reader da v0.9.7.4.6 e amplia a profundidade da Ronda em portais de alto volume. A fonte deixa de ser considerada bem coberta apenas porque respondeu: o sistema passa a medir **cobertura real de conteúdo**.
+
+## O que muda
+
+- perfis de volume `very-high`, `high` e `normal`;
+- G1, CNN Brasil, Folha, Estadão, O Globo, Metrópoles e ge retêm snapshots maiores e não encerram a descoberta após um RSS mínimo;
+- fontes de grande volume consultam RSS + home + busca dedicada do domínio antes de considerar a descoberta suficiente;
+- discovery scraper captura links editoriais de headings mesmo quando a home não publica `<time>` em cada card;
+- URLs são deduplicadas por identidade normalizada, removendo parâmetros de tracking;
+- tabela D1 `source_discovery_items` registra cada URL descoberta e permite métricas de 15 min / 1 h / 6 h / 24 h;
+- cada fonte ganha `coverageScore`, perfil e meta de captura por hora;
+- a tela de fontes mostra volume da última hora e sinaliza cobertura baixa;
+- a disponibilidade HTTP e a cobertura editorial passam a ser métricas separadas.
+
+## Política de não regressão
+
+Continuam ativos Browser Run, Adaptive Scraping, Evidence Sufficiency, Single Source + um backup, PT-BR, Evidence Pack, Multi-AI, Quality Gate, Content First, Retry Same Job, Terminal Completion, Projects, segurança das integrações e Fast Ronda 25+.
+
+---
+
 # RONDA ONE Cloud v0.9.7.4.6 — Hybrid Multi-Transport Reader
 
 A v0.9.7.4.6 combina a tolerância de aquisição das versões que retornavam mais conteúdo com o controle editorial consolidado nas versões atuais. A regra é: **tentar vários transportes para a mesma fonte antes de trocar de publisher**.

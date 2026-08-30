@@ -41,10 +41,10 @@ export default {
     if(url.pathname==='/api/platform/status') return json({
       ok:true,
       platform:'RONDA ONE',
-      version:'0.9.7.4.6',
+      version:'0.9.7.4.7',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.4.6',
+        editorialVersion:'2.9.7.4.7',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -62,7 +62,7 @@ export default {
       billingMode:'workers-paid-recommended',
       stabilityMode:'queue-first',
       carouselMode:'direct-article-source-evidence',
-      discoveryMode:'rss-plus-direct-html-scraping-plus-domain-fallback',
+      discoveryMode:'volume-aware-rss-home-domain-search-plus-source-memory',
       registeredSourceSearch:true,
       editorialEvents:true,
       editorialPipeline:'collect-normalize-deduplicate-cluster-event-read-enrich',
@@ -195,6 +195,7 @@ export default {
       fastRonda25PlusV0974:{enabled:true,sourceTarget:Number(env.ROUND_EARLY_SOURCE_TARGET)||25,minimumFreshBeforePreview:Number(env.ROUND_EARLY_FRESH_MINIMUM)||8,fullSourceConcurrency:14,fastLaneConcurrency:8,rssFirst:true,skipHtmlWhenRssHealthy:true,earlyPreview:true,finalRecoveryContinues:true,registeredSources:39},
       adaptiveScrapingV09745:{enabled:true,streamingHtml:true,maxHtmlBytes:2500000,jsonLdFirst:true,adapterFirst:true,evidenceSufficiency:true,ampOnlyWhenNeeded:true,singleBackupAutomatic:true,retryChangesStrategy:true,schemaHotPathMemoized:true},
       hybridMultiTransportV09746:{enabled:true,policy:'same-source-transports-before-backup',transports:['cache','direct-fetch','browser-run','snapshot-rss'],browserRunBinding:!!env.BROWSER,directFirstDefault:true,transportLearning:true,browserFirstForDegradedDomains:true,singleEditorialBackup:true,bandAdapter:true,noManualRetryLoop:true},
+      highVolumeDiscoveryV09747:{enabled:true,sourceVolumeProfiles:true,veryHighSources:['g1','cnn-brasil','folha','estadao','o-globo','metropoles','ge'],multiRouteBeforeStop:true,undatedHomepageFirstSeen:true,canonicalUrlDedup:true,discoveryPersistence:'D1 source_discovery_items',coverageWindows:['15m','1h','6h','24h'],coverageScore:true,coverageTargetPerProfile:true,lowCoverageAlert:true},
       consistencyAsyncFastPathV09741:{enabled:true,productionPostAsync:true,transportRetryStatuses:[502,503,504],activeJobDeduplication:true,deferredSourceSnapshotContinuity:true,forceRefreshWhenSnapshotMissing:true,editorialChangesSinceLastCompletedRound:true},
       roundStabilityV0951:{
         enabled:true,

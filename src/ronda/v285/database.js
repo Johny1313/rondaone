@@ -2,7 +2,7 @@ import { getReliabilitySummary } from "../../reliability/core.js";
 import { ADMIN_EMAIL, DEFAULT_SLIDE_COUNT, MAX_ACTIVE_USERS, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_PROFILE_REFERENCES, MAX_PROFILE_REFERENCE_TOTAL_CHARS, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, SESSION_IDLE_MINUTES, SESSION_TOUCH_MINUTES, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.9.5.1";
+export const DATABASE_SCHEMA_VERSION = "2.9.7.4.7";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -110,6 +110,19 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_source_state_next_check ON source_state(next_check_at)",
   "CREATE INDEX IF NOT EXISTS idx_source_state_status ON source_state(status, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS source_discovery_items (
+    source_id TEXT NOT NULL,
+    url_key TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    route TEXT,
+    published_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY(source_id, url_key)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_source_discovery_seen ON source_discovery_items(source_id, first_seen_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_source_discovery_published ON source_discovery_items(source_id, published_at DESC)",
   `CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL,
@@ -1242,6 +1255,86 @@ function sourceStateRow(row) {
   };
 }
 
+function normalizedDiscoveryKey(value) {
+  try {
+    const url = new URL(String(value || ""));
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(?:utm_|fbclid$|gclid$|dclid$|mc_cid$|mc_eid$|igshid$|ref$|ref_src$|ref_url$|srsltid$)/i.test(key)) url.searchParams.delete(key);
+    }
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return String(value || "").trim();
+  }
+}
+
+export async function saveSourceDiscoveryItems(db, entries = []) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const rows = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const sourceId = String(entry?.sourceId || "").trim();
+    if (!sourceId) continue;
+    for (const item of Array.isArray(entry?.items) ? entry.items : []) {
+      const url = String(item?.url || "").trim();
+      if (!/^https?:\/\//i.test(url)) continue;
+      const urlKey = normalizedDiscoveryKey(url);
+      const firstSeenAt = item?.firstSeenAt || item?.discoveredAt || item?.publishedAt || now;
+      rows.push({
+        sourceId,
+        urlKey,
+        url,
+        title:String(item?.title || "Sem título").slice(0,500),
+        route:String(item?.collectionRoute || item?.discoveryMethod || entry?.route || "unknown").slice(0,80),
+        publishedAt:item?.publishedAt || null,
+        firstSeenAt,
+        lastSeenAt:item?.lastSeenAt || now,
+      });
+    }
+  }
+  if (!rows.length) return 0;
+  for (let offset=0; offset<rows.length; offset+=60) {
+    const chunk=rows.slice(offset,offset+60);
+    await db.batch(chunk.map((row)=>db.prepare(`
+      INSERT INTO source_discovery_items(source_id,url_key,url,title,route,published_at,first_seen_at,last_seen_at)
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(source_id,url_key) DO UPDATE SET
+        url=excluded.url,
+        title=excluded.title,
+        route=excluded.route,
+        published_at=COALESCE(source_discovery_items.published_at,excluded.published_at),
+        first_seen_at=CASE WHEN source_discovery_items.first_seen_at < excluded.first_seen_at THEN source_discovery_items.first_seen_at ELSE excluded.first_seen_at END,
+        last_seen_at=excluded.last_seen_at
+    `).bind(row.sourceId,row.urlKey,row.url,row.title,row.route,row.publishedAt,row.firstSeenAt,row.lastSeenAt)));
+  }
+  const cutoff=new Date(Date.now()-8*86400000).toISOString();
+  await db.prepare("DELETE FROM source_discovery_items WHERE last_seen_at < ?").bind(cutoff).run().catch(()=>null);
+  return rows.length;
+}
+
+export async function getSourceDiscoveryMetrics(db, { hours = 24 } = {}) {
+  await ensureSchema(db);
+  const now=Date.now();
+  const c15=new Date(now-15*60000).toISOString();
+  const c1=new Date(now-60*60000).toISOString();
+  const c6=new Date(now-6*3600000).toISOString();
+  const c24=new Date(now-Math.max(24,Number(hours)||24)*3600000).toISOString();
+  const result=await db.prepare(`
+    SELECT source_id,
+      SUM(CASE WHEN COALESCE(published_at,first_seen_at) >= ? THEN 1 ELSE 0 END) AS m15,
+      SUM(CASE WHEN COALESCE(published_at,first_seen_at) >= ? THEN 1 ELSE 0 END) AS h1,
+      SUM(CASE WHEN COALESCE(published_at,first_seen_at) >= ? THEN 1 ELSE 0 END) AS h6,
+      SUM(CASE WHEN COALESCE(published_at,first_seen_at) >= ? THEN 1 ELSE 0 END) AS h24
+    FROM source_discovery_items
+    WHERE last_seen_at >= ?
+    GROUP BY source_id
+  `).bind(c15,c1,c6,c24,c24).all();
+  const map=new Map();
+  for(const row of result?.results||[]) map.set(row.source_id,{m15:Number(row.m15)||0,h1:Number(row.h1)||0,h6:Number(row.h6)||0,h24:Number(row.h24)||0});
+  return map;
+}
+
 export async function getSourceStates(db, sourceIds = []) {
   await ensureSchema(db);
   const ids = [...new Set(sourceIds.map((value) => String(value || "").trim()).filter(Boolean))];
@@ -1314,13 +1407,16 @@ export async function saveSourceStates(db, entries = []) {
 
 export async function listSourceDiagnostics(db) {
   await ensureSchema(db);
-  const result = await db.prepare(`
-    SELECT source_id, name, region, status, route, http_status, error_code, error_detail,
-           item_count, last_attempt_at, last_success_at, next_check_at, failure_count,
-           response_ms, updated_at
-    FROM source_state
-    ORDER BY region, name COLLATE NOCASE
-  `).all();
+  const [result, discovery] = await Promise.all([
+    db.prepare(`
+      SELECT source_id, name, region, status, route, http_status, error_code, error_detail,
+             item_count, last_attempt_at, last_success_at, next_check_at, failure_count,
+             response_ms, updated_at
+      FROM source_state
+      ORDER BY region, name COLLATE NOCASE
+    `).all(),
+    getSourceDiscoveryMetrics(db).catch(()=>new Map()),
+  ]);
   return (result?.results || []).map((row) => ({
     sourceId: row.source_id,
     name: row.name,
@@ -1337,6 +1433,7 @@ export async function listSourceDiagnostics(db) {
     failureCount: Number(row.failure_count) || 0,
     responseMs: row.response_ms == null ? null : Number(row.response_ms),
     updatedAt: row.updated_at,
+    discovery: discovery.get(row.source_id) || {m15:0,h1:0,h6:0,h24:0},
   }));
 }
 

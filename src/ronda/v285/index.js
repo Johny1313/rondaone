@@ -1,7 +1,7 @@
 import { handleSecureRemoveBg } from '../remove-bg.js';
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
 import { ARTICLE_ANALYSIS_MODEL, ARTICLE_SECONDARY_MODEL, ARTICLE_TERTIARY_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
-import { collectRound, FAST_LANE_FEEDS, FEEDS, summarizePortalStatuses } from "./collector.js";
+import { collectRound, FAST_LANE_FEEDS, FEEDS, sourceVolumeProfile, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
   createIntelligentJob,
@@ -32,6 +32,7 @@ import {
   saveIntelligentCarousel,
   saveRun,
   saveRoundPreview,
+  saveSourceDiscoveryItems,
   saveSourceStates,
   queueRun,
   markRunStarted,
@@ -142,7 +143,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.4.6";
+const VERSION = "2.9.7.4.7";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1217,6 +1218,9 @@ async function performRound(env, triggerType, options = {}) {
         await saveSourceStates(db, sourceStateUpdates).catch((error) => {
           structuredLog("source_state_save_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
         });
+        await saveSourceDiscoveryItems(db, sourceStateUpdates).catch((error) => {
+          structuredLog("source_discovery_save_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+        });
       }
 
       await renewLock(db, lock, EDITORIAL_ROUND_LOCK_TTL_MS).catch(() => null);
@@ -1454,19 +1458,19 @@ async function handleApi(request, env, url, ctx) {
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
       if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.6", job:reusable, pollAfterMs:0 },200);
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.4.7", job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.6",job:active,pollAfterMs:450},202);
+      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.4.7",job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
     // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
     // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
     const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.6", job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.4.7", job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
@@ -1537,8 +1541,8 @@ async function handleApi(request, env, url, ctx) {
   if (url.pathname === "/api/admin/source-health" && request.method === "GET") {
     await requireAdminUser(request, env); const db=requireDatabase(env); const activeSourceIds=new Set(FEEDS.map(feed=>feed.id));
     const diagnostics=(await listSourceDiagnostics(db)).filter(item=>activeSourceIds.has(item.sourceId)); const now=Date.now();
-    const sources=diagnostics.map(item=>{const successMs=Date.parse(item.lastSuccessAt||'');const ageMinutes=Number.isFinite(successMs)?Math.max(0,(now-successMs)/60000):9999;const failing=['failed','blocked','not-found','timeout','rate-limited'].includes(String(item.status||item.errorCode||'').toLowerCase());const freshnessPenalty=Math.min(40,Math.max(0,ageMinutes-5)*1.5);const failurePenalty=Math.min(45,(Number(item.failureCount)||0)*9);const score=Math.max(0,Math.round(100-freshnessPenalty-failurePenalty-(failing?30:0)));return {...item,healthScore:score,healthLabel:score>=90?'excelente':score>=75?'saudável':score>=55?'atenção':'crítica',ageMinutes:Number(ageMinutes.toFixed(1))};}).sort((a,b)=>a.healthScore-b.healthScore);
-    return json({ok:true,summary:{total:sources.length,healthy:sources.filter(x=>x.healthScore>=75).length,critical:sources.filter(x=>x.healthScore<55).length},sources});
+    const sources=diagnostics.map(item=>{const successMs=Date.parse(item.lastSuccessAt||'');const ageMinutes=Number.isFinite(successMs)?Math.max(0,(now-successMs)/60000):9999;const failing=['failed','blocked','not-found','timeout','rate-limited'].includes(String(item.status||item.errorCode||'').toLowerCase());const freshnessPenalty=Math.min(40,Math.max(0,ageMinutes-5)*1.5);const failurePenalty=Math.min(45,(Number(item.failureCount)||0)*9);const availabilityScore=Math.max(0,Math.round(100-freshnessPenalty-failurePenalty-(failing?30:0)));const feed=FEEDS.find(x=>x.id===item.sourceId);const profile=feed?.volume||sourceVolumeProfile(item.sourceId,item.region);const h1=Number(item?.discovery?.h1)||0;const coverageScore=Math.max(0,Math.min(100,Math.round(h1/Math.max(1,Number(profile.target1h)||2)*100)));const score=Math.round(availabilityScore*.55+coverageScore*.45);return {...item,volumeProfile:profile.id,coverageTarget1h:profile.target1h,coverageScore,coverageLabel:coverageScore>=100?'boa':coverageScore>=60?'atenção':'baixa',healthScore:score,healthLabel:score>=90?'excelente':score>=75?'saudável':score>=55?'atenção':'crítica',ageMinutes:Number(ageMinutes.toFixed(1))};}).sort((a,b)=>a.healthScore-b.healthScore);
+    return json({ok:true,summary:{total:sources.length,healthy:sources.filter(x=>x.healthScore>=75).length,critical:sources.filter(x=>x.healthScore<55).length,lowCoverage:sources.filter(x=>x.coverageLabel==='baixa').length},sources});
   }
   const adminReplayMatch=/^\/api\/admin\/replay\/([a-z0-9-]{16,100})$/i.exec(url.pathname);
   if(adminReplayMatch&&request.method==='POST'){
@@ -2002,7 +2006,14 @@ async function handleApi(request, env, url, ctx) {
   if (url.pathname === "/api/sources/diagnostics" && request.method === "GET") {
     const activeSourceIds = new Set(FEEDS.map((feed) => feed.id));
     const diagnostics = (await listSourceDiagnostics(requireDatabase(env)))
-      .filter((item) => activeSourceIds.has(item.sourceId));
+      .filter((item) => activeSourceIds.has(item.sourceId))
+      .map((item)=>{
+        const feed=FEEDS.find((candidate)=>candidate.id===item.sourceId);
+        const profile=feed?.volume||sourceVolumeProfile(item.sourceId,item.region);
+        const h1=Number(item?.discovery?.h1)||0;
+        const coverageScore=Math.max(0,Math.min(100,Math.round(h1/Math.max(1,Number(profile.target1h)||2)*100)));
+        return {...item,volumeProfile:profile.id,coverageTarget1h:profile.target1h,coverageScore,coverageLabel:coverageScore>=100?"boa":coverageScore>=60?"atenção":"baixa"};
+      });
     const updatedAt = diagnostics.reduce((latest, item) => item.updatedAt > latest ? item.updatedAt : latest, "");
     return conditionalJson(request, { ok: true, diagnostics }, `sources-${updatedAt || "empty"}`);
   }
