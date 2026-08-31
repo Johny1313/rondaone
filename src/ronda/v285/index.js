@@ -149,7 +149,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, getProductionOperationalDiagnostics, autoRecoverStaleProductionJobs, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.5.10";
+const VERSION = "2.9.7.5.12";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -2727,7 +2727,7 @@ export default {
       const now = new Date();
       const minute = now.getUTCMinutes();
 
-      // v0.9.7.5.10 Stability Baseline:
+      // v0.9.7.5.12 Carousel 5.6 Full Lock + Quality-First 5M:
       // restaura a cadência de manutenção do carrossel da 0.9.7.5.6 sem
       // voltar a criar Rondas a cada minuto. Estes recoveries não fazem
       // scraping da Ronda nem consomem Browser/IA se não houver job stale.

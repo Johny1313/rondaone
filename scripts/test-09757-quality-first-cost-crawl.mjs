@@ -11,7 +11,6 @@ const platform=read('src/index.js');
 const ui=read('public/ronda/app.js');
 const html=read('public/ronda/index.html');
 const wrangler=JSON.parse(read('wrangler.jsonc'));
-const pkg=JSON.parse(read('package.json'));
 
 assert.ok(['*/5 * * * *','* * * * *'].includes(wrangler.triggers.crons[0]),'Cron deve suportar Quality-First 5M ou maintenance tick de 1 min');
 if(wrangler.triggers.crons[0]==='* * * * *') assert.match(worker,/minute % 5 !== 0/,'Com cron de manutenção a cada minuto, nova Ronda deve continuar limitada a cada 5 minutos');
@@ -45,7 +44,7 @@ assert.match(platform,/crawlReadOnlyV09757/);
 
 // Freeze dos componentes críticos de geração do carrossel: esta versão não pode alterá-los.
 const frozen={
-  'src/production/engine.js':pkg.version==='0.9.7.5.11'?'6cd05a6e2f43c5777cad5e42d257fb5136d6b90ec435032ff8ff63fe5778782f':'cabecc5f756746ddbd79a1c6b4d7790d75e68bb58d24010fe72b640d523df651',
+  'src/production/engine.js':'cabecc5f756746ddbd79a1c6b4d7790d75e68bb58d24010fe72b640d523df651',
   'src/production/scraping-engine.js':'d5cd2aba4f110ff93f319e0e8f297f51db9478fb1c9dfbb48338cd8c4dc50357',
   'src/ronda/v285/article-reader.js':'944bff72b03f3c15a10e42a12541aef9af531c676801add27474a3b5165fc722',
   'public/design/index.html':'1af86252a341dd292218ef21aca97d6623d3a9d96ed6bff478d43b353195b156',
