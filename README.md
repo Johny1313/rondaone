@@ -1,4 +1,11 @@
-# RONDA ONE Cloud v0.9.7.6.0 — Carousel Stability Baseline Definitiva
+# RONDA ONE Cloud v0.9.7.6.1 — Carousel Stability Baseline Definitiva
+
+
+## 0.9.7.6.1 — Band Reader V2 + Retry Order
+
+Correção cirúrgica sobre a baseline definitiva. O primeiro retry voltou a ser **direct-first**, com nova leitura, JSON-LD, Band Adapter V2, HTML semântico e AMP antes do Browser. O Browser permanece fallback e só vira prioridade no segundo retry (`deep`). O adapter Band agora reconhece mais estruturas editoriais e conteúdo serializado no HTML; JSON-LD também aceita `articleBody` estruturado e `VideoObject` quando há transcrição/descrição suficiente.
+
+Reader/Evidence/Pipeline foram versionados para impedir reaproveitamento silencioso de resultados anteriores incompatíveis. Nenhuma migration D1 foi adicionada e Mesa, Ronda, Multi-AI, Quality Gate, Cost Governor e watchdog permanecem inalterados.
 
 Release CLEAN reconstruída a partir da linha `0.9.7.5.12`, preservando a estabilidade operacional do carrossel `0.9.7.5.6` e o controle de custo/Quality-First da `0.9.7.5.7`.
 
@@ -113,7 +120,7 @@ docs/CAROUSEL-56-FULL-LOCK-v0.9.7.5.12.md
 
 NOVO LOCK ÚNICO
 src/production/carousel-stability-lock.json
-scripts/test-carousel-stability-baseline-definitive.mjs
+scripts/test-band-reader-v2-retry-order.mjs
 ```
 
 ## Código morto removido

@@ -1,0 +1,59 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+
+const read=(p)=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8');
+const bytes=(p)=>fs.readFileSync(new URL(`../${p}`,import.meta.url));
+const worker=read('src/ronda/v285/index.js');
+const collector=read('src/ronda/v285/collector.js');
+const database=read('src/ronda/v285/database.js');
+const platform=read('src/index.js');
+const ui=read('public/ronda/app.js');
+const html=read('public/ronda/index.html');
+const wrangler=JSON.parse(read('wrangler.jsonc'));
+
+assert.ok(['*/5 * * * *','* * * * *'].includes(wrangler.triggers.crons[0]),'Cron deve suportar Quality-First 5M ou maintenance tick de 1 min');
+if(wrangler.triggers.crons[0]==='* * * * *') assert.match(worker,/minute % 5 !== 0/,'Com cron de manutenção a cada minuto, nova Ronda deve continuar limitada a cada 5 minutos');
+assert.match(worker,/const triggerType = "scheduled"/);
+assert.match(worker,/const mode = "full"/);
+assert.match(worker,/scheduled_round_coalesced/);
+assert.match(worker,/round-enqueue-gate/);
+assert.match(worker,/getActiveRunSummary/);
+assert.match(worker,/round_queue_terminal_skipped/,'mensagens antigas terminais não podem ressuscitar jobs');
+assert.match(worker,/source_revalidation_legacy_skipped/,'backlog legado de source-revalidate deve ser drenado sem rede');
+assert.match(worker,/onRevalidateSource:null/,'Ronda não pode alimentar a própria ROUND Queue com revalidação por fonte');
+assert.match(worker,/ROUND_BROWSER_DAILY_LIMIT/);
+assert.match(worker,/maxRuns:browserRemaining > 0 \? 1 : 0/);
+assert.match(worker,/ROUND_TRANSLATION_DAILY_LIMIT/);
+assert.match(worker,/targetAdditionalUsdPerWeek: 1/);
+assert.match(collector,/itemLimit:24, snapshotLimit:96/);
+assert.match(collector,/itemLimit:18, snapshotLimit:72/);
+assert.match(collector,/if \(HIGH_FREQUENCY_SOURCES\.has\(id\)\) return 5/);
+assert.match(collector,/return feedCount>=30\?10/);
+assert.match(database,/export async function listCrawlItems/);
+assert.match(database,/FROM source_discovery_items d/);
+assert.match(worker,/url\.pathname === "\/api\/crawl"/);
+assert.match(worker,/scraping:false, browser:false, ai:false, translation:false/);
+assert.match(html,/id="navCrawl"/);
+assert.match(html,/id="crawlView"/);
+assert.match(ui,/Abrir matéria ↗/);
+assert.match(ui,/\/api\/crawl\?limit=100&hours=6/);
+assert.match(platform,/qualityFirstV09757/);
+assert.match(platform,/costGovernorV09757/);
+assert.match(platform,/crawlReadOnlyV09757/);
+
+// Freeze dos componentes que permanecem intencionalmente imutáveis.
+// A 0.9.7.6.1 altera de forma auditada apenas scraping-engine/engine/FORMA;
+// esses arquivos são validados pelo carousel-stability-lock atual.
+const frozen={
+  'src/ronda/v285/article-reader.js':'944bff72b03f3c15a10e42a12541aef9af531c676801add27474a3b5165fc722',
+  'src/ronda/v285/collector.js':'edbd0607f318050b3d39b58443eb270288e4a9949573f429138e669da6b0df54',
+  'src/ronda/v285/database.js':'42a67bf6a1ab5f993273635738b14d519c9c5dee24c27d08624cd4f601b05763',
+  'public/ronda/app.js':'1539b593d5eec539ab13214930dd41583d3fd5ee7030d6865baee38e8cf11c72',
+};
+for(const [file,expected] of Object.entries(frozen)){
+  const actual=crypto.createHash('sha256').update(bytes(file)).digest('hex');
+  assert.equal(actual,expected,`${file} mudou; bloquear release para evitar regressão Quality-First`);
+}
+
+console.log('v0.9.7.5.7+ Quality-First 5M + Cost Governor + Crawl read-only + Carousel Freeze OK');

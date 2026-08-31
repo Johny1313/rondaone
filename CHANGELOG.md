@@ -1,3 +1,15 @@
+## 0.9.7.6.1 — Band Reader V2 + Retry Order
+
+- mantém o engineBaseline 0.9.7.5.6 e toda a baseline 0.9.7.6.0;
+- amplia o adapter da Band para estruturas atuais e conteúdo serializado no HTML;
+- JSON-LD passa a aceitar articleBody estruturado e VideoObject com transcript/descrição suficiente;
+- retry manual 1 volta a ser direct-first com fetch novo + adapter + AMP antes do Browser;
+- retry manual 2 continua deep/browser-first;
+- Browser standard permanece último fallback da tentativa normal e do retry 1;
+- reader/evidence/pipeline versions foram incrementados para não reutilizar cache incompatível;
+- FORMA avisa quando uma nova leitura falha e o canvas ainda mostra conteúdo anterior;
+- nenhuma migration D1 e nenhuma alteração em Mesa, Ronda, Multi-AI, Quality Gate, Cost Governor ou watchdog.
+
 ## 0.9.7.6.0 — Carousel Stability Baseline Definitiva
 
 - reconstrói a baseline sobre a linha 5.12, preservando engine operacional 5.6 + Quality-First/Cost Governor 5.7;
