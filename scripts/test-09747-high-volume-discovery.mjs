@@ -6,7 +6,8 @@ import { parseDiscoveryHtml } from '../src/ronda/v285/scraper.js';
 const g1=FEEDS.find(feed=>feed.id==='g1');
 assert.ok(g1,'G1 deve existir no catálogo');
 assert.equal(g1.volume.id,'very-high');
-assert.ok(g1.limit>=60,'G1 deve reter volume maior que o limite legado de 24');
+assert.equal(g1.limit,24,'Quality-First deve limitar o lote vivo do G1 a 24 itens sem perder memória');
+assert.ok(g1.snapshotLimit>=96,'G1 deve manter snapshot amplo para memória/cobertura');
 assert.ok(g1.discoveryUrls.length>=3,'G1 deve ter RSS + home + busca dedicada');
 assert.equal(sourceVolumeProfile('g1').requireDiscoveryRoutes,true);
 

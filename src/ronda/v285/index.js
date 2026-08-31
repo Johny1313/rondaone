@@ -15,6 +15,7 @@ import {
   getArticleSourceStats,
   getIntelligentCarousel,
   getLatestRunSummary,
+  getActiveRunSummary,
   getSourceStates,
   listSourceDiagnostics,
   getIntelligentJob,
@@ -104,6 +105,8 @@ import {
   recordWatchdogEvent,
   listWatchdogEvents,
   getCostMonitor,
+  getUsageMetricTotal,
+  listCrawlItems,
 } from "./database.js";
 import { parseFeed, plainText, stableHash } from "./parser.js";
 import {
@@ -144,21 +147,23 @@ import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from
 import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
 import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
-import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
+import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, getProductionOperationalDiagnostics, autoRecoverStaleProductionJobs, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.5.4";
+const VERSION = "2.9.7.5.7";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
 const EDITORIAL_ROUND_LOCK_TTL_MS = 3 * 60 * 1000;
 function carouselQueue(env){ return env?.CAROUSEL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null; }
 function sourceBrowserAvailable(env){return Boolean(env?.BROWSER&&typeof env.BROWSER.quickAction==="function");}
-function createSourceBrowserFetcher(env,{concurrency=2}={}){
-  if(!sourceBrowserAvailable(env))return null;
-  let active=0;const waiters=[];
+function createSourceBrowserFetcher(env,{concurrency=2,maxRuns=1,stats=null}={}){
+  if(!sourceBrowserAvailable(env)||Number(maxRuns)<=0)return null;
+  let active=0;let runs=0;const waiters=[];
   const acquire=()=>active<concurrency?(active++,Promise.resolve()):new Promise(resolve=>waiters.push(()=>{active++;resolve();}));
   const release=()=>{active=Math.max(0,active-1);const next=waiters.shift();if(next)next();};
   return async(url,feed,{timeoutMs=4500}={})=>{
+    if(runs>=Math.max(0,Number(maxRuns)||0))throw new Error("Browser Run bloqueado pelo Cost Governor da Ronda");
+    runs+=1;if(stats)stats.runs=Number(stats.runs||0)+1;
     await acquire();
     const started=Date.now();
     try{
@@ -214,7 +219,7 @@ function structuredLog(event, fields = {}) {
   console.log(JSON.stringify({ event, version: VERSION, at: new Date().toISOString(), ...fields }));
 }
 
-function freshActiveRun(run, { queuedMaxAgeMs = 2 * 60 * 1000, runningMaxAgeMs = 5 * 60 * 1000 } = {}) {
+function freshActiveRun(run, { queuedMaxAgeMs = 7 * 60 * 1000, runningMaxAgeMs = 15 * 60 * 1000 } = {}) {
   if (!run || !["queued", "running"].includes(run.status)) return null;
   const reference = run.status === "queued"
     ? run.queuedAt
@@ -1111,6 +1116,12 @@ async function processRoundQueueMessage(message, env, body = {}) {
   }
   try {
     const db = requireDatabase(env);
+    const currentRun = await getRunStatus(db, runId).catch(() => null);
+    if (currentRun && ["success", "failed", "expired"].includes(String(currentRun.status || "").toLowerCase())) {
+      structuredLog("round_queue_terminal_skipped", { runId, status: currentRun.status, triggerType, mode });
+      message?.ack?.();
+      return;
+    }
     await markRunStarted(db, { id: runId, triggerType, queuedAt, startedAt });
     await performRound(env, triggerType, { runId, startedAt, runStarted: true, deferFailureSave: true, mode });
     structuredLog("round_queue_completed", { runId, triggerType, mode });
@@ -1168,8 +1179,8 @@ async function performSourceRevalidation(env,sourceId){
   if(!feed)throw new Error(`Fonte desconhecida para revalidação: ${sourceId}`);
   const states=await getSourceStates(db,[feed.id]);const state=states.get(feed.id)||null;
   const previousRound=await getLatestRound(db).catch(()=>null);
-  const browserFetcher=createSourceBrowserFetcher(env,{concurrency:1});
-  const outcome=await collectSourceRevalidation({feed,state,previousRound,browserFetcher});
+  // Revalidação em background é deliberadamente barata: sem Browser Run.
+  const outcome=await collectSourceRevalidation({feed,state,previousRound,browserFetcher:null});
   await saveSourceStates(db,[outcome.update]);
   await saveSourceDiscoveryItems(db,[outcome.update]).catch(()=>null);
   structuredLog("source_revalidated",{sourceId:feed.id,status:outcome.update.status,circuitState:outcome.update.circuitState,route:outcome.update.route,failureCount:outcome.update.failureCount});
@@ -1190,7 +1201,7 @@ async function processQueueBatch(batch, env) {
   for (const message of batch.messages || []) {
     const body = message?.body && typeof message.body === "object" ? message.body : {};
     if (body.type === "round") await processRoundQueueMessage(message, env, body);
-    else if(body.type === "source-revalidate") await processSourceRevalidationMessage(message,env,body);
+    else if(body.type === "source-revalidate") { structuredLog("source_revalidation_legacy_skipped",{sourceId:body?.sourceId||null,reason:"quality-first-next-round-handles-due-source"}); message?.ack?.(); }
     else await processIntelligentQueueMessage(message, env, body);
   }
 }
@@ -1231,8 +1242,16 @@ async function performRound(env, triggerType, options = {}) {
         return new Map();
       });
       const requestedBudget = Number(env.ROUND_EXTERNAL_REQUEST_BUDGET);
-      const externalRequestLimit = Number.isFinite(requestedBudget) && requestedBudget > 0 ? requestedBudget : 120;
-      const sourceBrowserFetcher=createSourceBrowserFetcher(env,{concurrency:Math.max(1,Math.min(2,Number(env.ROUND_BROWSER_CONCURRENCY)||2))});
+      const externalRequestLimit = Number.isFinite(requestedBudget) && requestedBudget > 0 ? requestedBudget : 70;
+      const browserDailyLimit = Math.max(0, Number(env.ROUND_BROWSER_DAILY_LIMIT) || 48);
+      const browserRunsToday = await getUsageMetricTotal(db, "round_browser_runs", { hours: 24 }).catch(() => 0);
+      const browserRemaining = Math.max(0, browserDailyLimit - browserRunsToday);
+      const browserStats = { runs: 0 };
+      const sourceBrowserFetcher=createSourceBrowserFetcher(env,{
+        concurrency:1,
+        maxRuns:browserRemaining > 0 ? 1 : 0,
+        stats:browserStats,
+      });
       payload = await collectRound({
         feeds: roundFeeds,
         monitoringTerms,
@@ -1244,7 +1263,9 @@ async function performRound(env, triggerType, options = {}) {
         earlySourceTarget: Number(env.ROUND_EARLY_SOURCE_TARGET) || 25,
         earlyFreshMinimum: Number(env.ROUND_EARLY_FRESH_MINIMUM) || 8,
         browserFetcher:sourceBrowserFetcher,
-        onRevalidateSource:env.ROUND_JOBS_QUEUE?.send?async(sourceId)=>{await env.ROUND_JOBS_QUEUE.send({type:"source-revalidate",sourceId,queuedAt:new Date().toISOString()});}:null,
+        // Quality-First 5M: a ronda nunca enfileira revalidações individuais na mesma ROUND Queue.
+        // A memória/cache continua disponível; a próxima ronda decide o que venceu.
+        onRevalidateSource:null,
         onEarlySnapshot: mode === "full" ? async (preview) => {
           let safePreview = portugueseOnlyFallback(preview);
           safePreview = withEditorias(safePreview);
@@ -1284,9 +1305,23 @@ async function performRound(env, triggerType, options = {}) {
         catalogFixed: true,
       };
       await touchRun(db, runId).catch(() => null);
+      await recordUsageMetric(db, "round_browser_runs", { value: browserStats.runs, samples: browserStats.runs ? 1 : 0 }).catch(() => null);
+      await recordUsageMetric(db, "round_external_requests", { value: Number(payload?.operational?.externalPortalRequests) || 0, samples: 1 }).catch(() => null);
       if (mode === "full") {
         try {
-          payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
+          const translationDailyLimit = Math.max(0, Number(env.ROUND_TRANSLATION_DAILY_LIMIT) || 192);
+          const translationsToday = await getUsageMetricTotal(db, "round_translation_new_titles", { hours: 24 }).catch(() => 0);
+          const translationRemaining = Math.max(0, translationDailyLimit - translationsToday);
+          payload = await translateRoundPayload(payload, { ai: translationAi(env), db, maximumNewTitles: Math.min(8, translationRemaining) });
+          await recordUsageMetric(db, "round_translation_new_titles", { value: Number(payload?.translation?.generatedFields) || 0, samples: 1 }).catch(() => null);
+          payload.costGovernor = {
+            targetAdditionalUsdPerWeek: 1,
+            browserDailyLimit,
+            browserRunsLast24h: browserRunsToday + browserStats.runs,
+            translationDailyLimit,
+            translationsLast24h: translationsToday + (Number(payload?.translation?.generatedFields) || 0),
+            externalRequestLimit,
+          };
         } catch (error) {
           structuredLog("round_translation_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
           payload = portugueseOnlyFallback(payload);
@@ -1538,19 +1573,19 @@ async function handleApi(request, env, url, ctx) {
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
       if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.5.4", job:reusable, pollAfterMs:0 },200);
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.5.6", job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.5.4",job:active,pollAfterMs:450},202);
+      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.5.6",job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
     // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
     // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
     const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.5.4", job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.5.6", job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
@@ -1558,7 +1593,6 @@ async function handleApi(request, env, url, ctx) {
     const { user } = await requireEditorialUser(request, env);
     const current = await getProductionJob(requireDatabase(env),productionJobMatch[1]);
     if (!current) throw new HttpError(404,"Produção não encontrada.");
-    if (!["ready","failed"].includes(current.status)) await recoverStalledProductionJob(env,current.id,{ctx}).catch(()=>null);
     const bundle = await productionBundle(requireDatabase(env),productionJobMatch[1]);
     if (!bundle?.job) throw new HttpError(404,"Produção não encontrada.");
     if (!isAdminUser(user) && bundle.job.createdBy && bundle.job.createdBy !== user.id) throw new HttpError(403,"Esta produção pertence a outro usuário.");
@@ -1603,6 +1637,12 @@ async function handleApi(request, env, url, ctx) {
     const body = await request.json().catch(() => ({}));
     const activity = await recordUserActivity(requireDatabase(env), user.id, body.area);
     return json({ ok:true, activity, access:{ idleMinutes:SESSION_IDLE_MINUTES, maximumActiveUsers:MAX_ACTIVE_USERS } });
+  }
+
+  if (url.pathname === "/api/admin/production-jobs/diagnostics" && request.method === "GET") {
+    await requireAdminUser(request, env);
+    const stuckOnly=url.searchParams.get("all")!=="1";
+    return json({ok:true,productionJobs:await getProductionOperationalDiagnostics(requireDatabase(env),{stuckOnly,limit:Number(url.searchParams.get("limit"))||20})});
   }
 
   if (url.pathname === "/api/admin/overview" && request.method === "GET") {
@@ -1940,7 +1980,7 @@ async function handleApi(request, env, url, ctx) {
       // A última coleta válida pode ser Fast Lane, pois ela atualiza o snapshot principal.
       getLatestRunSummary(db, { successOnly: true }),
     ]);
-    const activeRun = freshActiveRun(latest);
+    const activeRun = freshActiveRun(await getActiveRunSummary(db).catch(() => null));
     const running = Boolean(activeRun);
     let lastAttempt = null;
     if (latest && ["failed", "expired"].includes(latest.status)) {
@@ -1970,7 +2010,7 @@ async function handleApi(request, env, url, ctx) {
       topics: latestSuccess?.topics || 0,
       sources: latestSuccess?.sources || 0,
       schedulerHealthy: latestSuccess?.completedAt
-        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 12 * 60 * 1000
+        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 15 * 60 * 1000
         : false,
     };
     return conditionalJson(request, payload, `${latest?.id || "none"}-${latest?.status || "idle"}-${latestSuccess?.id || "none"}`);
@@ -1992,9 +2032,9 @@ async function handleApi(request, env, url, ctx) {
       service: "ronda-editorial-webapp",
       version: VERSION,
       database: dbOk ? "connected" : "error",
-      scheduleMinutes: 1,
-      fullRoundMinutes: 3,
-      schedulerHealthy: ageMs <= 12 * 60 * 1000,
+      scheduleMinutes: 5,
+      fullRoundMinutes: 5,
+      schedulerHealthy: ageMs <= 15 * 60 * 1000,
       lastSuccessAt,
       lastRunId: latest?.id ?? null,
       manualAuthRequired: Boolean(env.MANUAL_ROUND_TOKEN),
@@ -2002,9 +2042,9 @@ async function handleApi(request, env, url, ctx) {
       backgroundMonitoring: {
         active: true,
         browserRequired: false,
-        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue-fast-lane" : "cloudflare-cron-fast-lane",
-        scheduleMinutes: 1,
-        fullRoundMinutes: 3,
+        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue-quality-first" : "cloudflare-cron-quality-first",
+        scheduleMinutes: 5,
+        fullRoundMinutes: 5,
         monitoringTerms: monitoringTerms.length,
         dedicatedResults: null,
         catalogPortals: FEEDS.length,
@@ -2591,13 +2631,33 @@ async function handleApi(request, env, url, ctx) {
     }, 202);
   }
 
+  if (url.pathname === "/api/crawl" && request.method === "GET") {
+    await requireEditorialUser(request, env);
+    const db = requireDatabase(env);
+    const items = await listCrawlItems(db, {
+      limit: Number(url.searchParams.get("limit")) || 100,
+      hours: Number(url.searchParams.get("hours")) || 6,
+    });
+    const etag = normalizedEtag(`crawl-${items.length}-${items[0]?.firstSeenAt || "empty"}-${items[0]?.sourceId || "none"}`);
+    if (request.headers.get("If-None-Match") === etag) {
+      return new Response(null, { status: 304, headers: { ...SECURITY_HEADERS, ETag: etag, "Cache-Control": "private, max-age=30" } });
+    }
+    return json({
+      ok: true,
+      mode: "read-only-captured-news",
+      consumes: { scraping:false, browser:false, ai:false, translation:false },
+      items,
+      generatedAt: new Date().toISOString(),
+    }, 200, { ETag: etag, "Cache-Control": "private, max-age=30" });
+  }
+
   if (url.pathname === "/api/round" && request.method === "POST") {
     if (env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
       throw new HttpError(401, "Chave de operação inválida.");
     }
     const db = requireDatabase(env);
     await expireStaleRuns(db).catch(() => null);
-    const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
+    const activeRun = freshActiveRun(await getActiveRunSummary(db).catch(() => null));
     if (activeRun) {
       return json({ ok: true, queued: true, reused: true, runId: activeRun.id, status: activeRun.status }, 202);
     }
@@ -2663,34 +2723,48 @@ export default {
 
   async scheduled(controller, env, ctx) {
     const roundTask = async () => {
-      const runId = crypto.randomUUID();
-      const queuedAt = new Date().toISOString();
-      const minute = new Date(queuedAt).getUTCMinutes();
-      const mode = minute % 3 === 0 ? "full" : "fast";
-      const triggerType = mode === "fast" ? "fast-lane" : "scheduled";
       const db = requireDatabase(env);
-      await autoRecoverStaleIntelligentJobs(env,{limit:3}).catch(()=>null);
-      // Watchdog completo somente na ronda editorial; Fast Lane fica leve.
-      if (mode === "full") await runOperationalWatchdog(env).catch(error=>structuredLog("watchdog_failed",{detail:error instanceof Error?error.message:String(error)}));
+      // Quality-First 5M: manutenção barata e apenas um recovery por classe/ciclo.
+      await autoRecoverStaleIntelligentJobs(env,{limit:1}).catch(()=>null);
+      await autoRecoverStaleProductionJobs(env,{limit:1,ctx}).catch(error=>structuredLog("production_auto_recovery_failed",{detail:error instanceof Error?error.message:String(error)}));
+      await runOperationalWatchdog(env).catch(error=>structuredLog("watchdog_failed",{detail:error instanceof Error?error.message:String(error)}));
       await expireStaleRuns(db).catch(() => null);
-      const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
-      if (activeRun) {
-        structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt, mode });
+
+      const enqueueGate = await acquireLock(db, "round-enqueue-gate", 20 * 1000);
+      if (!enqueueGate) {
+        structuredLog("scheduled_round_coalesced", { reason: "enqueue-gate-busy" });
         return;
       }
-      await queueRun(db, { id: runId, triggerType, queuedAt });
-      if (env.ROUND_JOBS_QUEUE?.send) {
-        try{
-          await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType, queuedAt, mode });
-          structuredLog("round_enqueued", { runId, triggerType, mode });
+      let gateReleased = false;
+      const releaseGate = async () => { if (!gateReleased) { gateReleased = true; await releaseLock(db, enqueueGate).catch(() => null); } };
+      try {
+        const activeRun = freshActiveRun(await getActiveRunSummary(db).catch(() => null));
+        if (activeRun) {
+          structuredLog("scheduled_round_coalesced", { activeRunId: activeRun.id, activeRunStatus: activeRun.status, reason: "single-flight" });
           return;
-        }catch(error){
-          structuredLog("scheduled_round_queue_fallback_inline",{runId,mode,detail:error instanceof Error?error.message:String(error)});
         }
+
+        const runId = crypto.randomUUID();
+        const queuedAt = new Date().toISOString();
+        const triggerType = "scheduled";
+        const mode = "full";
+        await queueRun(db, { id: runId, triggerType, queuedAt });
+        if (env.ROUND_JOBS_QUEUE?.send) {
+          try{
+            await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType, queuedAt, mode });
+            structuredLog("round_enqueued", { runId, triggerType, mode, cadenceMinutes: 5 });
+            return;
+          }catch(error){
+            structuredLog("scheduled_round_queue_fallback_inline",{runId,mode,detail:error instanceof Error?error.message:String(error)});
+          }
+        }
+        await releaseGate();
+        const startedAt = new Date().toISOString();
+        await markRunStarted(db, { id: runId, triggerType, queuedAt, startedAt });
+        await performRound(env, triggerType, { runId, startedAt, runStarted: true, mode });
+      } finally {
+        await releaseGate();
       }
-      const startedAt = new Date().toISOString();
-      await markRunStarted(db, { id: runId, triggerType, queuedAt, startedAt });
-      await performRound(env, triggerType, { runId, startedAt, runStarted: true, mode });
     };
 
     ctx.waitUntil(roundTask().catch((error) => {

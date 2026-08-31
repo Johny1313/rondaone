@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.4";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.6";
 const PRODUCTION_READ_STALE_MS = 15_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 45_000;
@@ -310,6 +310,21 @@ async function hasActiveProductionLease(db,jobId,stage){
   return Number(row?.expires_at)>Date.now();
 }
 
+async function ownsProductionLease(db,lease){
+  if(!lease)return false;
+  await ensureProductionSchema(db);
+  const row=await db.prepare("SELECT token,expires_at FROM production_stage_leases WHERE job_id=? AND stage=? LIMIT 1").bind(lease.jobId,lease.stage).first().catch(()=>null);
+  return row?.token===lease.token&&Number(row?.expires_at)>Date.now();
+}
+
+async function revokeProductionLease(db,jobId,stage){
+  await ensureProductionSchema(db);
+  const row=await db.prepare("SELECT token,expires_at FROM production_stage_leases WHERE job_id=? AND stage=? LIMIT 1").bind(jobId,stage).first().catch(()=>null);
+  if(!row?.token)return {revoked:false,active:false};
+  await db.prepare("DELETE FROM production_stage_leases WHERE job_id=? AND stage=?").bind(jobId,stage).run().catch(()=>null);
+  return {revoked:true,active:Number(row.expires_at)>Date.now(),token:String(row.token)};
+}
+
 async function touchProductionJob(db,jobId){
   await db.prepare("UPDATE production_jobs SET updated_at=? WHERE id=? AND status IN ('queued','running')").bind(nowIso(),jobId).run().catch(()=>null);
 }
@@ -529,10 +544,21 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
       textPack=await translateEvidencePackToPtBrFast(env,textPack,{slideCount:job.input?.slideCount||7});
       evidenceResult={ok:true,evidence:textPack};
     }
+    // Um retry manual pode revogar a lease desta tentativa enquanto o fetch/browser
+    // ainda está terminando. Nesse caso a tentativa antiga não pode sobrescrever o
+    // estado nem o Evidence Pack produzido pela nova leitura.
+    if(!await ownsProductionLease(db,lease)){
+      await event(db,jobId,"reading","superseded","Leitura anterior terminou depois de uma nova tentativa assumir o job",{retryMode:retryMode||"default",leaseSuperseded:true}).catch(()=>null);
+      return getProductionJob(db,jobId);
+    }
     const evidence=await saveEvidencePackage(db,evidenceResult.evidence);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:48,evidenceId:evidence.id,fallbackLevel:evidence?.reading?.degraded?1:0});
     await event(db,jobId,"evidence","completed",`Evidence Pack criado · ${evidence.wordCount} palavras · PT-BR`,{quality:evidence?.reading?.quality,method:evidence?.reading?.method,sourceRole:evidence?.sourceSelection?.selectedRole||"direct",translation:evidence?.translation?.status||"not-needed"});
     return job;
   }catch(error){
+    if(!await ownsProductionLease(db,lease)){
+      await event(db,jobId,"reading","superseded","Falha de uma leitura anterior ignorada porque uma nova tentativa já assumiu o job",{error:String(error?.message||error).slice(0,180),retryMode:retryMode||"default",leaseSuperseded:true}).catch(()=>null);
+      return getProductionJob(db,jobId);
+    }
     const latest=await getProductionJob(db,jobId).catch(()=>null);
     if(latest?.status==="ready"&&latest?.result?.slides?.length)return latest;
     const readAttempts=Array.isArray(error?.readAttempts)?error.readAttempts.slice(0,8):[];
@@ -566,10 +592,18 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.5.4",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.5.6",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    if(!await ownsProductionLease(db,lease)){
+      await event(db,jobId,deterministicOnly?"fallback":"generating","superseded","Geração anterior terminou depois de uma nova tentativa assumir o job",{leaseSuperseded:true,deterministicOnly:Boolean(deterministicOnly)}).catch(()=>null);
+      return getProductionJob(db,jobId);
+    }
     const alreadyReady=await getProductionJob(db,jobId);if(alreadyReady?.status==="ready"&&alreadyReady?.result?.slides?.length)return alreadyReady;
     job=await updateJob(db,jobId,{status:"ready",stage:"ready",progress:100,result:finalResult,error:null});await event(db,jobId,"ready","completed",`Conteúdo pronto · ${result.slides?.length||0} slides`,{quality:result?.qualityGate?.score,confidence:result?.confidence?.score,deterministicOnly:Boolean(deterministicOnly)});return job;
   }catch(error){
+    if(!await ownsProductionLease(db,lease)){
+      await event(db,jobId,deterministicOnly?"fallback":"generating","superseded","Falha de uma geração anterior ignorada porque uma nova tentativa já assumiu o job",{error:String(error?.message||error).slice(0,180),leaseSuperseded:true,deterministicOnly:Boolean(deterministicOnly)}).catch(()=>null);
+      return getProductionJob(db,jobId);
+    }
     const latest=await getProductionJob(db,jobId).catch(()=>null);
     if(latest?.status==="ready"&&latest?.result?.slides?.length)return latest;
     if(!deterministicOnly){
@@ -614,7 +648,9 @@ export async function startProductionPipeline(env,jobId,{force=false,ctx=null}={
 
 async function executeInteractiveProduction(env,jobId,{force=false,retryMode=null}={}){
   let current=await processProductionRead(env,jobId,{force,retryMode});
+  if(current?.leaseBusy||current?.deduplicated)return current;
   if(current?.status==="failed")return current;
+  if(!current?.evidenceId)return current;
   return processProductionGenerate(env,jobId);
 }
 
@@ -749,8 +785,21 @@ export async function recoverStalledProductionJob(env,id,{ctx=null,forceFallback
     }
   }
   if(ageMs>=PRODUCTION_ABSOLUTE_DEADLINE_MS&&!job.evidenceId){
-    job=await updateJob(db,id,{status:"failed",stage:"reading",progress:100,error:"A fonte não respondeu após as rotas de recuperação disponíveis. Tente outra matéria ou execute uma nova leitura."});
-    await event(db,id,"reading","failed","Produção encerrada após 55 s sem Evidence Pack",{idleMs,ageMs,singleCoordinator:true});
+    // Não declarar falha enquanto uma leitura antiga ainda detém a lease. Em vez
+    // disso, fazemos um handoff único para snapshot/cache. A tentativa antiga é
+    // invalidada e, graças ao token da lease, não pode sobrescrever o novo ciclo.
+    if(await hasActiveProductionLease(db,id,"reading")){
+      const deadlineHandoffs=(await db.prepare("SELECT COUNT(*) AS total FROM production_stage_events WHERE job_id=? AND stage='reading' AND status='recovery' AND detail='Deadline absoluto: handoff da leitura para snapshot/cache'").bind(id).first().catch(()=>null));
+      if(Number(deadlineHandoffs?.total||0)<1){
+        await revokeProductionLease(db,id,"reading").catch(()=>null);
+        await updateJob(db,id,{status:"running",stage:"reading",progress:Math.max(12,job.progress||0),error:null,fallbackLevel:Math.max(1,job.fallbackLevel||0)});
+        await event(db,id,"reading","recovery","Deadline absoluto: handoff da leitura para snapshot/cache",{idleMs,ageMs,singleCoordinator:true,leaseHandoff:true,retryMode:"snapshot"}).catch(()=>null);
+        return runDirectProductionRecovery(env,id,{stage:"reading",ctx,retryMode:"snapshot",force:false});
+      }
+      return getProductionJob(db,id);
+    }
+    job=await updateJob(db,id,{status:"failed",stage:"reading",progress:100,error:"A fonte não respondeu após as rotas de recuperação disponíveis. Tente novamente para iniciar uma nova leitura com estratégia diferente."});
+    await event(db,id,"reading","failed","Produção encerrada após o deadline sem Evidence Pack e sem leitura ativa",{idleMs,ageMs,singleCoordinator:true});
   } else if(ageMs>=PRODUCTION_ABSOLUTE_DEADLINE_MS&&job.evidenceId&&job.status!=="ready"){
     const fallbackCount=await productionRecoveryCount(db,id,"fallback");
     if(fallbackCount>=1){
@@ -761,6 +810,65 @@ export async function recoverStalledProductionJob(env,id,{ctx=null,forceFallback
   return job;
 }
 
+
+export async function getProductionOperationalDiagnostics(db,{stuckOnly=true,limit=20}={}){
+  await ensureProductionSchema(db);
+  const safeLimit=Math.max(1,Math.min(50,Number(limit)||20));
+  const cutoff=new Date(Date.now()-5*60*1000).toISOString();
+  const where=stuckOnly?"WHERE p.status IN ('queued','running') AND p.updated_at < ?":"WHERE p.status IN ('queued','running')";
+  const query=`SELECT p.* FROM production_jobs p ${where} ORDER BY p.updated_at ASC LIMIT ?`;
+  const rows=(await (stuckOnly?db.prepare(query).bind(cutoff,safeLimit):db.prepare(query).bind(safeLimit)).all())?.results||[];
+  const now=Date.now();const items=[];
+  for(const row of rows){
+    const job=jobRow(row);const events=(await db.prepare("SELECT stage,status,detail,metadata_json,created_at FROM production_stage_events WHERE job_id=? ORDER BY created_at ASC LIMIT 120").bind(job.id).all().catch(()=>({results:[]})))?.results||[];
+    const leases=(await db.prepare("SELECT stage,expires_at,updated_at FROM production_stage_leases WHERE job_id=? ORDER BY updated_at DESC").bind(job.id).all().catch(()=>({results:[]})))?.results||[];
+    const activeLease=leases.find(x=>Number(x.expires_at)>now)||null;
+    const recoveryEvents=events.filter(x=>x.status==='recovery');
+    const runningEvent=events.find(x=>x.status==='running')||null;
+    const completedEvent=[...events].reverse().find(x=>x.status==='completed'||x.stage==='ready')||null;
+    const previousEvent=events.length>1?events[events.length-2]:null;
+    const updatedMs=Date.parse(job.updatedAt||job.createdAt||'');const createdMs=Date.parse(job.createdAt||'');
+    const ageSeconds=Number.isFinite(createdMs)?Math.max(0,Math.floor((now-createdMs)/1000)):null;
+    const heartbeatAgeSeconds=Number.isFinite(updatedMs)?Math.max(0,Math.floor((now-updatedMs)/1000)):null;
+    let reason='active_processing';
+    if(activeLease)reason='active_lease';
+    else if(job.evidenceId&&['source','reading','evidence'].includes(String(job.stage||'')))reason='evidence_ready_state_not_advanced';
+    else if((heartbeatAgeSeconds||0)>=300&&job.status==='queued')reason='queue_or_consumer_no_progress';
+    else if((heartbeatAgeSeconds||0)>=300&&job.status==='running')reason='heartbeat_lost_or_worker_abandoned';
+    else if((ageSeconds||0)>=Math.floor(PRODUCTION_ABSOLUTE_DEADLINE_MS/1000))reason='recovery_due';
+    const input=job.input||{};
+    items.push({
+      jobId:job.id,productionId:job.id,articleId:input.articleId||null,eventId:input.eventId||input?.editorialEventContext?.eventId||null,topicId:input?.topic?.id||job.sourceType==='topic'?job.sourceRef:null,url:job.sourceType==='url'?job.sourceRef:(input.url||null),
+      createdAt:job.createdAt,updatedAt:job.updatedAt,startedAt:runningEvent?.created_at||null,completedAt:completedEvent?.created_at||null,heartbeatAt:job.updatedAt,
+      status:job.status,stage:job.stage,previousStage:previousEvent?.stage||null,retryCount:recoveryEvents.filter(x=>String(x.detail||'').startsWith('Nova tentativa')).length,
+      queue:['source','reading','evidence'].includes(String(job.stage||''))?'ARTICLE_READ':(['generating','quality','fallback'].includes(String(job.stage||''))?'CAROUSEL_AI':null),queueMessageId:null,worker:null,
+      lockId:activeLease?`lease:${activeLease.stage}`:null,lockOwner:activeLease?'production-stage-lease':null,lockCreatedAt:null,lockExpiresAt:activeLease?new Date(Number(activeLease.expires_at)).toISOString():null,
+      lastError:job.error||null,failureStage:job.status==='failed'?job.stage:null,recoveryAttempts:recoveryEvents.length,lastRecoveryAt:recoveryEvents.length?recoveryEvents[recoveryEvents.length-1].created_at:null,
+      sourceType:job.sourceType,carouselJobId:job.id,resultExists:Boolean(job.result?.slides?.length),evidenceExists:Boolean(job.evidenceId),ageSeconds,heartbeatAgeSeconds,reason,
+    });
+  }
+  return {generatedAt:nowIso(),stuckCutoffSeconds:300,count:items.length,items,schemaLimitations:{queueMessageId:'not-persisted',worker:'not-persisted',lockCreatedAt:'not-persisted; lease updated_at is renewal time',heartbeatAt:'production_jobs.updated_at is the heartbeat-equivalent timestamp'}};
+}
+
+export async function autoRecoverStaleProductionJobs(env,{limit=5,ctx=null}={}){
+  const db=env.DB;await ensureProductionSchema(db);
+  // This extends the existing scheduled recovery coordinator. It does not create
+  // a competing worker: recoverStalledProductionJob still owns all lease,
+  // idempotency, retry and fallback decisions.
+  const cutoff=new Date(Date.now()-Math.min(PRODUCTION_READ_STALE_MS,PRODUCTION_GENERATE_STALE_MS)).toISOString();
+  const rows=(await db.prepare("SELECT id FROM production_jobs WHERE status IN ('queued','running') AND updated_at < ? ORDER BY updated_at ASC LIMIT ?").bind(cutoff,Math.max(1,Math.min(10,Number(limit)||5))).all().catch(()=>({results:[]})))?.results||[];
+  let recovered=0,terminal=0,unchanged=0;
+  for(const row of rows){
+    const before=await getProductionJob(db,row.id).catch(()=>null);if(!before)continue;
+    try{
+      const after=await recoverStalledProductionJob(env,row.id,{ctx});
+      if(after?.status==='ready'||after?.status==='failed')terminal+=1;
+      if(after&&(after.status!==before.status||after.stage!==before.stage||after.updatedAt!==before.updatedAt))recovered+=1;else unchanged+=1;
+    }catch{unchanged+=1;}
+  }
+  return {candidates:rows.length,recovered,terminal,unchanged};
+}
+
 export async function productionBundle(db,id){
   const job=await getProductionJob(db,id);if(!job)return null;const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;const events=(await db.prepare("SELECT stage,status,detail,metadata_json,created_at FROM production_stage_events WHERE job_id=? ORDER BY created_at ASC LIMIT 80").bind(id).all())?.results||[];
   return {job,evidence:job.status==="ready"?evidence:evidence?{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,title:evidence.title,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,wordCount:evidence.wordCount,reading:evidence.reading,images:evidence.images}:null,events:events.map((x)=>({stage:x.stage,status:x.status,detail:x.detail,metadata:parseJson(x.metadata_json,{}),createdAt:x.created_at}))};
@@ -769,16 +877,21 @@ export async function productionBundle(db,id){
 export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
   const job=await getProductionJob(env.DB,id);if(!job)throw new Error("Produção não encontrada.");
   if(stage==="generate"&&job.evidenceId){
+    const revoked=await revokeProductionLease(env.DB,id,"generating").catch(()=>({revoked:false,active:false}));
     await updateJob(env.DB,id,{status:"queued",stage:"generating",progress:52,error:null});
-    await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; retomando diretamente do Evidence Pack",{sameJob:true,transport:"waitUntil-direct"}).catch(()=>null);
+    await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; retomando diretamente do Evidence Pack",{sameJob:true,transport:"waitUntil-direct",leaseRevoked:Boolean(revoked?.revoked),previousLeaseActive:Boolean(revoked?.active)}).catch(()=>null);
     return runDirectProductionRecovery(env,id,{stage:"generating",ctx});
   }
   const retryRows=(await env.DB.prepare("SELECT metadata_json FROM production_stage_events WHERE job_id=? AND stage='reading' AND status='recovery' AND detail LIKE 'Nova tentativa %' ORDER BY created_at ASC LIMIT 12").bind(id).all().catch(()=>({results:[]})))?.results||[];
   const retryNumber=retryRows.length+1;
   const retryMode=retryNumber===1?'alternate':retryNumber===2?'deep':'snapshot';
   const labels={alternate:'transporte alternativo',deep:'leitura profunda com rota alternativa',snapshot:'snapshot/cache + rotas disponíveis'};
+  // Retry manual tem prioridade sobre uma leitura antiga que ficou viva além do
+  // deadline. Revogar a lease garante que o clique realmente inicia uma nova rota.
+  // A tentativa antiga verifica o token antes de gravar qualquer resultado.
+  const revoked=await revokeProductionLease(env.DB,id,"reading").catch(()=>({revoked:false,active:false}));
   await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});
-  await event(env.DB,id,"reading","recovery",`Nova tentativa ${retryNumber}: ${labels[retryMode]}; mesmo job, estratégia diferente`,{sameJob:true,retryNumber,retryMode,avoidRepeat:true,manualRetry:true}).catch(()=>null);
+  await event(env.DB,id,"reading","recovery",`Nova tentativa ${retryNumber}: ${labels[retryMode]}; mesmo job, estratégia diferente`,{sameJob:true,retryNumber,retryMode,avoidRepeat:true,manualRetry:true,leaseRevoked:Boolean(revoked?.revoked),previousLeaseActive:Boolean(revoked?.active)}).catch(()=>null);
   const launched=await launchInteractiveProduction(env,id,{force:retryMode!=='snapshot',ctx,retryMode});
   return launched.job||getProductionJob(env.DB,id);
 }

@@ -3,7 +3,7 @@ import { getCachedTranslations, saveCachedTranslations } from "./database.js";
 import { plainText, stableHash } from "./parser.js";
 
 export const TRANSLATION_MODEL = "@cf/meta/m2m100-1.2b";
-export const MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND = 18;
+export const MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND = 8;
 export const TRANSLATION_CONCURRENCY = 3;
 const SPANISH_SOURCES = new Set(["El País", "Infobae"]);
 const PORTUGUESE_WORDS = /\b(que|para|com|uma|das|dos|não|mais|sobre|após|entre|governo|notícia|brasil|mundo|novo|nova|segundo|diz)\b/i;
@@ -85,6 +85,8 @@ async function runLimited(entries, limit, worker) {
 }
 
 function prioritizedTitleRequests(worldItems, cached, maximum) {
+  const safeMaximum = Math.max(0, Number(maximum) || 0);
+  if (!safeMaximum) return [];
   const candidates = [];
   const seenKeys = new Set();
   const firstBySource = new Map();
@@ -104,7 +106,7 @@ function prioritizedTitleRequests(worldItems, cached, maximum) {
   for (const request of candidates) {
     if (!prioritizedKeys.has(request.key)) prioritized.push(request);
   }
-  return prioritized.slice(0, Math.max(1, Number(maximum) || MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND));
+  return prioritized.slice(0, safeMaximum);
 }
 
 export async function translateWorldItems(items, {
@@ -202,7 +204,7 @@ function recalculateSources(sources, items) {
   });
 }
 
-export async function translateRoundPayload(payload, { ai, db } = {}) {
+export async function translateRoundPayload(payload, { ai, db, maximumNewTitles = MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND } = {}) {
   if (!payload?.ok || !Array.isArray(payload.items)) return payload;
   const worldItems = payload.items.filter((item) => item?.region === "Mundo");
   const brazilItems = payload.items.filter((item) => item?.region !== "Mundo" && item?.region !== "Rede");
@@ -213,7 +215,7 @@ export async function translateRoundPayload(payload, { ai, db } = {}) {
     if (title && !isLikelyPortuguese(title)) keys.push(translationKey(title, sourceLanguage(item)));
   }
   const cached = db ? await getCachedTranslations(db, keys) : new Map();
-  const translated = await translateWorldItems(worldItems, { ai, cached });
+  const translated = await translateWorldItems(worldItems, { ai, cached, maximumNewTitles });
   if (db && translated.generatedEntries.length) await saveCachedTranslations(db, translated.generatedEntries);
 
   const finalItems = [...brazilItems, ...translated.translatedItems, ...portugueseSocialItems];
@@ -241,7 +243,7 @@ export async function translateRoundPayload(payload, { ai, db } = {}) {
       portugueseOnly: true,
       strategy: "cached-title-first",
       concurrency: TRANSLATION_CONCURRENCY,
-      maxNewTitlesPerRound: MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND,
+      maxNewTitlesPerRound: Math.max(0, Number(maximumNewTitles) || 0),
       translatedWorldItems: translated.translatedItems.length,
       omittedWorldItems: translated.omittedItems,
       titleOnlyItems: translated.titleOnlyItems,

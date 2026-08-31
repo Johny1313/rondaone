@@ -36,20 +36,24 @@ export async function buildPlatformStatus(env){
     ARTICLE_READ:env?.ARTICLE_READ_QUEUE&&typeof env.ARTICLE_READ_QUEUE.send==='function'?'available':'unavailable',
     CAROUSEL_AI:env?.CAROUSEL_AI_QUEUE&&typeof env.CAROUSEL_AI_QUEUE.send==='function'?'available':'unavailable',
   };
-  let database='unconfigured',lastSuccessAt=null,schedulerHealthy=false,sourceRows=[],stuckIntelligent=0,stuckProduction=0;
+  let database='unconfigured',lastSuccessAt=null,schedulerHealthy=false,sourceRows=[],stuckIntelligent=0,stuckProduction=0,activeProduction=0,recoveringProduction=0,oldestActiveAgeSeconds=0,oldestHeartbeatAgeSeconds=0;
   if(env?.DB){
     try{
       const health=await env.DB.prepare('SELECT 1 AS ok').first();
       database=Number(health?.ok)===1?'connected':'error';
       const latest=await env.DB.prepare("SELECT completed_at FROM runs WHERE status='success' ORDER BY completed_at DESC LIMIT 1").first().catch(()=>null);
       lastSuccessAt=latest?.completed_at||null;
-      schedulerHealthy=Boolean(lastSuccessAt)&&Date.now()-Date.parse(lastSuccessAt)<=12*60*1000;
+      schedulerHealthy=Boolean(lastSuccessAt)&&Date.now()-Date.parse(lastSuccessAt)<=15*60*1000;
       const sources=await env.DB.prepare('SELECT source_id,status,route,item_count,failure_count FROM source_state').all().catch(()=>({results:[]}));
       sourceRows=sources?.results||[];
       const staleCutoff=new Date(Date.now()-5*60*1000).toISOString();
       const intelligent=await env.DB.prepare("SELECT COUNT(*) AS total FROM intelligent_jobs WHERE status IN ('queued','running') AND updated_at < ?").bind(staleCutoff).first().catch(()=>null);
       const production=await env.DB.prepare("SELECT COUNT(*) AS total FROM production_jobs WHERE status IN ('queued','running') AND updated_at < ?").bind(staleCutoff).first().catch(()=>null);
-      stuckIntelligent=Number(intelligent?.total)||0;stuckProduction=Number(production?.total)||0;
+      const productionSummary=await env.DB.prepare("SELECT COUNT(*) AS active, MIN(created_at) AS oldest_created_at, MIN(updated_at) AS oldest_updated_at FROM production_jobs WHERE status IN ('queued','running')").first().catch(()=>null);
+      const recovering=await env.DB.prepare("SELECT COUNT(DISTINCT p.id) AS total FROM production_jobs p WHERE p.status IN ('queued','running') AND EXISTS (SELECT 1 FROM production_stage_events e WHERE e.job_id=p.id AND e.status='recovery' AND e.created_at>=?)").bind(new Date(Date.now()-5*60*1000).toISOString()).first().catch(()=>null);
+      stuckIntelligent=Number(intelligent?.total)||0;stuckProduction=Number(production?.total)||0;activeProduction=Number(productionSummary?.active)||0;recoveringProduction=Number(recovering?.total)||0;
+      const oldestCreatedMs=Date.parse(productionSummary?.oldest_created_at||'');const oldestUpdatedMs=Date.parse(productionSummary?.oldest_updated_at||'');
+      oldestActiveAgeSeconds=Number.isFinite(oldestCreatedMs)?Math.max(0,Math.floor((Date.now()-oldestCreatedMs)/1000)):0;oldestHeartbeatAgeSeconds=Number.isFinite(oldestUpdatedMs)?Math.max(0,Math.floor((Date.now()-oldestUpdatedMs)/1000)):0;
     }catch{database='error';}
   }
   const total=39;
@@ -65,10 +69,10 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.4',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.7',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
-    jobs:{stuckIntelligent,stuckProduction,healthy:stuckIntelligent===0&&stuckProduction===0},
+    jobs:{stuckIntelligent,stuckProduction,activeProduction,recoveringProduction,oldestActiveAgeSeconds,oldestHeartbeatAgeSeconds,healthy:stuckIntelligent===0&&stuckProduction===0},
   };
 }
 
@@ -85,10 +89,10 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.5.4',
+      version:'0.9.7.5.7',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.5.4',
+        editorialVersion:'2.9.7.5.7',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -124,8 +128,8 @@ export default {
       roundPipeline:{
         mode:'workers-paid-full',
         registeredSources:39,
-        sourceConcurrency:14,
-        requestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||120,
+        sourceConcurrency:10,
+        requestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||70,
         oneSourcePerRound:false,
         uiForceLatestOnStartup:true,
         legacyBackoffClampMinutes:10,
@@ -199,8 +203,9 @@ export default {
       },
       fastNewsEngineV090:{
         enabled:true,
-        cronMinutes:1,
-        fullRoundMinutes:3,
+        cronMinutes:5,
+        fullRoundMinutes:5,
+        automaticFastLane:false,
         discoveryClock:'firstSeenAt',
         routes:['rss','html-scrape','google-domain-fallback','persistent-cache'],
         fastLaneSources:11,
@@ -236,10 +241,10 @@ export default {
       singleSourceContentFirstV0972:{enabled:true,contentFirst:true,templateAfterGeneration:true,templateChangeWithoutAi:true,targetLanguage:'pt-BR',translateForeignEvidence:true,sourceSelection:'primary-plus-single-backup',parallelMultiPublisherReading:false,maximumPublisherReads:2,performanceTelemetry:true},
       mandatorySlideCountV09721:{enabled:true,requiredBeforeProduction:true,noHangProductionV09722:{enabled:true,frontendDeadlineSeconds:30,backendDeadlineSeconds:30,deterministicFallback:true},minimum:3,maximum:15,presets:[3,5,7,10],appliesTo:['topic','event','url','text'],backendEnforced:true},
       interactiveFastPathV0973:{enabled:true,manualProductionQueueBypass:true,interactiveDeadlineSeconds:12,evidencePackDirectGeneration:true,compactEvidencePrompt:true,maximumPromptEvidence:18,fullArticleRetranslation:false,secondaryAiOnlyOnQualityFailure:true,queueRecoveryFallback:true,targetTypicalSeconds:'5-12'},
-      fastRonda25PlusV0974:{enabled:true,sourceTarget:Number(env.ROUND_EARLY_SOURCE_TARGET)||25,minimumFreshBeforePreview:Number(env.ROUND_EARLY_FRESH_MINIMUM)||8,fullSourceConcurrency:14,fastLaneConcurrency:8,rssFirst:true,skipHtmlWhenRssHealthy:true,earlyPreview:true,finalRecoveryContinues:true,registeredSources:39},
+      fastRonda25PlusV0974:{enabled:true,sourceTarget:Number(env.ROUND_EARLY_SOURCE_TARGET)||25,minimumFreshBeforePreview:Number(env.ROUND_EARLY_FRESH_MINIMUM)||8,fullSourceConcurrency:10,fastLaneConcurrency:6,rssFirst:true,skipHtmlWhenRssHealthy:true,earlyPreview:true,finalRecoveryContinues:true,registeredSources:39},
       adaptiveScrapingV09745:{enabled:true,streamingHtml:true,maxHtmlBytes:2500000,jsonLdFirst:true,adapterFirst:true,evidenceSufficiency:true,ampOnlyWhenNeeded:true,singleBackupAutomatic:true,retryChangesStrategy:true,schemaHotPathMemoized:true},
       hybridMultiTransportV09746:{enabled:true,policy:'same-source-transports-before-backup',transports:['cache','direct-fetch','browser-run','snapshot-rss'],browserRunBinding:!!env.BROWSER,directFirstDefault:true,transportLearning:true,browserFirstForDegradedDomains:true,singleEditorialBackup:true,bandAdapter:true,noManualRetryLoop:true},
-      highVolumeDiscoveryV09747:{enabled:true,sourceVolumeProfiles:true,veryHighSources:['g1','cnn-brasil','folha','estadao','o-globo','metropoles','ge'],multiRouteBeforeStop:true,undatedHomepageFirstSeen:true,canonicalUrlDedup:true,discoveryPersistence:'D1 source_discovery_items',coverageWindows:['15m','1h','6h','24h'],coverageScore:true,coverageTargetPerProfile:true,lowCoverageAlert:true},
+      highVolumeDiscoveryV09747:{enabled:true,sourceVolumeProfiles:true,veryHighSources:['g1','cnn-brasil','folha','estadao','o-globo','metropoles','ge'],multiRouteBeforeStop:'only-when-coverage-low',undatedHomepageFirstSeen:true,canonicalUrlDedup:true,discoveryPersistence:'D1 source_discovery_items',coverageWindows:['15m','1h','6h','24h'],coverageScore:true,coverageTargetPerProfile:true,lowCoverageAlert:true},
       hotfixLockV09748:{enabled:true,circuitBreaker:['CLOSED','OPEN','HALF_OPEN'],staleWhileRevalidate:true,routeAwareTimeouts:true,http525:'tls-upstream',platformStatusOperational:true,queueStatus:true,sourceIsolation:true,limitedBrowserRecovery:true,noArchitectureRewrite:true},
       editorialDeskTrackingV09749:{enabled:true,statuses:['available','production','forma','completed'],userAttribution:true,formaHandoff:true,exportAutoComplete:true,mainIncludesEditorialUpdates:true},
       adaptiveRetryV0975:{enabled:true,sameJob:true,avoidSameRoute:true,retryModes:['alternate','deep','snapshot'],firstRetryChangesTransport:true,secondRetryDeepRead:true,thirdRetryUsesSnapshotFallback:true},
@@ -274,12 +279,15 @@ export default {
       multiAiCarouselV0941:{enabled:true,mode:'failover',primary:'llama-3.3-70b-fast',secondary:'llama-3.1-8b-fast',tertiaryOptional:true,qualityGate:true,confidenceScore:true,deterministicFinalFallback:true},
       carouselVersioningV0942:{enabled:true,automaticGeneratedVersion:true,formaRevisions:true,restore:true,contentLock:true,contentLockScope:'semantic-field'},
       operationsV0943:{enabled:true,watchdog:true,automaticReplay:true,manualReplay:true,sourceHealthScore:true,costMonitor:true,costEstimateOnly:true},
+      qualityFirstV09757:{enabled:true,roundCadenceMinutes:5,singleFlight:true,coalescing:true,maxPendingRounds:1,registeredSources:39,sourceCadenceMinutes:{high:5,medium:10,normal:15},newItemLimits:{veryHigh:24,high:18,normal:12,world:10},dedupeBeforeExpensiveWork:true,sourceMemoryFirst:true,automaticFastLane:false,legacyQueueMessagesSafeDrain:true},
+      costGovernorV09757:{enabled:true,targetAdditionalUsdPerWeek:1,automaticSpendTarget:true,externalRequestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||70,browserDailyLimit:Number(env.ROUND_BROWSER_DAILY_LIMIT)||48,browserPerRoundLimit:1,translationDailyLimit:Number(env.ROUND_TRANSLATION_DAILY_LIMIT)||192,browserRecoveryOnly:true,backgroundSourceBrowser:false,carouselQualityBudgetExempt:true,billingApiRequiredForHardDollarGuarantee:true},
+      crawlReadOnlyV09757:{enabled:true,endpoint:'/api/crawl',source:'D1 source_discovery_items',scraping:false,browser:false,ai:false,translation:false,originalArticleLinks:true,cacheSeconds:30},
       workflowV095:{enabled:true,statuses:['draft','in_review','approved','published','rejected'],roles:['editor','reviewer','publisher','admin'],auditTrail:true,groups:true,formaSubmitForReview:true},
       sourceRecovery:{
-        cronMinutes:1,
-        fullRoundMinutes:3,
-        healthyMaxRefreshMinutes:5,
-        highFrequencyRefreshMinutes:1,
+        cronMinutes:5,
+        fullRoundMinutes:5,
+        healthyMaxRefreshMinutes:15,
+        highFrequencyRefreshMinutes:5,
         failedMaxSilenceMinutes:10,
         lastGoodRouteFirst:true,
         noNewIsHealthy:true,
@@ -308,10 +316,11 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.5.4-carousel-open-recovery'
+        assetCacheBust:'2.9.7.5.7-quality-first-cost-crawl'
       },
       navigation:{
         ronda:'/ronda',
+        crawl:'/ronda#crawl',
         design:'/design/',
         projects:'/projects/',
         admin:'/admin/'

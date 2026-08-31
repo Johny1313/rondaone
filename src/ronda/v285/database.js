@@ -753,7 +753,7 @@ export async function touchRun(db, id, heartbeatAt = new Date().toISOString()) {
   return heartbeatAt;
 }
 
-export async function expireStaleRuns(db, { queuedTimeoutMs = 2 * 60 * 1000, runningTimeoutMs = 10 * 60 * 1000 } = {}) {
+export async function expireStaleRuns(db, { queuedTimeoutMs = 7 * 60 * 1000, runningTimeoutMs = 15 * 60 * 1000 } = {}) {
   await ensureSchema(db);
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
@@ -1397,6 +1397,33 @@ export async function getSourceDiscoveryMetrics(db, { hours = 24 } = {}) {
   return map;
 }
 
+export async function listCrawlItems(db, { limit = 100, hours = 6 } = {}) {
+  await ensureSchema(db);
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+  const safeHours = Math.max(1, Math.min(48, Number(hours) || 6));
+  const cutoff = new Date(Date.now() - safeHours * 60 * 60 * 1000).toISOString();
+  const result = await db.prepare(`
+    SELECT d.source_id, d.url, d.title, d.route, d.published_at, d.first_seen_at, d.last_seen_at,
+           s.name AS source_name, s.region AS source_region
+    FROM source_discovery_items d
+    LEFT JOIN source_state s ON s.source_id = d.source_id
+    WHERE COALESCE(d.first_seen_at, d.published_at, d.last_seen_at) >= ?
+    ORDER BY COALESCE(d.first_seen_at, d.published_at, d.last_seen_at) DESC
+    LIMIT ?
+  `).bind(cutoff, safeLimit).all();
+  return (result?.results || []).map((row) => ({
+    sourceId: row.source_id,
+    sourceName: row.source_name || row.source_id || "Fonte",
+    region: row.source_region || null,
+    title: row.title || "Sem título",
+    url: row.url,
+    route: row.route || null,
+    publishedAt: row.published_at || null,
+    firstSeenAt: row.first_seen_at || row.published_at || row.last_seen_at || null,
+    lastSeenAt: row.last_seen_at || null,
+  }));
+}
+
 export async function getSourceStates(db, sourceIds = []) {
   await ensureSchema(db);
   const ids = [...new Set(sourceIds.map((value) => String(value || "").trim()).filter(Boolean))];
@@ -1533,6 +1560,36 @@ export async function getLatestRunSummary(db, { successOnly = false, editorialOn
     FROM runs
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
+    LIMIT 1
+  `).first();
+  if (!row) return null;
+  return {
+    id: row.id,
+    triggerType: row.trigger_type,
+    status: row.status,
+    queuedAt: row.queued_at || null,
+    startedAt: row.started_at || null,
+    heartbeatAt: row.heartbeat_at || null,
+    completedAt: row.completed_at || null,
+    items: Number(row.items_count) || 0,
+    topics: Number(row.topics_count) || 0,
+    sources: Number(row.sources_count) || 0,
+    socialItems: Number(row.social_items_count) || 0,
+    error: row.error || null,
+  };
+}
+
+export async function getActiveRunSummary(db) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT id, trigger_type, status, queued_at,
+           NULLIF(started_at, '') AS started_at, NULLIF(heartbeat_at, '') AS heartbeat_at,
+           NULLIF(completed_at, '') AS completed_at,
+           items_count, topics_count, sources_count, social_items_count, error
+    FROM runs
+    WHERE status IN ('queued','running')
+    ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,
+             COALESCE(NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) ASC
     LIMIT 1
   `).first();
   if (!row) return null;
@@ -2391,7 +2448,17 @@ export async function transitionWorkflowItem(db,id,{action,userId,role='user',no
 export async function recordWatchdogEvent(db,{eventType,severity='info',subjectId=null,detail=null,metadata=null,status='open'}={}){await ensureSchema(db);const id=crypto.randomUUID(),at=new Date().toISOString();await db.prepare('INSERT INTO watchdog_events(id,event_type,severity,subject_id,status,detail,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(id,String(eventType||'watchdog').slice(0,80),String(severity||'info').slice(0,20),subjectId,status,detail?String(detail).slice(0,800):null,metadata?JSON.stringify(metadata).slice(0,8000):'{}',at).run();return id;}
 export async function listWatchdogEvents(db,{hours=24,limit=100}={}){await ensureSchema(db);const cutoff=new Date(Date.now()-Math.max(1,Number(hours)||24)*3600000).toISOString();const rows=(await db.prepare('SELECT * FROM watchdog_events WHERE created_at>=? ORDER BY created_at DESC LIMIT ?').bind(cutoff,Math.max(1,Math.min(300,Number(limit)||100))).all())?.results||[];return rows.map(r=>({id:r.id,eventType:r.event_type,severity:r.severity,subjectId:r.subject_id||null,status:r.status,detail:r.detail||null,createdAt:r.created_at,resolvedAt:r.resolved_at||null}));}
 
-export async function getCostMonitor(db,{hours=24,estimatedCallUsd=0}={}){await ensureSchema(db);const cutoff=new Date(Date.now()-Math.max(1,Number(hours)||24)*3600000).toISOString().slice(0,13);const rows=(await db.prepare("SELECT metric,SUM(value) AS value,SUM(samples) AS samples,SUM(total_ms) AS total_ms FROM usage_metrics WHERE granularity='hour' AND bucket>=? AND (metric LIKE 'ai_%' OR metric LIKE 'carousel_%') GROUP BY metric").bind(cutoff).all())?.results||[];const metrics=Object.fromEntries(rows.map(r=>[r.metric,{value:Number(r.value)||0,samples:Number(r.samples)||0,totalMs:Number(r.total_ms)||0}]));const aiCalls=Object.entries(metrics).filter(([k])=>/^ai_.*_calls$/.test(k)).reduce((sum,[,v])=>sum+v.value,0);return {hours:Number(hours)||24,metrics,aiCalls,estimatedUsd:Number((aiCalls*Math.max(0,Number(estimatedCallUsd)||0)).toFixed(4)),estimateOnly:true,note:'Estimativa interna por chamada. O faturamento real deve ser conferido no Cloudflare.'};}
+export async function getCostMonitor(db,{hours=24,estimatedCallUsd=0}={}){await ensureSchema(db);const cutoff=new Date(Date.now()-Math.max(1,Number(hours)||24)*3600000).toISOString().slice(0,13);const rows=(await db.prepare("SELECT metric,SUM(value) AS value,SUM(samples) AS samples,SUM(total_ms) AS total_ms FROM usage_metrics WHERE granularity='hour' AND bucket>=? AND (metric LIKE 'ai_%' OR metric LIKE 'carousel_%' OR metric LIKE 'round_%') GROUP BY metric").bind(cutoff).all())?.results||[];const metrics=Object.fromEntries(rows.map(r=>[r.metric,{value:Number(r.value)||0,samples:Number(r.samples)||0,totalMs:Number(r.total_ms)||0}]));const aiCalls=Object.entries(metrics).filter(([k])=>/^ai_.*_calls$/.test(k)).reduce((sum,[,v])=>sum+v.value,0);return {hours:Number(hours)||24,metrics,aiCalls,estimatedUsd:Number((aiCalls*Math.max(0,Number(estimatedCallUsd)||0)).toFixed(4)),estimateOnly:true,note:'Estimativa interna por chamada. Browser/round são monitorados em unidades; o faturamento real deve ser conferido no Cloudflare.'};}
+
+export async function getUsageMetricTotal(db, metric, { hours = 24 } = {}) {
+  await ensureSchema(db);
+  const safeMetric = String(metric || "").trim().slice(0, 120);
+  if (!safeMetric) return 0;
+  const cutoff = new Date(Date.now() - Math.max(1, Math.min(24 * 31, Number(hours) || 24)) * 3600000).toISOString().slice(0, 13);
+  const row = await db.prepare("SELECT COALESCE(SUM(value),0) AS total FROM usage_metrics WHERE granularity='hour' AND metric=? AND bucket>=?")
+    .bind(safeMetric, cutoff).first();
+  return Number(row?.total) || 0;
+}
 
 export async function startCarouselReliabilityAttempt(db, {
   jobId, cacheKey = null, userId = null, runId = null, topicId = null, slideCount = 7,

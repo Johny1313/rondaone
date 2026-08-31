@@ -24,9 +24,9 @@ const PRIORITY_RECOVERY_SOURCE_IDS = new Set([
   "observatorio-dos-famosos","purepeople-brasil","quem","tv-foco","area-vip","cnn","infobae",
 ]);
 
-// v0.9.7.4.8 — cobertura de fonte não é apenas "HTTP 200".
-// Portais de grande produção mantêm mais itens no snapshot e consultam múltiplas
-// rotas de descoberta antes de encerrar a coleta.
+// v0.9.7.5.7 — Quality-First mantém memória ampla, mas limita o lote vivo.
+// Portais de grande produção consultam múltiplas rotas apenas quando a cobertura
+// histórica está abaixo da meta; isso preserva qualidade sem reprocessar volume antigo.
 const VERY_HIGH_VOLUME_SOURCES = new Set([
   "g1", "cnn-brasil", "folha", "estadao", "o-globo", "metropoles", "ge",
 ]);
@@ -36,15 +36,15 @@ const HIGH_VOLUME_SOURCES = new Set([
 
 export function sourceVolumeProfile(id, region = "Brasil") {
   if (VERY_HIGH_VOLUME_SOURCES.has(id)) {
-    return Object.freeze({ id:"very-high", itemLimit:80, snapshotLimit:160, discoveryTarget:28, target1h:10, requireDiscoveryRoutes:true });
+    return Object.freeze({ id:"very-high", itemLimit:24, snapshotLimit:96, discoveryTarget:10, target1h:8, requireDiscoveryRoutes:true });
   }
   if (HIGH_VOLUME_SOURCES.has(id)) {
-    return Object.freeze({ id:"high", itemLimit:55, snapshotLimit:110, discoveryTarget:16, target1h:5, requireDiscoveryRoutes:true });
+    return Object.freeze({ id:"high", itemLimit:18, snapshotLimit:72, discoveryTarget:7, target1h:5, requireDiscoveryRoutes:true });
   }
   if (region === "Mundo") {
-    return Object.freeze({ id:"normal", itemLimit:24, snapshotLimit:60, discoveryTarget:7, target1h:2, requireDiscoveryRoutes:false });
+    return Object.freeze({ id:"normal", itemLimit:10, snapshotLimit:48, discoveryTarget:4, target1h:2, requireDiscoveryRoutes:false });
   }
-  return Object.freeze({ id:"normal", itemLimit:30, snapshotLimit:72, discoveryTarget:8, target1h:2, requireDiscoveryRoutes:false });
+  return Object.freeze({ id:"normal", itemLimit:12, snapshotLimit:48, discoveryTarget:5, target1h:2, requireDiscoveryRoutes:false });
 }
 
 function itemClock(item) {
@@ -102,27 +102,24 @@ function normalizeDiscoveryUrl(value) {
 }
 
 function sourceRefreshMinutes(id) {
-  if (HIGH_FREQUENCY_SOURCES.has(id)) return 1;
-  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 5;
-  return 5;
+  if (HIGH_FREQUENCY_SOURCES.has(id)) return 5;
+  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 10;
+  return 15;
 }
 
 function adaptiveSourceRefreshMinutes(feed, items = [], healthy = true) {
-  if (!healthy) return Math.max(1, Number(feed?.refreshMinutes) || 5);
+  if (!healthy) return Math.max(5, Number(feed?.refreshMinutes) || 10);
   const coverage = coverageSnapshot(feed, items);
   const profile = feed?.volume?.id || coverage.profile || "normal";
   if (profile === "very-high") {
-    if (coverage.score < 60) return 1;
-    if (coverage.score < 100) return 1;
-    return 2;
+    return 5;
   }
   if (profile === "high") {
-    if (coverage.score < 60) return 2;
-    if (coverage.score < 100) return 3;
-    return 4;
+    if (coverage.score < 60) return 5;
+    return 10;
   }
-  if (coverage.score < 60) return 3;
-  return Math.max(4, Number(feed?.refreshMinutes) || 5);
+  if (coverage.score < 60) return 10;
+  return Math.max(15, Number(feed?.refreshMinutes) || 15);
 }
 
 export async function runPool(items, concurrency, worker, onSettled = null) {
@@ -196,7 +193,8 @@ function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, s
     : null;
   const normalizedScrapeUrls = [...new Set((Array.isArray(scrapeUrls) ? scrapeUrls : []).filter(Boolean))];
   const volume = sourceVolumeProfile(id, region);
-  const itemLimit = Math.max(Number(limit) || 0, Number(volume.itemLimit) || (region === "Mundo" ? 24 : 30));
+  // Quality-First: o limite histórico por portal não deve reabrir snapshots de 60–160 itens por ciclo.
+  const itemLimit = Math.max(5, Number(volume.itemLimit) || (region === "Mundo" ? 10 : 12));
   const discoveryUrls = [...new Set([primaryUrl, ...normalizedScrapeUrls, dedicatedFallback].filter(Boolean))];
   const urls = [...new Set([...discoveryUrls, fallbackUrl].filter(Boolean))];
   return Object.freeze({
@@ -514,7 +512,9 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
   const desiredMinimum = Math.max(feed.region === "Mundo" ? 5 : 8, Number(feed.discoveryTarget) || Number(profile.discoveryTarget) || 8);
   const itemLimit = Number(feed.limit) || Number(profile.itemLimit) || (feed.region === "Mundo" ? 24 : 30);
   const scrapeUrls = new Set(Array.isArray(feed?.scrapeUrls) ? feed.scrapeUrls : []);
-  const requiredDiscoveryUrls = new Set(profile.requireDiscoveryRoutes ? (Array.isArray(feed?.discoveryUrls) ? feed.discoveryUrls : []) : []);
+  const previousCoverage = coverageSnapshot(feed, Array.isArray(sourceState?.items) ? sourceState.items : []);
+  const deepDiscoveryRequired = Boolean(profile.requireDiscoveryRoutes && previousCoverage.score < 80);
+  const requiredDiscoveryUrls = new Set(deepDiscoveryRequired ? (Array.isArray(feed?.discoveryUrls) ? feed.discoveryUrls : []) : []);
   const attemptedDiscoveryUrls = new Set();
   let scrapeAttempted = false;
   let directAttempted = false;
@@ -558,9 +558,9 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
           routes.push(direct ? "direct" : routeKind === "fallback" ? "fallback" : "cache");
         }
         lastUrl = url;
-        const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum && !profile.requireDiscoveryRoutes);
+        const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum && !deepDiscoveryRequired);
         const requiredRoutesSatisfied = !requiredDiscoveryUrls.size || [...requiredDiscoveryUrls].every((candidate) => attemptedDiscoveryUrls.has(candidate));
-        const discoveryRoutesSatisfied = profile.requireDiscoveryRoutes
+        const discoveryRoutesSatisfied = deepDiscoveryRequired
           ? requiredRoutesSatisfied
           : directHealthy || !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
         if (mergedItems.length >= desiredMinimum && discoveryRoutesSatisfied) break;
@@ -573,7 +573,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       let items = scrape
         ? parseNewsHtml(body, feed, url, effectiveCutoff, itemLimit)
         : parseFeed(body, parseConfiguration, effectiveCutoff, itemLimit);
-      if (scrape && profile.requireDiscoveryRoutes && items.length < desiredMinimum) {
+      if (scrape && deepDiscoveryRequired && items.length < desiredMinimum) {
         const discovery = parseDiscoveryHtml(body, feed, url, {
           limit: itemLimit,
           discoveredAt: new Date().toISOString(),
@@ -604,9 +604,9 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
 
       // Em fontes de alto volume, RSS saudável não encerra a descoberta:
       // consultamos também home + busca dedicada do próprio domínio antes de parar.
-      const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum && !profile.requireDiscoveryRoutes);
+      const directHealthy = Boolean(options.skipScrapeWhenDirectHealthy && direct && mergedItems.length >= desiredMinimum && !deepDiscoveryRequired);
       const requiredRoutesSatisfied = !requiredDiscoveryUrls.size || [...requiredDiscoveryUrls].every((candidate) => attemptedDiscoveryUrls.has(candidate));
-      const discoveryRoutesSatisfied = profile.requireDiscoveryRoutes
+      const discoveryRoutesSatisfied = deepDiscoveryRequired
         ? requiredRoutesSatisfied
         : directHealthy || !scrapeUrls.size || ((!feed.directUrl || directAttempted) && scrapeAttempted);
       if (mergedItems.length >= desiredMinimum && discoveryRoutesSatisfied) break;
@@ -1201,8 +1201,8 @@ export function summarizePortalStatuses(statuses = []) {
 }
 
 function optionsFullConcurrency(mode, feedCount){
-  if(mode==="fast")return Math.min(8,Math.max(4,feedCount));
-  return feedCount>=30?14:Math.min(12,Math.max(6,feedCount));
+  if(mode==="fast")return Math.min(6,Math.max(3,feedCount));
+  return feedCount>=30?10:Math.min(10,Math.max(5,feedCount));
 }
 
 export async function collectRound({
@@ -1256,8 +1256,8 @@ export async function collectRound({
   if(revalidationEnqueues.length) await Promise.all(revalidationEnqueues);
 
   let earlyPublished = false;
-  const fullConcurrency = Math.max(8, Math.min(16, Number(optionsFullConcurrency(mode, feeds.length)) || 14));
-  const dueConcurrency = fastMode ? 8 : fullConcurrency;
+  const fullConcurrency = Math.max(5, Math.min(10, Number(optionsFullConcurrency(mode, feeds.length)) || 10));
+  const dueConcurrency = fastMode ? 6 : fullConcurrency;
   const feedOptions = fastMode
     ? { timeoutMs: 3_500,directTimeoutMs:2_200,scrapeTimeoutMs:2_600,fallbackTimeoutMs:3_000, skipScrapeWhenDirectHealthy: false }
     : { timeoutMs: 4_500,directTimeoutMs:2_500,scrapeTimeoutMs:3_000,fallbackTimeoutMs:3_500, skipScrapeWhenDirectHealthy: true };
