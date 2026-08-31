@@ -147,10 +147,9 @@ import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from
 import { enqueueEditorialEnrichmentJobs, getEditorialEvent, listEditorialEvents, syncEditorialEvents } from "../editorial-events.js";
 import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unified-round.js";
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
-import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, getProductionOperationalDiagnostics, autoRecoverStaleProductionJobs, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
+import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, getProductionOperationalDiagnostics, autoRecoverStaleProductionJobs, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline, PRODUCTION_VERSIONS, stampProductionInput } from "../../production/engine.js";
 
-const VERSION = "2.9.7.5.13";
-const CAROUSEL_URL_BASELINE = "carousel-5.6-fresh-url-v1";
+const VERSION = "2.9.7.6.0";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1570,30 +1569,23 @@ async function handleApi(request, env, url, ctx) {
     catch (error) { throw new HttpError(400,error?.message||"Quantidade de slides inválida."); }
     const writingProfile = await getWritingProfile(db,user.id).catch(()=>null);
     const learningStats = await getCarouselLearningStats(db,user.id).catch(()=>({count:0,updatedAt:null}));
-    input = { ...input, slideCount, writingProfile, styleKey:`${user.id}:${writingProfile?.updatedAt||"default"}:${learningStats.updatedAt||"no-learning"}:${learningStats.count||0}`, contentFirst:true, targetLanguage:"pt-BR", ...(sourceType==="url"?{carouselBaseline:CAROUSEL_URL_BASELINE}: {}) };
-    // v0.9.7.5.13: URLs externas não podem herdar jobs/evidências produzidos
-    // por builds anteriores ao reset. O motor continua 5.6; a fronteira HTTP
-    // apenas aceita cache/dedupe quando o próprio job foi criado nesta baseline.
+    input = stampProductionInput({ ...input, slideCount, writingProfile, styleKey:`${user.id}:${writingProfile?.updatedAt||"default"}:${learningStats.updatedAt||"no-learning"}:${learningStats.count||0}`, contentFirst:true, targetLanguage:"pt-BR" });
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
-      const reusableFromCurrentUrlBaseline = sourceType!=="url" || reusable?.input?.carouselBaseline===CAROUSEL_URL_BASELINE;
-      if (reusableFromCurrentUrlBaseline && reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.5.6", urlBaseline:sourceType==="url"?CAROUSEL_URL_BASELINE:null, job:reusable, pollAfterMs:0 },200);
+      if (reusable?.result?.slides?.length) {
+        return json({ ok:true, production:true, reused:true, engineVersion:PRODUCTION_VERSIONS.engineBaseline, pipelineVersion:PRODUCTION_VERSIONS.carouselPipelineVersion, readerVersion:PRODUCTION_VERSIONS.readerVersion, job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      const activeFromCurrentUrlBaseline = sourceType!=="url" || active?.input?.carouselBaseline===CAROUSEL_URL_BASELINE;
-      if (activeFromCurrentUrlBaseline && active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.5.6",urlBaseline:sourceType==="url"?CAROUSEL_URL_BASELINE:null,job:active,pollAfterMs:450},202);
+      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:PRODUCTION_VERSIONS.engineBaseline,pipelineVersion:PRODUCTION_VERSIONS.carouselPipelineVersion,readerVersion:PRODUCTION_VERSIONS.readerVersion,job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
-    // Para uma URL nova nesta baseline, force=true serve somente para ignorar o
-    // Evidence Pack legado na primeira leitura. O scraping/Evidence/Multi-AI
-    // executados continuam sendo exatamente os do engine 0.9.7.5.6.
-    const forceFreshUrlRead = sourceType==="url";
-    const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force)||forceFreshUrlRead,ctx});
+    // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
+    // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
+    const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.5.6", urlBaseline:sourceType==="url"?CAROUSEL_URL_BASELINE:null, freshUrlRead:forceFreshUrlRead, job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:PRODUCTION_VERSIONS.engineBaseline, pipelineVersion:PRODUCTION_VERSIONS.carouselPipelineVersion, readerVersion:PRODUCTION_VERSIONS.readerVersion, job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
@@ -1647,10 +1639,13 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok:true, activity, access:{ idleMinutes:SESSION_IDLE_MINUTES, maximumActiveUsers:MAX_ACTIVE_USERS } });
   }
 
-  if (url.pathname === "/api/admin/production-jobs/diagnostics" && request.method === "GET") {
+  if ((url.pathname === "/api/admin/production-jobs/diagnostics" || url.pathname === "/api/admin/carousel/diagnostics") && request.method === "GET") {
     await requireAdminUser(request, env);
     const stuckOnly=url.searchParams.get("all")!=="1";
-    return json({ok:true,productionJobs:await getProductionOperationalDiagnostics(requireDatabase(env),{stuckOnly,limit:Number(url.searchParams.get("limit"))||20})});
+    const diagnostics=await getProductionOperationalDiagnostics(requireDatabase(env),{stuckOnly,limit:Number(url.searchParams.get("limit"))||20});
+    return url.pathname === "/api/admin/carousel/diagnostics"
+      ? json({ok:true,carousel:diagnostics})
+      : json({ok:true,productionJobs:diagnostics});
   }
 
   if (url.pathname === "/api/admin/overview" && request.method === "GET") {
@@ -2735,7 +2730,7 @@ export default {
       const now = new Date();
       const minute = now.getUTCMinutes();
 
-      // v0.9.7.5.13 Carousel 5.6 Fresh URL Reset + Quality-First 5M:
+      // Carousel Stability Baseline Definitiva + Quality-First 5M:
       // restaura a cadência de manutenção do carrossel da 0.9.7.5.6 sem
       // voltar a criar Rondas a cada minuto. Estes recoveries não fazem
       // scraping da Ronda nem consomem Browser/IA se não houver job stale.

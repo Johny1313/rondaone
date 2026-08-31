@@ -69,7 +69,7 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.13',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.6.0',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
     jobs:{stuckIntelligent,stuckProduction,activeProduction,recoveringProduction,oldestActiveAgeSeconds,oldestHeartbeatAgeSeconds,healthy:stuckIntelligent===0&&stuckProduction===0},
@@ -89,10 +89,10 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.5.13',
+      version:'0.9.7.6.0',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.5.13',
+        editorialVersion:'2.9.7.6.0',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -282,9 +282,7 @@ export default {
       qualityFirstV09757:{enabled:true,roundCadenceMinutes:5,singleFlight:true,coalescing:true,maxPendingRounds:1,registeredSources:39,sourceCadenceMinutes:{high:5,medium:10,normal:15},newItemLimits:{veryHigh:24,high:18,normal:12,world:10},dedupeBeforeExpensiveWork:true,sourceMemoryFirst:true,automaticFastLane:false,legacyQueueMessagesSafeDrain:true},
       costGovernorV09757:{enabled:true,targetAdditionalUsdPerWeek:1,automaticSpendTarget:true,externalRequestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||70,browserDailyLimit:Number(env.ROUND_BROWSER_DAILY_LIMIT)||48,browserPerRoundLimit:1,translationDailyLimit:Number(env.ROUND_TRANSLATION_DAILY_LIMIT)||192,browserRecoveryOnly:true,backgroundSourceBrowser:false,carouselQualityBudgetExempt:true,billingApiRequiredForHardDollarGuarantee:true},
       crawlReadOnlyV09757:{enabled:true,endpoint:'/api/crawl',source:'D1 source_discovery_items',scraping:false,browser:false,ai:false,translation:false,originalArticleLinks:true,cacheSeconds:30},
-      carouselStabilityBaselineV097510:{enabled:true,baseline:'0.9.7.5.6',productionRecoveryCadenceMinutes:1,roundCadenceMinutes:5,manualRetryPriority:'direct-5.6',durableRetryQueueChangesFrom:['0.9.7.5.8','0.9.7.5.9'],durableRetryQueueChangesIncluded:false,qualityPipelineFrozen:true},
-      carousel56FullLockV097512:{enabled:true,baseline:'0.9.7.5.6',scope:'carousel-only',fullCoreHashLock:true,dependencyHashLock:true,translationCriticalApiLock:true,manualProductionQualityBudgetExempt:true,roundQualityFirst5M:true,d1SchemaChange:false,rollbackBaseline:'0.9.7.5.10'},
-      carouselFreshUrlResetV097513:{enabled:true,engineBaseline:'0.9.7.5.6',urlBaseline:'carousel-5.6-fresh-url-v1',legacyReadyJobReuse:false,legacyActiveJobReuse:false,legacyEvidenceReuseOnFirstRead:false,currentBaselineDedupe:true,d1Delete:false,d1Migration:false},
+      carouselStabilityBaselineDefinitive:{enabled:true,engineBaseline:'0.9.7.5.6',reader:'hybrid-reader-v1',evidenceVersion:'ronda-evidence-pack-v1-reader-v1',pipelineVersion:'carousel-stability-baseline-v1',productionRecoveryCadenceMinutes:1,roundCadenceMinutes:5,browserPolicy:'fallback-only-normal-path',singleBrowserNavigation:true,legacyCacheReuse:false,legacyActiveJobReuse:false,d1Delete:false,qualityPipelinePreserved:true,costGovernorPreserved:true},
       workflowV095:{enabled:true,statuses:['draft','in_review','approved','published','rejected'],roles:['editor','reviewer','publisher','admin'],auditTrail:true,groups:true,formaSubmitForReview:true},
       sourceRecovery:{
         cronMinutes:5,
@@ -319,7 +317,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.5.13-carousel-56-fresh-url-reset'
+        assetCacheBust:'2.9.7.6.0-carousel-stability-baseline-definitive'
       },
       navigation:{
         ronda:'/ronda',

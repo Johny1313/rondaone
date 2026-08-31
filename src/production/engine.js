@@ -9,6 +9,7 @@ import {
 import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
+import { browserQuickActionArticle, browserQuickActionAvailable, CAROUSEL_PIPELINE_VERSION, EVIDENCE_VERSION, ENGINE_BASELINE_VERSION, READER_VERSION } from "./hybrid-browser-reader.js";
 
 const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.6";
 const PRODUCTION_READ_STALE_MS = 15_000;
@@ -27,51 +28,53 @@ function clamp(value,min,max){ return Math.max(min,Math.min(max,Number(value)||0
 function safeJson(value,fallback=null){ try{return JSON.stringify(value);}catch{return JSON.stringify(fallback);} }
 function parseJson(value,fallback=null){ try{return JSON.parse(String(value||""));}catch{return fallback;} }
 function clipJson(value,limit,label){const text=safeJson(value,{});if(text.length>limit)throw new Error(`${label} excedeu o limite seguro de armazenamento.`);return text;}
+
+export const PRODUCTION_VERSIONS=Object.freeze({
+  engineBaseline:ENGINE_BASELINE_VERSION,
+  readerVersion:READER_VERSION,
+  evidenceVersion:EVIDENCE_VERSION,
+  carouselPipelineVersion:CAROUSEL_PIPELINE_VERSION,
+});
+
+export function stampProductionInput(input={}){
+  return {
+    ...(input&&typeof input==="object"?input:{}),
+    readerVersion:READER_VERSION,
+    evidenceVersion:EVIDENCE_VERSION,
+    carouselPipelineVersion:CAROUSEL_PIPELINE_VERSION,
+  };
+}
+
+function productionInputIsCurrent(input={}){
+  return input?.readerVersion===READER_VERSION
+    && input?.evidenceVersion===EVIDENCE_VERSION
+    && input?.carouselPipelineVersion===CAROUSEL_PIPELINE_VERSION;
+}
+
+function stampEvidencePackage(pack){
+  if(!pack||typeof pack!=="object")return pack;
+  return {
+    ...pack,
+    readerVersion:READER_VERSION,
+    evidenceVersion:EVIDENCE_VERSION,
+    carouselPipelineVersion:CAROUSEL_PIPELINE_VERSION,
+    reading:{
+      ...(pack.reading||{}),
+      readerVersion:READER_VERSION,
+    },
+  };
+}
+
+function evidencePackageIsCurrent(pack){
+  return Boolean(pack?.articleText)
+    && pack?.readerVersion===READER_VERSION
+    && pack?.evidenceVersion===EVIDENCE_VERSION
+    && pack?.carouselPipelineVersion===CAROUSEL_PIPELINE_VERSION;
+}
 function queueForRead(env){return env?.ARTICLE_READ_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null;}
 function queueForCarousel(env){return env?.CAROUSEL_AI_QUEUE || env?.CAROUSEL_JOBS_QUEUE || env?.INTELLIGENT_JOBS_QUEUE || null;}
 
 function transportHost(value){try{return new URL(String(value||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return "";}}
-
-function browserQuickActionAvailable(env){return Boolean(env?.BROWSER&&typeof env.BROWSER.quickAction==="function");}
-
-async function browserQuickActionArticle(env,url,{timeoutMs=5_500}={}){
-  if(!browserQuickActionAvailable(env))throw new Error("Browser Run não configurado");
-  const started=Date.now();
-  const task=(async()=>{
-    const response=await env.BROWSER.quickAction("content",{
-      url,
-      gotoOptions:{waitUntil:"domcontentloaded",timeout:Math.max(2_000,Math.min(8_000,Number(timeoutMs)||5_500))},
-      rejectResourceTypes:["image","media","font","stylesheet"],
-    });
-    let html="",browserMsUsed=0;
-    if(response&&typeof response.text==="function"){
-      browserMsUsed=Number(response.headers?.get?.("x-browser-ms-used"))||0;
-      const raw=await response.text();
-      const type=String(response.headers?.get?.("content-type")||"");
-      if(/json/i.test(type)||/^\s*[{[]/.test(raw)){
-        try{const parsed=JSON.parse(raw);html=typeof parsed?.result==="string"?parsed.result:typeof parsed?.result?.content==="string"?parsed.result.content:typeof parsed?.content==="string"?parsed.content:raw;}catch{html=raw;}
-      }else html=raw;
-    }else if(typeof response==="string")html=response;
-    else if(typeof response?.result==="string")html=response.result;
-    else if(typeof response?.html==="string")html=response.html;
-    if(!html||html.length<120)throw new Error("Browser Run não retornou HTML útil");
-    return {html,url,durationMs:Date.now()-started,browserMsUsed};
-  })();
-  const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("Browser Run excedeu o limite de leitura")),Math.max(2_500,Number(timeoutMs)||5_500)));
-  return Promise.race([task,timeout]);
-}
-
-async function getTransportPreference(db,url,browserAvailable){
-  if(!browserAvailable)return "direct-first";
-  const host=transportHost(url);if(!host)return "direct-first";
-  await ensureProductionSchema(db);
-  const row=await db.prepare("SELECT direct_success,direct_fail,browser_success,browser_fail FROM production_transport_stats WHERE host=? LIMIT 1").bind(host).first().catch(()=>null);
-  if(!row)return "direct-first";
-  const directSuccess=Number(row.direct_success)||0,directFail=Number(row.direct_fail)||0,browserSuccess=Number(row.browser_success)||0,browserFail=Number(row.browser_fail)||0;
-  const directTotal=directSuccess+directFail,browserTotal=browserSuccess+browserFail;
-  const directRate=directTotal?directSuccess/directTotal:1,browserRate=browserTotal?browserSuccess/browserTotal:0;
-  return directFail>=2&&browserSuccess>=2&&directRate<0.5&&browserRate>=0.65?"browser-first":"direct-first";
-}
 
 async function recordTransportOutcome(db,url,record){
   const host=transportHost(url);if(!host||!record)return;
@@ -110,45 +113,6 @@ function detectProductionLanguage(value, sourceName=""){
   return isLikelyPortuguese(text)?"pt":"en";
 }
 
-function splitTranslationText(value,limit=1700){
-  const text=plainText(value);if(!text)return [];
-  const paragraphs=text.split(/\n{2,}/).map(x=>x.trim()).filter(Boolean);const chunks=[];let current="";
-  const push=()=>{if(current.trim())chunks.push(current.trim());current="";};
-  for(const paragraph of paragraphs.length?paragraphs:[text]){
-    const sentences=paragraph.match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[paragraph];
-    for(const sentenceRaw of sentences){const sentence=sentenceRaw.trim();if(!sentence)continue;if((current+" "+sentence).trim().length>limit&&current)push();if(sentence.length>limit){for(let i=0;i<sentence.length;i+=limit){if(current)push();chunks.push(sentence.slice(i,i+limit));}}else current=(current?`${current} `:"")+sentence;}
-    if(current&&current.length>limit*.72)push();
-  }
-  push();return chunks;
-}
-
-async function translateArticleRecordToPtBr(env,record){
-  const content=plainText(record?.content);const detected=detectProductionLanguage(`${record?.title||""}\n${record?.subtitle||""}\n${content.slice(0,3200)}`,record?.sourceName);
-  if(detected==="pt")return {...record,sourceLanguage:"pt",targetLanguage:"pt-BR",translationStatus:"not-needed",translationDurationMs:0};
-  if(!env?.AI?.run)return {...record,sourceLanguage:detected,targetLanguage:"pt-BR",translationStatus:"deferred-to-carousel-ai",translationDurationMs:0};
-  const started=Date.now();
-  try{
-    const [title,subtitle]=await Promise.all([
-      record?.title?translateText(env.AI,record.title,detected,{attempts:2}):Promise.resolve(null),
-      record?.subtitle?translateText(env.AI,record.subtitle,detected,{attempts:2}):Promise.resolve(null),
-    ]);
-    const chunks=splitTranslationText(content,1700);const translated=[];
-    for(let start=0;start<chunks.length;start+=3){
-      const batch=chunks.slice(start,start+3);
-      const out=await Promise.all(batch.map(chunk=>translateText(env.AI,chunk,detected,{attempts:2}).catch(()=>null)));
-      translated.push(...out.map((item,index)=>item||batch[index]));
-    }
-    const translatedContent=plainText(translated.join("\n\n"));
-    const finalTitle=title||record.title;const finalSubtitle=subtitle||record.subtitle;
-    const contentReady=Boolean(translatedContent)&&detectProductionLanguage(translatedContent.slice(0,4200),"")==="pt";
-    const titleReady=!finalTitle||detectProductionLanguage(finalTitle,"")==="pt";
-    const subtitleReady=!finalSubtitle||detectProductionLanguage(finalSubtitle,"")==="pt";
-    const complete=contentReady&&titleReady&&subtitleReady;
-    return {...record,title:finalTitle,subtitle:finalSubtitle,content:translatedContent||content,wordCount:(translatedContent||content).split(/\s+/).filter(Boolean).length,sourceLanguage:detected,targetLanguage:"pt-BR",translationStatus:complete?"translated":"partial-fallback",translationDurationMs:Date.now()-started,originalText:content.slice(0,20000),originalTitle:record?.title||null};
-  }catch(error){return {...record,sourceLanguage:detected,targetLanguage:"pt-BR",translationStatus:"deferred-to-carousel-ai",translationError:String(error?.message||error).slice(0,220),translationDurationMs:Date.now()-started};}
-}
-
-
 async function runLimitedProduction(entries, concurrency, worker){
   const list=Array.isArray(entries)?entries:[];const output=new Array(list.length);let cursor=0;
   const runners=Array.from({length:Math.min(Math.max(1,Number(concurrency)||1),list.length)},async()=>{while(cursor<list.length){const index=cursor++;output[index]=await worker(list[index],index);}});
@@ -178,21 +142,6 @@ async function translateEvidencePackToPtBrFast(env, pack, { slideCount = 7 } = {
 
 
 function evidencePtBrReady(evidence){const translation=evidence?.translation||{};return translation.sourceLanguage==="pt"||["translated","not-needed"].includes(String(translation.status||""));}
-
-async function ensureEvidencePackPtBr(env,evidence){
-  if(!evidence?.articleText)return evidence;
-  const translation=evidence.translation||{};
-  const alreadyPt=translation.targetLanguage==="pt-BR"&&["translated","not-needed"].includes(String(translation.status||""));
-  if(alreadyPt)return evidence;
-  const record={ok:true,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl,sourceName:evidence.sourceName,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,content:evidence.articleText,wordCount:evidence.wordCount,extractionMethod:evidence?.reading?.method,adapter:evidence?.reading?.adapter,readMode:evidence?.reading?.mode,images:evidence.images,readingQuality:evidence?.reading?.quality,degraded:evidence?.reading?.degraded,sourceSelection:evidence.sourceSelection||evidence?.reading?.sourceSelection||null};
-  const translated=await translateArticleRecordToPtBr(env,record);
-  const rebuilt=buildEvidencePack(translated,{sourceType:evidence.sourceType||"url",sourceRef:evidence.sourceRef||evidence.url||null,topicId:evidence.topicId||null});
-  rebuilt.sourceSelection=evidence.sourceSelection||translated.sourceSelection||null;
-  rebuilt.reading={...rebuilt.reading,sourceSelection:rebuilt.sourceSelection,attempts:evidence?.reading?.attempts||rebuilt.reading.attempts};
-  rebuilt.translation={sourceLanguage:translated.sourceLanguage||"pt",targetLanguage:"pt-BR",status:translated.translationStatus||"not-needed",durationMs:Number(translated.translationDurationMs)||0,error:translated.translationError||null};
-  rebuilt.createdAt=evidence.createdAt||rebuilt.createdAt;
-  return rebuilt;
-}
 
 export async function ensureProductionSchema(db){
   if(!db)throw new Error("Binding D1 'DB' não configurado.");
@@ -365,6 +314,7 @@ export async function cleanupProductionStorage(db){
 
 export async function createProductionJob(db,{sourceType,sourceRef=null,input={},createdBy=null}={}){
   await ensureProductionSchema(db);
+  input=stampProductionInput(input);
   await cleanupProductionStorage(db).catch(()=>null);
   const normalizedSourceType=["url","topic","event","text"].includes(String(sourceType))?String(sourceType):"url";
   const identity=normalizedSourceType==="url"?normalizeArticleIdentity(sourceRef||input?.url):String(sourceRef||input?.topicId||input?.eventId||stableHash(safeJson(input)));
@@ -402,6 +352,7 @@ async function updateJob(db,id,{status,stage,progress,evidenceId,result,error,fa
 
 export async function saveEvidencePackage(db,pack){
   await ensureProductionSchema(db);const now=nowIso();const expires=new Date(Date.now()+EVIDENCE_TTL_DAYS*86400000).toISOString();
+  pack=stampEvidencePackage(pack);
   const payload=clipJson(pack,MAX_EVIDENCE_JSON,"Evidence Pack");
   await db.prepare(`INSERT INTO evidence_packages(id,source_type,source_ref,topic_id,canonical_url,source_name,title,reading_quality,word_count,payload_json,created_at,updated_at,expires_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json,reading_quality=excluded.reading_quality,word_count=excluded.word_count,updated_at=excluded.updated_at,expires_at=excluded.expires_at`)
@@ -421,9 +372,10 @@ async function cachedEvidenceFor(db,job,{maxAgeMinutes=null}={}){
   if(job.sourceType==="url"){
     const normalized=normalizeArticleIdentity(job.sourceRef);
     const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type='url' AND expires_at>? AND updated_at>=? AND (source_ref=? OR canonical_url=?) ORDER BY reading_quality DESC, updated_at DESC LIMIT 1").bind(nowIso(),cutoff,job.sourceRef,normalized).first();
-    return row?parseJson(row.payload_json,null):null;
+    const pack=row?parseJson(row.payload_json,null):null;
+    return evidencePackageIsCurrent(pack)?pack:null;
   }
-  if(job.sourceRef){const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type=? AND source_ref=? AND expires_at>? AND updated_at>=? ORDER BY updated_at DESC LIMIT 1").bind(job.sourceType,job.sourceRef,nowIso(),cutoff).first();return row?parseJson(row.payload_json,null):null;}
+  if(job.sourceRef){const row=await db.prepare("SELECT payload_json FROM evidence_packages WHERE source_type=? AND source_ref=? AND expires_at>? AND updated_at>=? ORDER BY updated_at DESC LIMIT 1").bind(job.sourceType,job.sourceRef,nowIso(),cutoff).first();const pack=row?parseJson(row.payload_json,null):null;return evidencePackageIsCurrent(pack)?pack:null;}
   return null;
 }
 
@@ -442,6 +394,9 @@ export function productionInputFingerprint(input={},sourceType="url",sourceRef="
     url:sourceType==="url"?normalizeArticleIdentity(input?.url||sourceRef||""):null,
     title:plainText(input?.title||topic?.title||"").slice(0,240),
     editoria:plainText(input?.editoria||topic?.editoria||"").slice(0,100),
+    readerVersion:input?.readerVersion||null,
+    evidenceVersion:input?.evidenceVersion||null,
+    carouselPipelineVersion:input?.carouselPipelineVersion||null,
     topic:topic?{
       id:topic.id||null,
       lastChangedAt:topic.lastChangedAt||topic.updatedAt||topic.lastSeenAt||null,
@@ -463,6 +418,7 @@ export async function findReusableProductionJob(db,{sourceType,sourceRef,created
   const fingerprint=productionInputFingerprint(input,sourceType,normalizedRef);
   for(const row of rows){
     const candidate=jobRow(row);const candidateInput=candidate?.input||{};
+    if(!productionInputIsCurrent(candidateInput)||!productionInputIsCurrent(input))continue;
     if((Number(candidateInput.slideCount)||7)!==slideCount)continue;
     if(styleKey&&String(candidateInput.styleKey||"")!==styleKey)continue;
     if(productionInputFingerprint(candidateInput,sourceType,normalizedRef)!==fingerprint)continue;
@@ -481,6 +437,7 @@ export async function findActiveProductionJob(db,{sourceType,sourceRef,createdBy
   const fingerprint=productionInputFingerprint(input,sourceType,normalizedRef);
   for(const row of rows){
     const candidate=jobRow(row);const candidateInput=candidate?.input||{};
+    if(!productionInputIsCurrent(candidateInput)||!productionInputIsCurrent(input))continue;
     if((Number(candidateInput.slideCount)||7)!==slideCount)continue;
     if(styleKey&&String(candidateInput.styleKey||"")!==styleKey)continue;
     if(productionInputFingerprint(candidateInput,sourceType,normalizedRef)!==fingerprint)continue;
@@ -488,8 +445,6 @@ export async function findActiveProductionJob(db,{sourceType,sourceRef,createdBy
   }
   return null;
 }
-
-function bestTopicItem(topic){return (Array.isArray(topic?.items)?topic.items:[]).find((item)=>/^https?:\/\//i.test(String(item?.url||""))&&item?.kind!=="social")||null;}
 
 export async function processProductionRead(env,jobId,{force=false,retryMode=null}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
@@ -506,10 +461,12 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
     let evidenceResult;
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
-      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
-      let transportPreference=await getTransportPreference(db,item.url,Boolean(browserFetcher));
-      if(retryMode==='alternate')transportPreference=transportPreference==='browser-first'?'direct-first':(browserFetcher?'browser-first':'direct-first');
-      if(retryMode==='deep'&&browserFetcher)transportPreference='browser-first';
+      const browserFetcher=browserQuickActionAvailable(env)
+        ? (url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||(retryMode==="deep"?11_000:7_500),mode:retryMode==="deep"?"deep":"standard"})
+        : null;
+      // Browser é fallback no caminho normal. Só um retry explícito pode priorizá-lo,
+      // evitando que aprendizado histórico transforme Chromium no transporte padrão.
+      const transportPreference=(retryMode==="alternate"||retryMode==="deep")&&browserFetcher?"browser-first":"direct-first";
       const retryTimeout=retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500);
       let record=await scrapeArticle(item,{timeoutMs:retryTimeout,slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,transportPreference});
       await recordTransportOutcome(db,item.url,record).catch(()=>null);
@@ -523,10 +480,12 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
       // Gestão de Produção não altera leitura. A pauta segue pelo mesmo scraping completo
       // usado antes do Kanban/Newsroom OS; status é apenas metadata operacional.
-      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
+      const browserFetcher=browserQuickActionAvailable(env)
+        ? (url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||(retryMode==="deep"?11_000:7_500),mode:retryMode==="deep"?"deep":"standard"})
+        : null;
       evidenceResult=await scrapeTopicToEvidence(topic,{
         timeoutMs:retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500),slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,
-        transportPreferenceFor:async(item)=>{let pref=await getTransportPreference(db,item?.url,Boolean(browserFetcher));if(retryMode==='alternate')pref=pref==='browser-first'?'direct-first':(browserFetcher?'browser-first':'direct-first');if(retryMode==='deep'&&browserFetcher)pref='browser-first';return pref;},
+        transportPreferenceFor:async()=>((retryMode==="alternate"||retryMode==="deep")&&browserFetcher?"browser-first":"direct-first"),
         onTransportResult:async(item,record)=>recordTransportOutcome(db,item?.url,record),
       });
       if(!evidenceResult.ok){const error=new Error(evidenceResult.error||"A fonte principal e o backup não forneceram leitura útil por nenhuma rota disponível.");error.readAttempts=evidenceResult.attempts||[];throw error;}
@@ -552,7 +511,14 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
       return getProductionJob(db,jobId);
     }
     const evidence=await saveEvidencePackage(db,evidenceResult.evidence);job=await updateJob(db,jobId,{status:"running",stage:"evidence",progress:48,evidenceId:evidence.id,fallbackLevel:evidence?.reading?.degraded?1:0});
-    await event(db,jobId,"evidence","completed",`Evidence Pack criado · ${evidence.wordCount} palavras · PT-BR`,{quality:evidence?.reading?.quality,method:evidence?.reading?.method,sourceRole:evidence?.sourceSelection?.selectedRole||"direct",translation:evidence?.translation?.status||"not-needed"});
+    const readAttempts=Array.isArray(evidence?.reading?.attempts)?evidence.reading.attempts:[];
+    const browserAttempts=readAttempts.filter(x=>x?.transport==="browser");
+    await event(db,jobId,"evidence","completed",`Evidence Pack criado · ${evidence.wordCount} palavras · PT-BR`,{
+      quality:evidence?.reading?.quality,method:evidence?.reading?.method,sourceRole:evidence?.sourceSelection?.selectedRole||"direct",translation:evidence?.translation?.status||"not-needed",
+      readerVersion:READER_VERSION,evidenceVersion:EVIDENCE_VERSION,pipelineVersion:CAROUSEL_PIPELINE_VERSION,
+      browserUsed:browserAttempts.length>0,browserDuration:browserAttempts.reduce((sum,x)=>sum+(Number(x?.durationMs)||0),0),
+      contentChars:plainText(evidence?.articleText).length,evidenceCount:Array.isArray(evidence?.facts)?evidence.facts.length:0,attempts:readAttempts.slice(0,8),
+    });
     return job;
   }catch(error){
     if(!await ownsProductionLease(db,lease)){
@@ -566,17 +532,10 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
   }finally{stopLeaseHeartbeat();await releaseProductionLease(db,lease);}
 }
 
-function evidenceSyntheticHtml(evidence){
-  const esc=(v)=>String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-  const image=evidence?.images?.primary?.url||evidence?.images?.primary?.proxyUrl||"";
-  const paragraphs=plainText(evidence.articleText).split(/\n{2,}|(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])/).filter(Boolean).map((p)=>`<p>${esc(p)}</p>`).join("\n");
-  return `<!doctype html><html><head><title>${esc(evidence.title)}</title><meta name="description" content="${esc(evidence.subtitle)}"><meta name="author" content="${esc(evidence.author)}">${evidence.publishedAt?`<meta property="article:published_time" content="${esc(evidence.publishedAt)}">`:""}${image?`<meta property="og:image" content="${esc(image)}">`:""}<link rel="canonical" href="${esc(evidence.canonicalUrl||evidence.url||"https://example.com/ronda-evidence")}"></head><body><article><h1>${esc(evidence.title)}</h1>${paragraphs}</article></body></html>`;
-}
-
 export async function processProductionGenerate(env,jobId,{deterministicOnly=false}={}){
   const db=env.DB;let job=await getProductionJob(db,jobId);if(!job)throw new Error("Produção não encontrada.");
   if(job.status==="ready"&&job.result?.slides?.length)return job;
-  const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;if(!evidence?.articleText)throw new Error("Evidence Pack não encontrado para a produção.");if(!evidencePtBrReady(evidence))throw new Error("A produção foi bloqueada porque o conteúdo ainda não está normalizado em português do Brasil.");
+  const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId):null;if(!evidence?.articleText)throw new Error("Evidence Pack não encontrado para a produção.");if(!evidencePackageIsCurrent(evidence))throw new Error("EVIDENCE_VERSION_MISMATCH: Evidence Pack legado não pode alimentar a baseline atual.");if(!evidencePtBrReady(evidence))throw new Error("A produção foi bloqueada porque o conteúdo ainda não está normalizado em português do Brasil.");
   const lease=await acquireProductionLease(db,jobId,"generating",24_000);
   if(!lease){
     await event(db,jobId,deterministicOnly?"fallback":"generating","deduplicated","Geração já está em execução; tentativa duplicada ignorada",{sameJob:true,deterministicOnly:Boolean(deterministicOnly),leaseBusy:true}).catch(()=>null);
@@ -592,7 +551,7 @@ export async function processProductionGenerate(env,jobId,{deterministicOnly=fal
     const slideCount=Math.max(3,Math.min(15,Number(job.input?.slideCount)||7));
     const result=await buildCarouselFromEvidencePack({...evidence,editoria:job.input?.editoria||topic?.editoria||"Notícias"},{ai:deterministicOnly?null:env.AI,model:models[0],models:deterministicOnly?[]:models,multiAiMode:deterministicOnly?"single":"fast-failover",slideCount,styleKey:job.input?.styleKey||"production-fast",writingStyle:job.input?.writingProfile||null,maxEvidence:Math.min(18,slideCount*2+2)});
     const productionTotalMs=Math.max(0,Date.now()-Date.parse(job.createdAt||nowIso()));
-    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:"0.9.7.5.6",jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
+    const finalResult={...result,language:"pt-BR",editoria:job.input?.editoria||topic?.editoria||"Notícias",topicId:topic?.id||job.sourceRef||null,production:{engine:"forma-production-engine",version:ENGINE_BASELINE_VERSION,readerVersion:READER_VERSION,evidenceVersion:EVIDENCE_VERSION,pipelineVersion:CAROUSEL_PIPELINE_VERSION,jobId:job.id,evidenceId:evidence.id,sourceType:job.sourceType,contentFirst:true,templateApplied:false,templateMode:"apply-after-generation",languagePolicy:"pt-BR-required",sourcePolicy:job.sourceType==="topic"||job.sourceType==="event"?"single-primary-one-backup":"single-source",readingQuality:evidence?.reading?.quality||0,readUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url||null,canonicalUrl:evidence.canonicalUrl||evidence.url||null,originalUrl:evidence.url||null,sourceName:evidence.sourceName||null,selectedSourceRole:evidence?.sourceSelection?.selectedRole||"direct",performance:{readingMs:Number(evidence?.reading?.durationMs)||0,translationMs:Number(evidence?.translation?.durationMs)||0,aiMs:Number(result?.performance?.aiMs)||0,totalMs:productionTotalMs,sourceAttempts:Number(evidence?.sourceSelection?.attempts?.length)||1}},evidencePack:{id:evidence.id,contract:evidence.contract,sourceName:evidence.sourceName,url:evidence.url,canonicalUrl:evidence.canonicalUrl,resolvedUrl:evidence.resolvedUrl||evidence.canonicalUrl||evidence.url,title:evidence.title,subtitle:evidence.subtitle,author:evidence.author,publishedAt:evidence.publishedAt,wordCount:evidence.wordCount,reading:evidence.reading,translation:evidence.translation||{sourceLanguage:"pt",targetLanguage:"pt-BR",status:"not-needed"},sourceSelection:evidence.sourceSelection||null,facts:evidence.facts,entities:evidence.entities,numbers:evidence.numbers,dates:evidence.dates,images:evidence.images}};
     if(!await ownsProductionLease(db,lease)){
       await event(db,jobId,deterministicOnly?"fallback":"generating","superseded","Geração anterior terminou depois de uma nova tentativa assumir o job",{leaseSuperseded:true,deterministicOnly:Boolean(deterministicOnly)}).catch(()=>null);
       return getProductionJob(db,jobId);
@@ -820,34 +779,81 @@ export async function getProductionOperationalDiagnostics(db,{stuckOnly=true,lim
   const rows=(await (stuckOnly?db.prepare(query).bind(cutoff,safeLimit):db.prepare(query).bind(safeLimit)).all())?.results||[];
   const now=Date.now();const items=[];
   for(const row of rows){
-    const job=jobRow(row);const events=(await db.prepare("SELECT stage,status,detail,metadata_json,created_at FROM production_stage_events WHERE job_id=? ORDER BY created_at ASC LIMIT 120").bind(job.id).all().catch(()=>({results:[]})))?.results||[];
+    const job=jobRow(row);
+    const events=(await db.prepare("SELECT stage,status,detail,metadata_json,created_at FROM production_stage_events WHERE job_id=? ORDER BY created_at ASC LIMIT 120").bind(job.id).all().catch(()=>({results:[]})))?.results||[];
     const leases=(await db.prepare("SELECT stage,expires_at,updated_at FROM production_stage_leases WHERE job_id=? ORDER BY updated_at DESC").bind(job.id).all().catch(()=>({results:[]})))?.results||[];
+    const evidence=job.evidenceId?await getEvidencePackage(db,job.evidenceId).catch(()=>null):null;
     const activeLease=leases.find(x=>Number(x.expires_at)>now)||null;
-    const recoveryEvents=events.filter(x=>x.status==='recovery');
-    const runningEvent=events.find(x=>x.status==='running')||null;
-    const completedEvent=[...events].reverse().find(x=>x.status==='completed'||x.stage==='ready')||null;
+    const recoveryEvents=events.filter(x=>x.status==="recovery");
+    const runningEvent=events.find(x=>x.status==="running")||null;
+    const completedEvent=[...events].reverse().find(x=>x.status==="completed"||x.stage==="ready")||null;
     const previousEvent=events.length>1?events[events.length-2]:null;
-    const updatedMs=Date.parse(job.updatedAt||job.createdAt||'');const createdMs=Date.parse(job.createdAt||'');
+    const eventMetadata=events.map(x=>parseJson(x.metadata_json,{})).filter(Boolean);
+    const evidenceAttempts=Array.isArray(evidence?.reading?.attempts)?evidence.reading.attempts:[];
+    const eventAttempts=[...eventMetadata].reverse().find(x=>Array.isArray(x?.attempts))?.attempts||[];
+    const attempts=(evidenceAttempts.length?evidenceAttempts:eventAttempts).slice(0,12);
+    const browserAttempts=attempts.filter(x=>x?.transport==="browser"||String(x?.method||"").startsWith("browser"));
+    const successfulAttempt=[...attempts].reverse().find(x=>x?.ok)||null;
+    const updatedMs=Date.parse(job.updatedAt||job.createdAt||"");const createdMs=Date.parse(job.createdAt||"");
     const ageSeconds=Number.isFinite(createdMs)?Math.max(0,Math.floor((now-createdMs)/1000)):null;
     const heartbeatAgeSeconds=Number.isFinite(updatedMs)?Math.max(0,Math.floor((now-updatedMs)/1000)):null;
-    let reason='active_processing';
-    if(activeLease)reason='active_lease';
-    else if(job.evidenceId&&['source','reading','evidence'].includes(String(job.stage||'')))reason='evidence_ready_state_not_advanced';
-    else if((heartbeatAgeSeconds||0)>=300&&job.status==='queued')reason='queue_or_consumer_no_progress';
-    else if((heartbeatAgeSeconds||0)>=300&&job.status==='running')reason='heartbeat_lost_or_worker_abandoned';
-    else if((ageSeconds||0)>=Math.floor(PRODUCTION_ABSOLUTE_DEADLINE_MS/1000))reason='recovery_due';
+    let reason="active_processing";
+    if(!productionInputIsCurrent(job.input||{}))reason="legacy_pipeline_preserved";
+    else if(activeLease)reason="active_lease";
+    else if(job.evidenceId&&["source","reading","evidence"].includes(String(job.stage||"")))reason="evidence_ready_state_not_advanced";
+    else if((heartbeatAgeSeconds||0)>=300&&job.status==="queued")reason="queue_or_consumer_no_progress";
+    else if((heartbeatAgeSeconds||0)>=300&&job.status==="running")reason="heartbeat_lost_or_worker_abandoned";
+    else if((ageSeconds||0)>=Math.floor(PRODUCTION_ABSOLUTE_DEADLINE_MS/1000))reason="recovery_due";
     const input=job.input||{};
     items.push({
-      jobId:job.id,productionId:job.id,articleId:input.articleId||null,eventId:input.eventId||input?.editorialEventContext?.eventId||null,topicId:input?.topic?.id||job.sourceType==='topic'?job.sourceRef:null,url:job.sourceType==='url'?job.sourceRef:(input.url||null),
+      jobId:job.id,
+      productionId:job.id,
+      articleId:input.articleId||null,
+      eventId:input.eventId||input?.editorialEventContext?.eventId||null,
+      topicId:input?.topic?.id||(job.sourceType==="topic"?job.sourceRef:null),
+      url:job.sourceType==="url"?job.sourceRef:(input.url||null),
+      domain:job.sourceType==="url"?transportHost(job.sourceRef):transportHost(input.url||evidence?.url||""),
       createdAt:job.createdAt,updatedAt:job.updatedAt,startedAt:runningEvent?.created_at||null,completedAt:completedEvent?.created_at||null,heartbeatAt:job.updatedAt,
-      status:job.status,stage:job.stage,previousStage:previousEvent?.stage||null,retryCount:recoveryEvents.filter(x=>String(x.detail||'').startsWith('Nova tentativa')).length,
-      queue:['source','reading','evidence'].includes(String(job.stage||''))?'ARTICLE_READ':(['generating','quality','fallback'].includes(String(job.stage||''))?'CAROUSEL_AI':null),queueMessageId:null,worker:null,
-      lockId:activeLease?`lease:${activeLease.stage}`:null,lockOwner:activeLease?'production-stage-lease':null,lockCreatedAt:null,lockExpiresAt:activeLease?new Date(Number(activeLease.expires_at)).toISOString():null,
-      lastError:job.error||null,failureStage:job.status==='failed'?job.stage:null,recoveryAttempts:recoveryEvents.length,lastRecoveryAt:recoveryEvents.length?recoveryEvents[recoveryEvents.length-1].created_at:null,
-      sourceType:job.sourceType,carouselJobId:job.id,resultExists:Boolean(job.result?.slides?.length),evidenceExists:Boolean(job.evidenceId),ageSeconds,heartbeatAgeSeconds,reason,
+      status:job.status,stage:job.stage,previousStage:previousEvent?.stage||null,
+      attempt:Math.max(1,recoveryEvents.length+1),
+      retryCount:recoveryEvents.filter(x=>String(x.detail||"").startsWith("Nova tentativa")).length,
+      readerStrategy:evidence?.reading?.method||successfulAttempt?.method||null,
+      browserUsed:browserAttempts.length>0,
+      browserDuration:browserAttempts.reduce((sum,x)=>sum+(Number(x?.durationMs)||0),0),
+      browserMsUsed:browserAttempts.reduce((sum,x)=>sum+(Number(x?.browserMsUsed)||0),0),
+      contentChars:plainText(evidence?.articleText||"").length,
+      evidenceCount:Array.isArray(evidence?.facts)?evidence.facts.length:0,
+      attempts,
+      queue:["source","reading","evidence"].includes(String(job.stage||""))?"ARTICLE_READ":(["generating","quality","fallback"].includes(String(job.stage||""))?"CAROUSEL_AI":null),
+      queueMessageId:null,worker:null,
+      leaseOwner:activeLease?"production-stage-lease":null,
+      leaseStage:activeLease?.stage||null,
+      lockId:activeLease?`lease:${activeLease.stage}`:null,
+      lockOwner:activeLease?"production-stage-lease":null,
+      lockCreatedAt:null,
+      lockExpiresAt:activeLease?new Date(Number(activeLease.expires_at)).toISOString():null,
+      lastError:job.error||null,
+      failureReason:job.status==="failed"?(job.error||"failed"):null,
+      failureStage:job.status==="failed"?job.stage:null,
+      recoveryAttempts:recoveryEvents.length,
+      lastRecoveryAt:recoveryEvents.length?recoveryEvents[recoveryEvents.length-1].created_at:null,
+      sourceType:job.sourceType,
+      carouselJobId:job.id,
+      resultExists:Boolean(job.result?.slides?.length),
+      evidenceExists:Boolean(job.evidenceId),
+      evidenceCompatible:evidence?evidencePackageIsCurrent(evidence):false,
+      readerVersion:evidence?.readerVersion||input.readerVersion||null,
+      evidenceVersion:evidence?.evidenceVersion||input.evidenceVersion||null,
+      pipelineVersion:evidence?.carouselPipelineVersion||input.carouselPipelineVersion||null,
+      ageSeconds,heartbeatAgeSeconds,reason,
     });
   }
-  return {generatedAt:nowIso(),stuckCutoffSeconds:300,count:items.length,items,schemaLimitations:{queueMessageId:'not-persisted',worker:'not-persisted',lockCreatedAt:'not-persisted; lease updated_at is renewal time',heartbeatAt:'production_jobs.updated_at is the heartbeat-equivalent timestamp'}};
+  return {
+    generatedAt:nowIso(),
+    pipeline:{engineBaseline:ENGINE_BASELINE_VERSION,readerVersion:READER_VERSION,evidenceVersion:EVIDENCE_VERSION,carouselPipelineVersion:CAROUSEL_PIPELINE_VERSION},
+    stuckCutoffSeconds:300,count:items.length,items,
+    schemaLimitations:{queueMessageId:"not-persisted",worker:"not-persisted",lockCreatedAt:"not-persisted; lease updated_at is renewal time",heartbeatAt:"production_jobs.updated_at is the heartbeat-equivalent timestamp"},
+  };
 }
 
 export async function autoRecoverStaleProductionJobs(env,{limit=5,ctx=null}={}){
@@ -860,6 +866,7 @@ export async function autoRecoverStaleProductionJobs(env,{limit=5,ctx=null}={}){
   let recovered=0,terminal=0,unchanged=0;
   for(const row of rows){
     const before=await getProductionJob(db,row.id).catch(()=>null);if(!before)continue;
+    if(!productionInputIsCurrent(before.input||{})){unchanged+=1;continue;}
     try{
       const after=await recoverStalledProductionJob(env,row.id,{ctx});
       if(after?.status==='ready'||after?.status==='failed')terminal+=1;
@@ -876,6 +883,7 @@ export async function productionBundle(db,id){
 
 export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
   const job=await getProductionJob(env.DB,id);if(!job)throw new Error("Produção não encontrada.");
+  if(!productionInputIsCurrent(job.input||{}))throw new Error("LEGACY_PIPELINE_JOB: inicie uma nova produção; o histórico foi preservado, mas não pode ser reutilizado pela baseline atual.");
   if(stage==="generate"&&job.evidenceId){
     const revoked=await revokeProductionLease(env.DB,id,"generating").catch(()=>({revoked:false,active:false}));
     await updateJob(env.DB,id,{status:"queued",stage:"generating",progress:52,error:null});
