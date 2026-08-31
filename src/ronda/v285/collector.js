@@ -24,7 +24,7 @@ const PRIORITY_RECOVERY_SOURCE_IDS = new Set([
   "observatorio-dos-famosos","purepeople-brasil","quem","tv-foco","area-vip","cnn","infobae",
 ]);
 
-// v0.9.7.5.8 — Quality-First mantém memória ampla, mas limita o lote vivo.
+// v0.9.7.5.7 — Quality-First mantém memória ampla, mas limita o lote vivo.
 // Portais de grande produção consultam múltiplas rotas apenas quando a cobertura
 // histórica está abaixo da meta; isso preserva qualidade sem reprocessar volume antigo.
 const VERY_HIGH_VOLUME_SOURCES = new Set([

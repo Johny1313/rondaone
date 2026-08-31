@@ -149,7 +149,7 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, getProductionOperationalDiagnostics, autoRecoverStaleProductionJobs, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.5.8";
+const VERSION = "2.9.7.5.10";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -2722,11 +2722,24 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    const roundTask = async () => {
+    const scheduledTask = async () => {
       const db = requireDatabase(env);
-      // Quality-First 5M: manutenção barata e apenas um recovery por classe/ciclo.
-      await autoRecoverStaleIntelligentJobs(env,{limit:1}).catch(()=>null);
-      await autoRecoverStaleProductionJobs(env,{limit:1,ctx}).catch(error=>structuredLog("production_auto_recovery_failed",{detail:error instanceof Error?error.message:String(error)}));
+      const now = new Date();
+      const minute = now.getUTCMinutes();
+
+      // v0.9.7.5.10 Stability Baseline:
+      // restaura a cadência de manutenção do carrossel da 0.9.7.5.6 sem
+      // voltar a criar Rondas a cada minuto. Estes recoveries não fazem
+      // scraping da Ronda nem consomem Browser/IA se não houver job stale.
+      await autoRecoverStaleIntelligentJobs(env,{limit:3}).catch(()=>null);
+      await autoRecoverStaleProductionJobs(env,{limit:5,ctx}).catch(error=>structuredLog("production_auto_recovery_failed",{detail:error instanceof Error?error.message:String(error)}));
+
+      // A Ronda editorial continua Quality-First a cada 5 minutos.
+      if (minute % 5 !== 0) {
+        structuredLog("carousel_stability_maintenance_tick", { minute, productionRecoveryCadenceMinutes:1, roundCadenceMinutes:5 });
+        return;
+      }
+
       await runOperationalWatchdog(env).catch(error=>structuredLog("watchdog_failed",{detail:error instanceof Error?error.message:String(error)}));
       await expireStaleRuns(db).catch(() => null);
 
@@ -2767,7 +2780,7 @@ export default {
       }
     };
 
-    ctx.waitUntil(roundTask().catch((error) => {
+    ctx.waitUntil(scheduledTask().catch((error) => {
       structuredLog("scheduled_round_failed", {
         detail: error instanceof Error ? error.message : String(error),
       });

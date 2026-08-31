@@ -17,7 +17,7 @@ assert.match(engine,/fallbackCount>=1/);
 assert.doesNotMatch(waitBlock,/\/retry/,'polling não pode chamar retry automático');
 assert.doesNotMatch(waitBlock,/\/fallback/,'polling não pode chamar fallback automático');
 assert.match(forma,/clientSafetyCeiling=startedAt\+65\*1000/);
-assert.match(api,/autoRecoverStaleProductionJobs\(env,\{limit:1,ctx\}\)/);
+assert.match(api,/autoRecoverStaleProductionJobs\(env,\{limit:(?:1|5),ctx\}\)/);
 const getStart=api.indexOf('if (productionJobMatch && request.method === \"GET\")');
 const getEnd=api.indexOf('const productionRetryMatch',getStart);
 assert.ok(getStart>0&&getEnd>getStart);

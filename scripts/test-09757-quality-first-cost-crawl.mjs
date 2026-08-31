@@ -12,7 +12,8 @@ const ui=read('public/ronda/app.js');
 const html=read('public/ronda/index.html');
 const wrangler=JSON.parse(read('wrangler.jsonc'));
 
-assert.equal(wrangler.triggers.crons[0],'*/5 * * * *','Ronda automática deve rodar em cadência de 5 minutos');
+assert.ok(['*/5 * * * *','* * * * *'].includes(wrangler.triggers.crons[0]),'Cron deve suportar Quality-First 5M ou maintenance tick de 1 min');
+if(wrangler.triggers.crons[0]==='* * * * *') assert.match(worker,/minute % 5 !== 0/,'Com cron de manutenção a cada minuto, nova Ronda deve continuar limitada a cada 5 minutos');
 assert.match(worker,/const triggerType = "scheduled"/);
 assert.match(worker,/const mode = "full"/);
 assert.match(worker,/scheduled_round_coalesced/);
@@ -41,8 +42,9 @@ assert.match(platform,/qualityFirstV09757/);
 assert.match(platform,/costGovernorV09757/);
 assert.match(platform,/crawlReadOnlyV09757/);
 
-// Freeze das camadas editoriais do carrossel. A v0.9.7.5.8 altera apenas a coordenação durável de retry no engine; scraping, redação/Quality Gate e FORMA continuam congelados.
+// Freeze dos componentes críticos de geração do carrossel: esta versão não pode alterá-los.
 const frozen={
+  'src/production/engine.js':'cabecc5f756746ddbd79a1c6b4d7790d75e68bb58d24010fe72b640d523df651',
   'src/production/scraping-engine.js':'d5cd2aba4f110ff93f319e0e8f297f51db9478fb1c9dfbb48338cd8c4dc50357',
   'src/ronda/v285/article-reader.js':'944bff72b03f3c15a10e42a12541aef9af531c676801add27474a3b5165fc722',
   'public/design/index.html':'1af86252a341dd292218ef21aca97d6623d3a9d96ed6bff478d43b353195b156',
@@ -52,4 +54,4 @@ for(const [file,expected] of Object.entries(frozen)){
   assert.equal(actual,expected,`${file} mudou; bloquear release para evitar regressão do carrossel`);
 }
 
-console.log('v0.9.7.5.7 Quality-First 5M + Cost Governor + Crawl read-only + Carousel Freeze OK');
+console.log('v0.9.7.5.7+ Quality-First 5M + Cost Governor + Crawl read-only + Carousel Freeze OK');

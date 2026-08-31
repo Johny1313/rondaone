@@ -8,7 +8,7 @@ const db=fs.readFileSync(new URL('../src/ronda/v285/database.js',import.meta.url
 
 assert.match(engine,/autoRecoverStaleProductionJobs/);
 assert.match(engine,/recoverStalledProductionJob\(env,row\.id,\{ctx\}\)/);
-assert.match(worker,/autoRecoverStaleProductionJobs\(env,\{limit:1,ctx\}\)/);
+assert.match(worker,/autoRecoverStaleProductionJobs\(env,\{limit:(?:1|5),ctx\}\)/);
 assert.match(worker,/\/api\/admin\/production-jobs\/diagnostics/);
 assert.match(worker,/getProductionOperationalDiagnostics/);
 
@@ -31,5 +31,5 @@ assert.match(db,/CREATE TABLE IF NOT EXISTS production_workflow/);
 assert.match(db,/CREATE TABLE IF NOT EXISTS editorial_production_tracking/);
 assert.match(engine,/CREATE TABLE IF NOT EXISTS production_jobs/);
 
-assert.match(engine,/PRODUCTION_SCHEMA_VERSION = "0\.9\.7\.5\.[689]"/);
+assert.match(engine,/PRODUCTION_SCHEMA_VERSION = "0\.9\.7\.5\.6"/);
 console.log('OK 0.9.7.5.6 stuckProduction watchdog hotfix');
