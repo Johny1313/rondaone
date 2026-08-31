@@ -1,3 +1,7 @@
+# RONDA ONE Cloud v0.9.7.5.8 — Durable Carousel Retry Queue
+
+Hotfix incremental sobre a v0.9.7.5.7. Corrige o retry do carrossel sem reduzir qualidade: a nova tentativa usa a `ARTICLE_READ_QUEUE` como caminho principal e preserva `alternate → deep → snapshot` no mesmo job. Nenhum job pode avançar para `CAROUSEL_AI_QUEUE` sem Evidence Pack. Scraping, Evidence Engine, Multi-AI/Quality Gate (article-reader) e FORMA permanecem congelados.
+
 # RONDA ONE Cloud v0.9.7.5.7 — Quality-First 5M + Cost Governor + Crawl Read-Only
 
 Esta build consolida a correção do watchdog de Produção da 0.9.7.5.6 com uma nova política de operação editorial orientada a qualidade e custo. A Ronda automática passa a ocorrer a cada 5 minutos, com single-flight/coalescing, menor lote vivo por fonte, memória ampla, Browser Run limitado e tradução cache-first. O Crawl passa a ser somente leitura do que já foi captado.

@@ -1,3 +1,12 @@
+# v0.9.7.5.8 — Durable Carousel Retry Queue
+
+- Corrige o caso em que **Tentar novamente** podia repetir a mesma resposta de timeout mesmo alternando `alternate → deep → snapshot`.
+- Retry manual mantém o mesmo `jobId`, revoga a lease anterior e passa a ser entregue primeiro à `ARTICLE_READ_QUEUE`, tornando a leitura durável após o retorno HTTP.
+- A Queue agora preserva `retryMode` e bloqueia explicitamente qualquer envio à `CAROUSEL_AI_QUEUE` sem `Evidence Pack`.
+- Execução direta via `waitUntil` permanece apenas como contingência quando a Queue dedicada estiver indisponível.
+- `scraping-engine.js`, `article-reader.js` e FORMA permanecem byte a byte congelados em relação à v0.9.7.5.7.
+- Quality-First 5M, Cost Governor e Crawl read-only permanecem inalterados.
+
 ## 0.9.7.5.7 — Quality-First 5M + Cost Governor + Crawl Read-Only
 
 - scheduler automático passa de 1 min para 5 min e executa somente Ronda completa;
