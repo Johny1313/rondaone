@@ -1,3 +1,14 @@
+# v0.9.7.5.9 — Durable AI Generation Retry
+
+- Corrige o caso em que o job chegava a `3 Evidências → 4 Multi-AI`, excedia a margem de segurança e **Tentar novamente** repetia o mesmo estado.
+- Retry manual com Evidence Pack passa a usar `CAROUSEL_AI_QUEUE` como caminho primário, preservando o mesmo `jobId`.
+- Retry revoga a `generating lease` anterior antes do requeue; geração antiga não pode sobrescrever a nova tentativa.
+- Watchdog de `generating/quality` reenfileira pela `CAROUSEL_AI_QUEUE` em vez de preferir `waitUntil-direct`.
+- Execução direta continua apenas como contingência quando a Queue dedicada não está disponível ou falha ao receber a mensagem.
+- Consumer `production-generate` passa a preservar `deterministicOnly` na mensagem.
+- `scraping-engine.js`, `article-reader.js` e FORMA permanecem congelados; Evidence Pack, Multi-AI, Quality Gate e Confidence não foram reduzidos.
+- Quality-First 5M, Cost Governor e Crawl read-only permanecem inalterados.
+
 # v0.9.7.5.8 — Durable Carousel Retry Queue
 
 - Corrige o caso em que **Tentar novamente** podia repetir a mesma resposta de timeout mesmo alternando `alternate → deep → snapshot`.

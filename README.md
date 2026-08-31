@@ -1,3 +1,9 @@
+# RONDA ONE Cloud v0.9.7.5.9 — Durable AI Generation Retry
+
+Hotfix incremental sobre a v0.9.7.5.8. Corrige o retry quando o carrossel já possui Evidence Pack e fica preso em `4 Multi-AI`: o botão **Tentar novamente** e o recovery automático passam a reenfileirar o mesmo job pela `CAROUSEL_AI_QUEUE`. Execução direta fica somente como contingência se a Queue dedicada estiver indisponível. Scraping, Evidence Pack, Multi-AI/Quality Gate, Confidence e FORMA não tiveram sua lógica editorial alterada.
+
+Veja `docs/CAROUSEL-DURABLE-AI-GENERATION-v0.9.7.5.9.md`.
+
 # RONDA ONE Cloud v0.9.7.5.8 — Durable Carousel Retry Queue
 
 Hotfix incremental sobre a v0.9.7.5.7. Corrige o retry do carrossel sem reduzir qualidade: a nova tentativa usa a `ARTICLE_READ_QUEUE` como caminho principal e preserva `alternate → deep → snapshot` no mesmo job. Nenhum job pode avançar para `CAROUSEL_AI_QUEUE` sem Evidence Pack. Scraping, Evidence Engine, Multi-AI/Quality Gate (article-reader) e FORMA permanecem congelados.
