@@ -34,31 +34,67 @@ function transportHost(value){try{return new URL(String(value||"")).hostname.toL
 
 function browserQuickActionAvailable(env){return Boolean(env?.BROWSER&&typeof env.BROWSER.quickAction==="function");}
 
-async function browserQuickActionArticle(env,url,{timeoutMs=5_500}={}){
+async function browserQuickActionArticle(env,url,{timeoutMs=9_500}={}){
   if(!browserQuickActionAvailable(env))throw new Error("Browser Run não configurado");
   const started=Date.now();
-  const task=(async()=>{
-    const response=await env.BROWSER.quickAction("content",{
-      url,
-      gotoOptions:{waitUntil:"domcontentloaded",timeout:Math.max(2_000,Math.min(8_000,Number(timeoutMs)||5_500))},
-      rejectResourceTypes:["image","media","font","stylesheet"],
-    });
-    let html="",browserMsUsed=0;
+  const totalBudget=Math.max(4_500,Math.min(14_000,Number(timeoutMs)||9_500));
+  const remaining=()=>Math.max(0,totalBudget-(Date.now()-started));
+
+  const decodeResponse=async(response,waitUntil)=>{
+    let browserMsUsed=Number(response?.headers?.get?.("x-browser-ms-used"))||0;
     if(response&&typeof response.text==="function"){
-      browserMsUsed=Number(response.headers?.get?.("x-browser-ms-used"))||0;
       const raw=await response.text();
+      if(typeof response.ok==="boolean"&&!response.ok){
+        throw new Error(`Browser Run ${waitUntil} HTTP ${response.status||"erro"}: ${plainText(raw).slice(0,180)}`);
+      }
       const type=String(response.headers?.get?.("content-type")||"");
       if(/json/i.test(type)||/^\s*[{[]/.test(raw)){
-        try{const parsed=JSON.parse(raw);html=typeof parsed?.result==="string"?parsed.result:typeof parsed?.result?.content==="string"?parsed.result.content:typeof parsed?.content==="string"?parsed.content:raw;}catch{html=raw;}
-      }else html=raw;
-    }else if(typeof response==="string")html=response;
-    else if(typeof response?.result==="string")html=response.result;
-    else if(typeof response?.html==="string")html=response.html;
+        try{
+          const parsed=JSON.parse(raw);
+          if(parsed?.success===false)throw new Error(String(parsed?.errors?.[0]?.message||parsed?.error||"Browser Run retornou success=false"));
+          const result=parsed?.result;
+          const html=typeof result==="string"?result:typeof result?.content==="string"?result.content:typeof parsed?.content==="string"?parsed.content:"";
+          if(!html||html.length<120)throw new Error("Browser Run não retornou HTML útil");
+          return {html,url,durationMs:Date.now()-started,browserMsUsed,waitUntil};
+        }catch(error){
+          if(error?.message&&/Browser Run|HTML útil|success=false/i.test(error.message))throw error;
+          if(raw.trim().startsWith("<")&&raw.length>=120)return {html:raw,url,durationMs:Date.now()-started,browserMsUsed,waitUntil};
+          throw new Error(`Browser Run retornou resposta inválida: ${plainText(raw).slice(0,160)}`);
+        }
+      }
+      if(!raw||raw.length<120)throw new Error("Browser Run não retornou HTML útil");
+      return {html:raw,url,durationMs:Date.now()-started,browserMsUsed,waitUntil};
+    }
+    const html=typeof response==="string"?response:typeof response?.result==="string"?response.result:typeof response?.html==="string"?response.html:"";
     if(!html||html.length<120)throw new Error("Browser Run não retornou HTML útil");
-    return {html,url,durationMs:Date.now()-started,browserMsUsed};
-  })();
-  const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("Browser Run excedeu o limite de leitura")),Math.max(2_500,Number(timeoutMs)||5_500)));
-  return Promise.race([task,timeout]);
+    return {html,url,durationMs:Date.now()-started,browserMsUsed,waitUntil};
+  };
+
+  const run=async(waitUntil,attemptBudget)=>{
+    const safeBudget=Math.max(2_200,Math.min(8_500,Number(attemptBudget)||4_500));
+    const action=env.BROWSER.quickAction("content",{
+      url,
+      gotoOptions:{waitUntil,timeout:safeBudget},
+      rejectResourceTypes:["image","media","font","stylesheet"],
+    });
+    const guard=new Promise((_,reject)=>setTimeout(()=>reject(new Error(`Browser Run ${waitUntil} excedeu o limite de leitura`)),safeBudget+350));
+    return decodeResponse(await Promise.race([action,guard]),waitUntil);
+  };
+
+  let firstError=null;
+  try{
+    const firstBudget=Math.max(2_800,Math.min(7_000,remaining()-2_400));
+    return await run("networkidle2",firstBudget);
+  }catch(error){firstError=error;}
+
+  if(remaining()<2_200)throw firstError;
+  try{
+    return await run("domcontentloaded",Math.min(4_500,remaining()));
+  }catch(error){
+    const first=String(firstError?.message||firstError||"").slice(0,150);
+    const second=String(error?.message||error||"").slice(0,150);
+    throw new Error(`Browser Run falhou nas duas estratégias: networkidle2 (${first}) · domcontentloaded (${second})`);
+  }
 }
 
 async function getTransportPreference(db,url,browserAvailable){
@@ -506,7 +542,7 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
     let evidenceResult;
     if(job.sourceType==="url"){
       const input=job.input||{};const item={url:job.sourceRef,title:input.title||"Matéria externa",description:input.description||"",content:input.content||"",sourceName:input.sourceName||new URL(job.sourceRef).hostname.replace(/^www\./,""),publishedAt:input.publishedAt||null,kind:"portal"};
-      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
+      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||9_500}):null;
       let transportPreference=await getTransportPreference(db,item.url,Boolean(browserFetcher));
       if(retryMode==='alternate')transportPreference=transportPreference==='browser-first'?'direct-first':(browserFetcher?'browser-first':'direct-first');
       if(retryMode==='deep'&&browserFetcher)transportPreference='browser-first';
@@ -523,7 +559,7 @@ export async function processProductionRead(env,jobId,{force=false,retryMode=nul
       const topic=job.input?.topic;if(!topic)throw new Error("A pauta não foi anexada à produção.");
       // Gestão de Produção não altera leitura. A pauta segue pelo mesmo scraping completo
       // usado antes do Kanban/Newsroom OS; status é apenas metadata operacional.
-      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||5_500}):null;
+      const browserFetcher=browserQuickActionAvailable(env)?(url)=>browserQuickActionArticle(env,url,{timeoutMs:Number(env.BROWSER_READ_TIMEOUT_MS)||9_500}):null;
       evidenceResult=await scrapeTopicToEvidence(topic,{
         timeoutMs:retryMode==='deep'?11_000:retryMode==='alternate'?8_500:(Number(env.ARTICLE_READ_TIMEOUT_MS)||6_500),slideCount:Number(job.input?.slideCount)||7,allowCollectedFastPath:retryMode==='snapshot'?true:!force,browserFetcher,
         transportPreferenceFor:async(item)=>{let pref=await getTransportPreference(db,item?.url,Boolean(browserFetcher));if(retryMode==='alternate')pref=pref==='browser-first'?'direct-first':(browserFetcher?'browser-first':'direct-first');if(retryMode==='deep'&&browserFetcher)pref='browser-first';return pref;},
