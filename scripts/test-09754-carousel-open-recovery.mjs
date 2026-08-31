@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const engine=fs.readFileSync(new URL('../src/production/engine.js',import.meta.url),'utf8');
+const scraping=fs.readFileSync(new URL('../src/production/scraping-engine.js',import.meta.url),'utf8');
+const forma=fs.readFileSync(new URL('../public/design/index.html',import.meta.url),'utf8');
+assert.match(engine,/const PRODUCTION_READ_STALE_MS = 15_000;/,'recovery de leitura não pode competir com o orçamento normal de fetch+browser');
+assert.match(engine,/startProductionLeaseHeartbeat\(db,jobId,lease,\{ttlMs:30_000,intervalMs:4_000\}\)/,'leitura precisa renovar lock e atividade enquanto abre a matéria');
+assert.match(engine,/if\(await hasActiveProductionLease\(db,id,"reading"\)\)return job;/,'recovery não pode registrar nova tentativa enquanto leitura original está viva');
+assert.match(engine,/if\(read\?\.leaseBusy\|\|read\?\.deduplicated\)return read;/,'recovery deduplicado não pode avançar para geração sem Evidence Pack');
+assert.match(engine,/detail LIKE 'Nova tentativa %'/,'contador de retry manual deve ignorar recovery automático');
+assert.match(engine,/manualRetry:true/,'retry manual deve ficar distinguível no diagnóstico');
+assert.match(engine,/const usefulRead=Boolean\(record\?\.ok&&\(Number\(record\.readingQuality\)>=55\|\|\(record\?\.evidenceSufficiency\?\.ready&&Number\(record\.readingQuality\)>=40\)\)\);/,'URL externa só pode gerar Evidence Pack após leitura útil');
+assert.match(scraping,/if \(!best \|\| !best\.evidenceSufficiency\?\.ready \|\| Number\(best\.readingQuality\) < 55\) \{/,'snapshot deve ser avaliado quando leitura direta existe mas é insuficiente');
+assert.match(scraping,/method:"collected-fallback",transport:"snapshot"/,'diagnóstico deve identificar fallback de snapshot');
+assert.match(forma,/function productionFailureDiagnostics\(bundle\)/,'FORMA deve mostrar diagnóstico das rotas de leitura quando o job falhar');
+console.log('v0.9.7.5.4 Carousel Open Recovery: OK');
