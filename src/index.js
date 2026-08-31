@@ -69,7 +69,7 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.12',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.13',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
     jobs:{stuckIntelligent,stuckProduction,activeProduction,recoveringProduction,oldestActiveAgeSeconds,oldestHeartbeatAgeSeconds,healthy:stuckIntelligent===0&&stuckProduction===0},
@@ -89,10 +89,10 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.5.12',
+      version:'0.9.7.5.13',
       modules:{
         ronda:true,
-        editorialVersion:'2.9.7.5.12',
+        editorialVersion:'2.9.7.5.13',
         design:true,
         editorialAi:!!env.AI,
         designImageAi:!!env.AI,
@@ -284,6 +284,7 @@ export default {
       crawlReadOnlyV09757:{enabled:true,endpoint:'/api/crawl',source:'D1 source_discovery_items',scraping:false,browser:false,ai:false,translation:false,originalArticleLinks:true,cacheSeconds:30},
       carouselStabilityBaselineV097510:{enabled:true,baseline:'0.9.7.5.6',productionRecoveryCadenceMinutes:1,roundCadenceMinutes:5,manualRetryPriority:'direct-5.6',durableRetryQueueChangesFrom:['0.9.7.5.8','0.9.7.5.9'],durableRetryQueueChangesIncluded:false,qualityPipelineFrozen:true},
       carousel56FullLockV097512:{enabled:true,baseline:'0.9.7.5.6',scope:'carousel-only',fullCoreHashLock:true,dependencyHashLock:true,translationCriticalApiLock:true,manualProductionQualityBudgetExempt:true,roundQualityFirst5M:true,d1SchemaChange:false,rollbackBaseline:'0.9.7.5.10'},
+      carouselFreshUrlResetV097513:{enabled:true,engineBaseline:'0.9.7.5.6',urlBaseline:'carousel-5.6-fresh-url-v1',legacyReadyJobReuse:false,legacyActiveJobReuse:false,legacyEvidenceReuseOnFirstRead:false,currentBaselineDedupe:true,d1Delete:false,d1Migration:false},
       workflowV095:{enabled:true,statuses:['draft','in_review','approved','published','rejected'],roles:['editor','reviewer','publisher','admin'],auditTrail:true,groups:true,formaSubmitForReview:true},
       sourceRecovery:{
         cronMinutes:5,
@@ -318,7 +319,7 @@ export default {
         reconnectOnOnline:true,
         reconnectOnVisibility:true,
         abandonedClientJobGuard:true,
-        assetCacheBust:'2.9.7.5.12-carousel-56-full-lock'
+        assetCacheBust:'2.9.7.5.13-carousel-56-fresh-url-reset'
       },
       navigation:{
         ronda:'/ronda',

@@ -13,8 +13,8 @@ const worker=read('src/ronda/v285/index.js');
 const platform=read('src/index.js');
 const wrangler=JSON.parse(read('wrangler.jsonc'));
 
-assert.equal(pkg.version,'0.9.7.5.12');
-assert.equal(manifest.release,'0.9.7.5.12');
+assert.ok(['0.9.7.5.12','0.9.7.5.13'].includes(pkg.version));
+assert.ok(['0.9.7.5.12','0.9.7.5.13'].includes(manifest.release));
 assert.equal(manifest.baseline,'0.9.7.5.6');
 assert.equal(manifest.qualityFirstPreserved,true);
 assert.equal(manifest.d1SchemaChange,false);
@@ -62,4 +62,4 @@ assert.match(platform,/carouselStabilityBaselineV097510/);
 assert.match(platform,/carousel56FullLockV097512/);
 assert.match(platform,/manualProductionQualityBudgetExempt:true/);
 
-console.log('v0.9.7.5.12 Carousel 5.6 Full Lock + Quality-First 5M OK');
+console.log('Carousel 5.6 Full Lock baseline OK');

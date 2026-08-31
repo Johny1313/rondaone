@@ -10,7 +10,7 @@ const worker=read('src/ronda/v285/index.js');
 const platform=read('src/index.js');
 const wrangler=JSON.parse(read('wrangler.jsonc'));
 
-assert.ok(['0.9.7.5.10','0.9.7.5.12'].includes(pkg.version));
+assert.ok(['0.9.7.5.10','0.9.7.5.13'].includes(pkg.version));
 
 // Baseline comprovada: componentes críticos do carrossel devem ser byte a byte 0.9.7.5.6.
 const frozen={
@@ -50,6 +50,6 @@ assert.match(platform,/qualityFirstV09757/);
 assert.match(platform,/costGovernorV09757/);
 assert.match(platform,/crawlReadOnlyV09757/);
 assert.match(platform,/carouselStabilityBaselineV097510/);
-if(pkg.version==='0.9.7.5.12') assert.match(platform,/carousel56FullLockV097512/);
+if(pkg.version==='0.9.7.5.13') assert.match(platform,/carousel56FullLockV097512/);
 
 console.log('v0.9.7.5.10 Carousel Stability Baseline 5.6 + Quality-First 5M + Cost/Crawl OK');

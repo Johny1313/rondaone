@@ -149,7 +149,8 @@ import { mergeEditorialEventsIntoRound, topicFromEditorialEvent } from "./unifie
 import { advanceReliabilityAction, finishReliabilityAction, reliabilityResultStatus, startReliabilityAction } from "../../reliability/core.js";
 import { createProductionJob, findActiveProductionJob, findReusableProductionJob, generateProductionImage, getProductionJob, launchInteractiveProduction, listProductionJobs, productionBundle, getProductionOperationalDiagnostics, autoRecoverStaleProductionJobs, recoverStalledProductionJob, retryProductionJob, runInteractiveProduction, startProductionPipeline } from "../../production/engine.js";
 
-const VERSION = "2.9.7.5.12";
+const VERSION = "2.9.7.5.13";
+const CAROUSEL_URL_BASELINE = "carousel-5.6-fresh-url-v1";
 const INTELLIGENT_JOB_STALE_LABEL = "o limite seguro de inatividade";
 const INTELLIGENT_QUEUE_MAX_ATTEMPTS = 5;
 const INTELLIGENT_JOB_LOCK_TTL_MS = 90 * 1000;
@@ -1569,23 +1570,30 @@ async function handleApi(request, env, url, ctx) {
     catch (error) { throw new HttpError(400,error?.message||"Quantidade de slides inválida."); }
     const writingProfile = await getWritingProfile(db,user.id).catch(()=>null);
     const learningStats = await getCarouselLearningStats(db,user.id).catch(()=>({count:0,updatedAt:null}));
-    input = { ...input, slideCount, writingProfile, styleKey:`${user.id}:${writingProfile?.updatedAt||"default"}:${learningStats.updatedAt||"no-learning"}:${learningStats.count||0}`, contentFirst:true, targetLanguage:"pt-BR" };
+    input = { ...input, slideCount, writingProfile, styleKey:`${user.id}:${writingProfile?.updatedAt||"default"}:${learningStats.updatedAt||"no-learning"}:${learningStats.count||0}`, contentFirst:true, targetLanguage:"pt-BR", ...(sourceType==="url"?{carouselBaseline:CAROUSEL_URL_BASELINE}: {}) };
+    // v0.9.7.5.13: URLs externas não podem herdar jobs/evidências produzidos
+    // por builds anteriores ao reset. O motor continua 5.6; a fronteira HTTP
+    // apenas aceita cache/dedupe quando o próprio job foi criado nesta baseline.
     if (!body?.force) {
       const reusable = await findReusableProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:Number(env.PRODUCTION_RESULT_CACHE_MINUTES)||(sourceType==="url"?90:15)}).catch(()=>null);
-      if (reusable?.result?.slides?.length) {
-        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.5.6", job:reusable, pollAfterMs:0 },200);
+      const reusableFromCurrentUrlBaseline = sourceType!=="url" || reusable?.input?.carouselBaseline===CAROUSEL_URL_BASELINE;
+      if (reusableFromCurrentUrlBaseline && reusable?.result?.slides?.length) {
+        return json({ ok:true, production:true, reused:true, engineVersion:"0.9.7.5.6", urlBaseline:sourceType==="url"?CAROUSEL_URL_BASELINE:null, job:reusable, pollAfterMs:0 },200);
       }
     }
     if (!body?.force) {
       const active = await findActiveProductionJob(db,{sourceType,sourceRef,createdBy:user.id,input,maxAgeMinutes:3}).catch(()=>null);
-      if (active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.5.6",job:active,pollAfterMs:450},202);
+      const activeFromCurrentUrlBaseline = sourceType!=="url" || active?.input?.carouselBaseline===CAROUSEL_URL_BASELINE;
+      if (activeFromCurrentUrlBaseline && active) return json({ok:true,production:true,reused:false,reusedActive:true,interactive:true,deferred:true,engineVersion:"0.9.7.5.6",urlBaseline:sourceType==="url"?CAROUSEL_URL_BASELINE:null,job:active,pollAfterMs:450},202);
     }
     let job = await createProductionJob(db,{sourceType,sourceRef,input,createdBy:user.id});
-    // O request HTTP não espera scraping nem IA. O Fast Path continua direto,
-    // mas executa no lifetime estendido do Worker e o FORMA acompanha por polling.
-    const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force),ctx});
+    // Para uma URL nova nesta baseline, force=true serve somente para ignorar o
+    // Evidence Pack legado na primeira leitura. O scraping/Evidence/Multi-AI
+    // executados continuam sendo exatamente os do engine 0.9.7.5.6.
+    const forceFreshUrlRead = sourceType==="url";
+    const interactive = await launchInteractiveProduction(env,job.id,{force:Boolean(body?.force)||forceFreshUrlRead,ctx});
     job = interactive.job || job;
-    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.5.6", job, pollAfterMs:450 },202);
+    return json({ ok:true, production:true, reused:false, interactive:true, deferred:true, engineVersion:"0.9.7.5.6", urlBaseline:sourceType==="url"?CAROUSEL_URL_BASELINE:null, freshUrlRead:forceFreshUrlRead, job, pollAfterMs:450 },202);
   }
 
   const productionJobMatch = /^\/api\/production\/jobs\/(prod-[a-z0-9-]{20,100})$/i.exec(url.pathname);
@@ -2727,7 +2735,7 @@ export default {
       const now = new Date();
       const minute = now.getUTCMinutes();
 
-      // v0.9.7.5.12 Carousel 5.6 Full Lock + Quality-First 5M:
+      // v0.9.7.5.13 Carousel 5.6 Fresh URL Reset + Quality-First 5M:
       // restaura a cadência de manutenção do carrossel da 0.9.7.5.6 sem
       // voltar a criar Rondas a cada minuto. Estes recoveries não fazem
       // scraping da Ronda nem consomem Browser/IA se não houver job stale.
