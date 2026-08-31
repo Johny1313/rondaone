@@ -1,4 +1,38 @@
-# RONDA ONE Cloud v0.9.7.5.4 — Carousel Open Recovery Fix
+# RONDA ONE Cloud v0.9.7.5.7 — Quality-First 5M + Cost Governor + Crawl Read-Only
+
+Esta build consolida a correção do watchdog de Produção da 0.9.7.5.6 com uma nova política de operação editorial orientada a qualidade e custo. A Ronda automática passa a ocorrer a cada 5 minutos, com single-flight/coalescing, menor lote vivo por fonte, memória ampla, Browser Run limitado e tradução cache-first. O Crawl passa a ser somente leitura do que já foi captado.
+
+## Proteção de qualidade do carrossel
+
+O pipeline de carrossel foi congelado nesta atualização. `production/engine.js`, `production/scraping-engine.js`, `article-reader.js` e o FORMA mantêm exatamente os mesmos SHA-256 da base 0.9.7.5.6. Evidence Pack, Multi-AI, Quality Gate, retry/lease handoff e fallback permanecem intactos.
+
+## Operação Quality-First
+
+- Ronda completa automática: **5 min**;
+- uma única Ronda `queued/running`;
+- nenhuma fila de Fast Lane automática por minuto;
+- mensagens antigas expiradas não são ressuscitadas;
+- revalidações antigas na ROUND Queue são drenadas sem rede;
+- 39 fontes mantidas;
+- lotes por ciclo: 24 very-high, 18 high, 12 Brasil normal, 10 Mundo;
+- snapshots de memória continuam amplos (96/72/48);
+- fontes de alta/média/normal frequência: 5/10/15 min;
+- Browser Run: recovery-only, máximo 1 por Ronda e budget diário;
+- tradução: cache-first + budget diário;
+- alvo de processamento automático adicional: **US$ 1/semana** (o faturamento real deve ser validado no Cloudflare).
+
+## Crawl
+
+A aba **Crawl** apenas lê `source_discovery_items` do D1 e mostra título, fonte, horário e link original. Não faz scraping, Browser Run, IA, tradução ou criação de jobs.
+
+Veja `docs/QUALITY-FIRST-COST-GOVERNOR-v0.9.7.5.7.md` para detalhes e checklist pós-deploy.
+
+# RONDA ONE Cloud v0.9.7.5.6 — Stuck Production Watchdog Hotfix
+
+## Hotfix 0.9.7.5.5 — botão Tentar novamente
+
+Esta revisão corrige o caso em que o retry visível no FORMA parecia não funcionar porque a tentativa anterior ainda mantinha a lease de leitura. O clique agora faz um handoff explícito da lease, preserva o mesmo job e impede que a tentativa antiga grave estado depois de ser substituída.
+
 
 Corrige erros repetidos ao abrir matérias para gerar carrosséis. A recuperação automática agora respeita a leitura já em andamento, renova o lock durante fetch/Browser Run, evita avançar para geração sem Evidence Pack e faz o retry manual realmente trocar de estratégia. Preserva o Unified No-Hang Coordinator, o scraping híbrido e a separação entre Mesa e Produção.
 
@@ -737,3 +771,6 @@ Consulte `docs/DEPLOY.md`.
 ## v0.9.7.4.4 — Projetos e superfície operacional
 
 O botão **Salvar projeto** grava o projeto do FORMA no D1 e o item aparece em `/projects/`. Controles de versão/revisão e o painel de integrações não são exibidos no FORMA. Para manter Remove.bg sem expor credenciais no navegador, configure `REMOVEBG_API_KEY` como Cloudflare secret.
+
+### 0.9.7.5.6 — stuckProduction watchdog hotfix
+This patch extends the existing scheduled recovery path to technical `production_jobs`. It does not modify editorial Production workflow or scraping. Admin diagnosis is available read-only at `/api/admin/production-jobs/diagnostics` after deployment.

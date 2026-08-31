@@ -33,6 +33,9 @@ const state = {
   activeSlideCount: 7,
   pendingCarouselTopicId: null,
   carouselEdited: false,
+  crawlItems: [],
+  crawlLoading: false,
+  crawlEtag: "",
 };
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
@@ -47,6 +50,7 @@ const sourcesView = document.getElementById("sourcesView");
 const monitoringView = document.getElementById("monitoringView");
 const newsroomView = document.getElementById("newsroomView");
 const productionView = document.getElementById("productionView");
+const crawlView = document.getElementById("crawlView");
 const profileView = document.getElementById("profileView");
 
 function escapeHtml(value) {
@@ -125,6 +129,44 @@ async function conditionalApi(path, etag = "") {
     headers: etag ? { "If-None-Match": etag } : {},
   });
   return parseApiResponse(response);
+}
+
+function renderCrawl() {
+  const list = document.getElementById("crawlList");
+  const meta = document.getElementById("crawlMeta");
+  if (!list || !meta) return;
+  const items = Array.isArray(state.crawlItems) ? state.crawlItems : [];
+  meta.textContent = items.length ? `${items.length} notícias já captadas · nenhum scraping ou IA acionado por esta tela` : "Nenhuma notícia captada no período.";
+  if (!items.length) {
+    list.innerHTML = `<div class="empty"><strong>Nenhuma notícia recente</strong><span>O Crawl só exibe itens que já existem na memória de captura.</span></div>`;
+    return;
+  }
+  list.innerHTML = items.map((item) => {
+    const when = item.firstSeenAt || item.publishedAt || item.lastSeenAt;
+    const href = safeUrl(item.url);
+    return `<article class="crawl-item"><div class="crawl-item-main"><div class="crawl-source"><strong>${escapeHtml(item.sourceName || item.sourceId || "Fonte")}</strong><span>${escapeHtml(relativeTime(when))}</span></div><h3>${escapeHtml(item.title || "Sem título")}</h3><small>${escapeHtml(formatDate(when))}</small></div><a class="open crawl-open" href="${href}" target="_blank" rel="noopener noreferrer">Abrir matéria ↗</a></article>`;
+  }).join("");
+}
+
+async function loadCrawl({ force = false } = {}) {
+  if (state.crawlLoading) return;
+  state.crawlLoading = true;
+  const refresh = document.getElementById("refreshCrawl");
+  if (refresh) refresh.disabled = true;
+  try {
+    const response = await conditionalApi("/api/crawl?limit=100&hours=6", force ? "" : state.crawlEtag);
+    if (!response.notModified) {
+      state.crawlItems = response.payload?.items || [];
+      state.crawlEtag = response.etag || "";
+    }
+    renderCrawl();
+  } catch (error) {
+    const list = document.getElementById("crawlList");
+    if (list) list.innerHTML = `<div class="empty"><strong>Não foi possível ler o Crawl</strong><span>${escapeHtml(error.message || "Erro de leitura")}</span></div>`;
+  } finally {
+    state.crawlLoading = false;
+    if (refresh) refresh.disabled = false;
+  }
 }
 
 function itemMatchesSource(item) {
@@ -305,6 +347,7 @@ function showView(view) {
   monitoringView.hidden = view !== "monitoring";
   newsroomView.hidden = view !== "newsroom";
   productionView.hidden = view !== "production";
+  crawlView.hidden = view !== "crawl";
   profileView.hidden = view !== "profile";
   document.getElementById("sourceHealth").hidden = view !== "round";
   document.getElementById("navRound").classList.toggle("active", view === "round");
@@ -312,8 +355,10 @@ function showView(view) {
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
   document.getElementById("navNewsroom").classList.toggle("active", view === "newsroom");
   document.getElementById("navProduction").classList.toggle("active", view === "production");
+  document.getElementById("navCrawl").classList.toggle("active", view === "crawl");
   document.getElementById("navProfile").classList.toggle("active", view === "profile");
   if (view === "sources") renderPortalCards();
+  if (view === "crawl") loadCrawl();
   if (view === "monitoring") {
     loadMonitoringTerms();
     renderDedicatedMonitoring();
@@ -1624,6 +1669,8 @@ document.getElementById("newsroomBoard").addEventListener("change", (event) => {
 document.getElementById("newsroomBoard").addEventListener("click", (event) => { const card=event.target.closest("[data-story-id]"); if(!card)return; if(event.target.closest("[data-story-assume]")) patchNewsroomStory(card.dataset.storyId,{assignToSelf:true}); if(event.target.closest("[data-story-note]")) addNewsroomNote(card.dataset.storyId); if(event.target.closest("[data-story-follow]")) toggleNewsroomFollow(card.dataset.storyId); });
 document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); loadNewsroom(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navProduction").addEventListener("click", () => { showView("production"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.getElementById("navCrawl").addEventListener("click", () => { showView("crawl"); loadCrawl(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.getElementById("refreshCrawl").addEventListener("click", () => loadCrawl({ force:true }));
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.querySelectorAll('[data-profile-ref-tab]').forEach(button=>button.addEventListener('click',()=>setProfileReferenceTab(button.dataset.profileRefTab)));

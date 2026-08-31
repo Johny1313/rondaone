@@ -87,7 +87,7 @@
   },
   "triggers": {
     "crons": [
-      "* * * * *"
+      "*/5 * * * *"
     ]
   },
   "observability": {

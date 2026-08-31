@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.8.5">
+  <link rel="stylesheet" href="/styles.css?v=2.9.7.5.7">
 </head>
 <body>
   <main class="app">
@@ -15,6 +15,7 @@
       <nav aria-label="Navegação principal">
         <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
         <button class="nav" id="navNewsroom" type="button"><span class="nav-icon">M</span><span>Mesa</span></button>
+        <button class="nav" id="navCrawl" type="button"><span class="nav-icon">C</span><span>Crawl</span></button>
         <button class="nav" id="navProduction" type="button"><span class="nav-icon">P</span><span>Produção</span></button>
         <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
         <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
@@ -39,6 +40,16 @@
 
       <section class="newsroom-view production-view" id="productionView" hidden aria-labelledby="productionTitle">
         <div class="management-heading newsroom-heading"><div><p class="eyebrow">Gerenciamento operacional</p><h2 id="productionTitle">Produção</h2><p>Status, responsáveis, aprovação, finalização e comentários. Esta área não participa da coleta, leitura ou geração.</p></div><button class="secondary" id="refreshProduction" type="button">↻ Atualizar produção</button></div>
+      </section>
+
+      <section class="crawl-view" id="crawlView" hidden aria-labelledby="crawlTitle">
+        <div class="management-heading crawl-heading">
+          <div><p class="eyebrow">Feed captado · zero processamento editorial</p><h2 id="crawlTitle">Crawl</h2><p>Mostra somente notícias já captadas pelo Ronda. Não dispara scraping, Browser Run, tradução ou IA.</p></div>
+          <button class="secondary" id="refreshCrawl" type="button">↻ Atualizar</button>
+        </div>
+        <div class="background-note"><strong>Somente leitura</strong><span>Título, fonte, horário de captura e link direto para a matéria original.</span></div>
+        <div class="crawl-meta" id="crawlMeta">Carregando notícias captadas…</div>
+        <div class="crawl-list" id="crawlList"><div class="empty"><strong>Nenhuma notícia carregada</strong><span>Abra o Crawl para ler o que já foi captado.</span></div></div>
       </section>
 
       <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
@@ -213,6 +224,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.8.5" defer></script>
+  <script src="/app.js?v=2.9.7.5.7-quality-first" defer></script>
 </body>
 </html>

@@ -1,3 +1,32 @@
+## 0.9.7.5.7 — Quality-First 5M + Cost Governor + Crawl Read-Only
+
+- scheduler automático passa de 1 min para 5 min e executa somente Ronda completa;
+- single-flight usa consulta real de `runs` ativos + `round-enqueue-gate`;
+- elimina backlog automático: se há job ativo, novo trigger é coalescido;
+- consumidor não ressuscita rondas já `success/failed/expired`;
+- mensagens legadas `source-revalidate` na ROUND Queue são drenadas sem nova consulta;
+- Ronda deixa de colocar revalidação por fonte na própria ROUND Queue;
+- queued/running stale passam para 7/15 min;
+- reduz lote vivo por fonte preservando snapshots de memória amplos;
+- source cadence 5/10/15 min com descoberta multi-rota apenas quando cobertura exige;
+- budget padrão da Ronda cai para 70 requests externos;
+- Browser Run da Ronda limitado a 1/ciclo e 48/24h por padrão;
+- tradução cache-first limitada a 8/ciclo e 192 novos títulos/24h;
+- novo `/api/crawl` somente leitura de `source_discovery_items`;
+- nova aba Crawl exibe notícia + fonte + horário + link original sem scraping/IA;
+- adicionadas métricas de custo operacional da Ronda;
+- target técnico de gasto automático adicional: US$ 1/semana;
+- arquivos críticos do carrossel congelados por SHA-256; Evidence Pack, Multi-AI, Quality Gate, retry/lease e FORMA não foram alterados.
+
+## 0.9.7.5.5 — Retry Lease Handoff
+
+- corrige o botão **Tentar novamente** quando a tentativa anterior ainda mantém uma `reading lease` ativa;
+- retry manual agora assume explicitamente o mesmo job, revoga a lease anterior e inicia de fato uma nova estratégia (`alternate` → `deep` → `snapshot`);
+- tentativas antigas validam o token da lease antes de salvar Evidence Pack, marcar falha ou concluir geração, impedindo sobrescrita por processos atrasados;
+- o Interactive Fast Path não avança para geração quando a leitura foi deduplicada ou ainda não existe Evidence Pack;
+- ao atingir o deadline absoluto com leitura ainda ativa, o coordenador faz um handoff único para `snapshot/cache` em vez de marcar o job como falho enquanto a leitura anterior ainda está viva;
+- mantém o mesmo `jobId`, o histórico de diagnóstico e todas as proteções de No-Hang/Scraping híbrido da 0.9.7.5.4.
+
 ## 0.9.7.5.4 — Carousel Open Recovery
 
 - impede o recovery automático de competir com uma leitura ainda ativa: leitura passa a renovar lease + `updated_at` durante fetch/Browser Run;
@@ -411,3 +440,11 @@ A validação real pós-deploy deve ser executada com `BASE_URL=https://... npm 
 - URL externa só avança para Evidence Pack quando a leitura tem qualidade/evidência mínima;
 - snapshot/RSS é comparado também quando existe uma leitura direta parcial, em vez de ser ignorado apenas porque `best` já existe;
 - falhas de leitura persistem as rotas tentadas e o FORMA exibe diagnóstico resumido de fonte, papel e transporte.
+
+## 0.9.7.5.6 — Stuck Production Watchdog Hotfix
+- Root cause: `production_jobs` stale recovery depended on client polling (`GET /api/production/jobs/:id`); the scheduled watchdog only recovered `intelligent_jobs`.
+- Extended the existing scheduled recovery coordinator to scan stale `production_jobs` every cron cycle and delegate all decisions to the existing `recoverStalledProductionJob` logic.
+- `GET /api/production/jobs/:id` is now read-only; recovery remains in scheduler and explicit POST retry/fallback routes.
+- Added read-only admin diagnostics at `/api/admin/production-jobs/diagnostics`.
+- `/api/platform/status` now reports `activeProduction`, `recoveringProduction`, `oldestActiveAgeSeconds`, and `oldestHeartbeatAgeSeconds` while preserving `stuckProduction`.
+- No scraping, source collection, Mesa, editorial Production, Forma, translation, D1 schema migration, or queue topology changes.
