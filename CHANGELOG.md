@@ -1,22 +1,13 @@
-# v0.9.7.5.9 — Durable AI Generation Retry
+## 0.9.7.5.10 — Carousel Stability Baseline 5.6 + Quality-First 5M
 
-- Corrige o caso em que o job chegava a `3 Evidências → 4 Multi-AI`, excedia a margem de segurança e **Tentar novamente** repetia o mesmo estado.
-- Retry manual com Evidence Pack passa a usar `CAROUSEL_AI_QUEUE` como caminho primário, preservando o mesmo `jobId`.
-- Retry revoga a `generating lease` anterior antes do requeue; geração antiga não pode sobrescrever a nova tentativa.
-- Watchdog de `generating/quality` reenfileira pela `CAROUSEL_AI_QUEUE` em vez de preferir `waitUntil-direct`.
-- Execução direta continua apenas como contingência quando a Queue dedicada não está disponível ou falha ao receber a mensagem.
-- Consumer `production-generate` passa a preservar `deterministicOnly` na mensagem.
-- `scraping-engine.js`, `article-reader.js` e FORMA permanecem congelados; Evidence Pack, Multi-AI, Quality Gate e Confidence não foram reduzidos.
-- Quality-First 5M, Cost Governor e Crawl read-only permanecem inalterados.
-
-# v0.9.7.5.8 — Durable Carousel Retry Queue
-
-- Corrige o caso em que **Tentar novamente** podia repetir a mesma resposta de timeout mesmo alternando `alternate → deep → snapshot`.
-- Retry manual mantém o mesmo `jobId`, revoga a lease anterior e passa a ser entregue primeiro à `ARTICLE_READ_QUEUE`, tornando a leitura durável após o retorno HTTP.
-- A Queue agora preserva `retryMode` e bloqueia explicitamente qualquer envio à `CAROUSEL_AI_QUEUE` sem `Evidence Pack`.
-- Execução direta via `waitUntil` permanece apenas como contingência quando a Queue dedicada estiver indisponível.
-- `scraping-engine.js`, `article-reader.js` e FORMA permanecem byte a byte congelados em relação à v0.9.7.5.7.
-- Quality-First 5M, Cost Governor e Crawl read-only permanecem inalterados.
+- carrossel revertido à baseline comportamental e binária da 0.9.7.5.6;
+- removidas da linha de release as mudanças de retry durável da 0.9.7.5.8/0.9.7.5.9;
+- retry manual volta a ter prioridade interativa/direta como na 5.6;
+- maintenance/recovery de Produção volta a ser verificado a cada 1 minuto;
+- Ronda editorial permanece a cada 5 minutos com single-flight/coalescing;
+- Cost Governor de US$ 1/semana adicional permanece restrito à operação automática da Ronda;
+- Crawl permanece read-only, sem scraping/Browser/IA/tradução próprios;
+- adicionada trava de SHA-256 e teste dedicado para impedir nova regressão do carrossel.
 
 ## 0.9.7.5.7 — Quality-First 5M + Cost Governor + Crawl Read-Only
 

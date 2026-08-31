@@ -1,12 +1,20 @@
-# RONDA ONE Cloud v0.9.7.5.9 — Durable AI Generation Retry
+# RONDA ONE Cloud v0.9.7.5.10 — Carousel Stability Baseline 5.6 + Quality-First 5M
 
-Hotfix incremental sobre a v0.9.7.5.8. Corrige o retry quando o carrossel já possui Evidence Pack e fica preso em `4 Multi-AI`: o botão **Tentar novamente** e o recovery automático passam a reenfileirar o mesmo job pela `CAROUSEL_AI_QUEUE`. Execução direta fica somente como contingência se a Queue dedicada estiver indisponível. Scraping, Evidence Pack, Multi-AI/Quality Gate, Confidence e FORMA não tiveram sua lógica editorial alterada.
+Esta é uma **stability release**. O pipeline de carrossel volta integralmente à baseline comprovada da `0.9.7.5.6`, enquanto mantém as melhorias de operação da `0.9.7.5.7`: Ronda Quality-First a cada 5 minutos, single-flight/coalescing, Cost Governor com meta adicional de US$ 1/semana e Crawl somente leitura.
 
-Veja `docs/CAROUSEL-DURABLE-AI-GENERATION-v0.9.7.5.9.md`.
+## Regra de estabilidade
+- `src/production/engine.js`: byte a byte igual à 0.9.7.5.6;
+- `src/production/scraping-engine.js`: byte a byte igual à 0.9.7.5.6;
+- `src/ronda/v285/article-reader.js`: byte a byte igual à 0.9.7.5.6;
+- `public/design/index.html`: byte a byte igual à 0.9.7.5.6;
+- mudanças de retry durável introduzidas em 0.9.7.5.8/0.9.7.5.9 **não estão incluídas**;
+- recovery/watchdog de Produção volta a ser avaliado a cada 1 minuto;
+- nova Ronda continua sendo criada somente a cada 5 minutos.
 
-# RONDA ONE Cloud v0.9.7.5.8 — Durable Carousel Retry Queue
+## Objetivo
+Recuperar a previsibilidade e a taxa de sucesso do carrossel sem perder as economias de processamento e sem voltar a congestionar a ROUND Queue.
 
-Hotfix incremental sobre a v0.9.7.5.7. Corrige o retry do carrossel sem reduzir qualidade: a nova tentativa usa a `ARTICLE_READ_QUEUE` como caminho principal e preserva `alternate → deep → snapshot` no mesmo job. Nenhum job pode avançar para `CAROUSEL_AI_QUEUE` sem Evidence Pack. Scraping, Evidence Engine, Multi-AI/Quality Gate (article-reader) e FORMA permanecem congelados.
+Veja `docs/CAROUSEL-STABILITY-BASELINE-v0.9.7.5.10.md`.
 
 # RONDA ONE Cloud v0.9.7.5.7 — Quality-First 5M + Cost Governor + Crawl Read-Only
 
