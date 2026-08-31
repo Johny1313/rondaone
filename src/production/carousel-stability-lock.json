@@ -1,0 +1,49 @@
+{
+  "release": "0.9.7.6.1",
+  "name": "BAND-READER-V2-RETRY-ORDER",
+  "engineBaseline": "0.9.7.5.6",
+  "costBaseline": "0.9.7.5.7",
+  "readerVersion": "hybrid-reader-v1.1-band-v2",
+  "evidenceVersion": "ronda-evidence-pack-v1-reader-v1.1",
+  "carouselPipelineVersion": "carousel-stability-baseline-v1.1",
+  "qualityFirstPreserved": true,
+  "costGovernorPreserved": true,
+  "d1SchemaChange": false,
+  "d1HistoryDeleted": false,
+  "browserPolicy": "fallback-only-normal-path",
+  "browserNavigationsPerBrowserAttempt": 1,
+  "scrapingEngineFrozenFrom5613": false,
+  "removedConflicts": [
+    "scripts/test-097510-carousel-stability-baseline.mjs",
+    "scripts/test-097512-carousel-56-full-lock.mjs",
+    "src/production/carousel-56-lock.json",
+    "docs/CAROUSEL-STABILITY-BASELINE-v0.9.7.5.10.md",
+    "docs/CAROUSEL-56-FULL-LOCK-v0.9.7.5.12.md"
+  ],
+  "removedDeadFunctions": [
+    "ensureEvidencePackPtBr",
+    "bestTopicItem",
+    "evidenceSyntheticHtml",
+    "translateArticleRecordToPtBr",
+    "splitTranslationText"
+  ],
+  "lockedFiles": {
+    "src/production/engine.js": "bc648bf6b0b282b56617fbff9ea585c7b0b3c6951f7d32727a0dc1e88a4804e4",
+    "src/production/hybrid-browser-reader.js": "3f929777d44548a532d1edf0408f9e8adecb8ff7d0405ff46ea03564307fd74e",
+    "src/production/scraping-engine.js": "7aadacbcd3ff0bc23f20c8d9c4fd82432b1256caf79d2266bb1eaaec62f9188c",
+    "src/ronda/v285/article-reader.js": "944bff72b03f3c15a10e42a12541aef9af531c676801add27474a3b5165fc722",
+    "src/ronda/v285/collector.js": "edbd0607f318050b3d39b58443eb270288e4a9949573f429138e669da6b0df54",
+    "src/ronda/v285/database.js": "42a67bf6a1ab5f993273635738b14d519c9c5dee24c27d08624cd4f601b05763",
+    "src/ronda/v285/translation.js": "83999f5dd55e924dcee955dd687328a9a64350fa4c0550876d3efdff1b27a387",
+    "src/ronda/v285/index.js": "7c40a1043cbf50cbd31ba9367589f2960dc30cee388ada60dca7cf30e919f56b",
+    "src/index.js": "575fea24d6125417bfb878b17e208ca10ead1fea55cbd5fd5f9d58780d6f5298",
+    "src/ronda/shell.js": "91d2f442db701b42149dd9fb06e0dfb54919a4cda50d796883b15c2fc50c40e3",
+    "public/design/index.html": "ab944dac59a6fd69383bffc14be69adc6572dc08103e9e64dee6d8574803c348",
+    "public/ronda/app.js": "1539b593d5eec539ab13214930dd41583d3fd5ee7030d6865baee38e8cf11c72",
+    "wrangler.jsonc": "2c0e9d3a802d24180581e5fb35b33952dfcf01d52cb7cb61fde9e4d9d83f42c8",
+    "package.json": "e73a8cc11dfd134d93034b3ad3b7df475e2e85071dc5fc99e10d423e08a3c0b0"
+  },
+  "scrapingEngineChangeScope": "Band adapter v2 + structured JSON-LD/VideoObject only",
+  "retry1Transport": "direct-first",
+  "retry2Transport": "browser-first-deep"
+}
