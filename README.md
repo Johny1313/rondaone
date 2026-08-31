@@ -1,10 +1,18 @@
-# RONDA ONE Cloud v0.9.7.5.11 — External Link Browser Read Hotfix
+# RONDA ONE Cloud v0.9.7.5.12 — Carousel 5.6 Full Lock + Quality-First 5M
 
-Hotfix derivado diretamente da v0.9.7.5.10 para reduzir inconsistências de carrossel em links externos. A mudança é restrita à camada de transporte do Browser Run: páginas JS-heavy passam a aguardar `networkidle2`, com fallback para `domcontentloaded`, validação explícita da resposta e budget maior. O motor editorial, Evidence Pack, Multi-AI, Quality Gate, FORMA e a coordenação Quality-First 5M permanecem preservados.
+Esta release transforma a mecânica de carrossel da `0.9.7.5.6` em um subsistema formalmente congelado. O núcleo e suas dependências imutáveis são restaurados da 5.6 e verificados por SHA-256; a Ronda editorial continua com Quality-First 5M, Cost Governor e Crawl read-only.
 
-Rollback seguro: v0.9.7.5.10.
+## Full Lock do carrossel
+- `src/production/engine.js`, `scraping-engine.js`, `article-reader.js`, `parser.js`, `article-visuals.js` e o FORMA são protegidos por hash da 5.6;
+- a API crítica de tradução usada pelo carrossel também é protegida por hash, sem remover o budget de tradução da Ronda;
+- retry/recovery manual permanece na mecânica comprovada da 5.6;
+- alterações experimentais posteriores de Browser Run/retry não entram nesta release;
+- nenhuma migration D1 foi adicionada;
+- `scripts/test-097512-carousel-56-full-lock.mjs` bloqueia regressões.
 
-# RONDA ONE Cloud v0.9.7.5.10 — Carousel Stability Baseline 5.6 + Quality-First 5M
+Veja `docs/CAROUSEL-56-FULL-LOCK-v0.9.7.5.12.md`.
+
+## Baseline anterior
 
 Esta é uma **stability release**. O pipeline de carrossel volta integralmente à baseline comprovada da `0.9.7.5.6`, enquanto mantém as melhorias de operação da `0.9.7.5.7`: Ronda Quality-First a cada 5 minutos, single-flight/coalescing, Cost Governor com meta adicional de US$ 1/semana e Crawl somente leitura.
 

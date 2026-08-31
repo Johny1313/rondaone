@@ -1,11 +1,14 @@
-## 0.9.7.5.11 — External Link Browser Read Hotfix
+## 0.9.7.5.12 — Carousel 5.6 Full Lock + Quality-First 5M
 
-- mantém a v0.9.7.5.10 como baseline de rollback;
-- corrige leitura Browser Run de links externos JS-heavy com `networkidle2`;
-- faz fallback automático para `domcontentloaded` quando a página não estabiliza;
-- valida `response.ok` e envelopes `success:false` antes de tratar a resposta como HTML;
-- amplia o budget padrão do Browser Run de 5,5 s para 9,5 s apenas no fluxo de leitura de produção;
-- não altera `article-reader.js`, FORMA, Multi-AI, Quality Gate, quantidade de slides ou Quality-First 5M.
+- restaura explicitamente da 0.9.7.5.6 o núcleo de carrossel e dependências imutáveis;
+- adiciona manifesto `src/production/carousel-56-lock.json` com hashes oficiais;
+- congela também `parser.js` e `article-visuals.js`, além dos quatro componentes já protegidos na 5.10;
+- protege por hash a API de tradução usada pelo carrossel sem remover o budget de tradução da Ronda;
+- mantém o retry/recovery manual da 5.6 e não reintroduz mudanças 5.8/5.9;
+- mantém recovery de Produção a cada 1 min e Ronda Quality-First a cada 5 min;
+- mantém Cost Governor, Crawl read-only, Mesa e Produção atuais;
+- não adiciona migration ou alteração de schema D1;
+- adiciona teste dedicado que falha se o Carousel 5.6 Full Lock for violado.
 
 ## 0.9.7.5.10 — Carousel Stability Baseline 5.6 + Quality-First 5M
 
