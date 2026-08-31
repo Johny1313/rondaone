@@ -1,3 +1,13 @@
+## 0.9.7.5.13 — Carousel 5.6 Fresh URL Reset + Quality-First 5M
+
+- mantém o motor de carrossel byte a byte na baseline 0.9.7.5.6;
+- URLs externas recebem o namespace `carousel-5.6-fresh-url-v1`;
+- jobs `ready` e jobs ativos de versões anteriores não são reutilizados para uma nova URL;
+- a primeira leitura de uma URL nova ignora Evidence Pack legado e refaz a matéria com o motor 5.6;
+- depois da primeira geração 5.13, dedupe/cache voltam a funcionar dentro da nova baseline;
+- nenhum registro D1 é apagado e nenhuma migration é adicionada;
+- Ronda Quality-First 5M, Mesa, Produção e FORMA permanecem preservados.
+
 ## 0.9.7.5.12 — Carousel 5.6 Full Lock + Quality-First 5M
 
 - restaura explicitamente da 0.9.7.5.6 o núcleo de carrossel e dependências imutáveis;

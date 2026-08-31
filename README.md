@@ -1,4 +1,4 @@
-# RONDA ONE Cloud v0.9.7.5.12 — Carousel 5.6 Full Lock + Quality-First 5M
+# RONDA ONE Cloud v0.9.7.5.13 — Carousel 5.6 Fresh URL Reset + Quality-First 5M
 
 Esta release transforma a mecânica de carrossel da `0.9.7.5.6` em um subsistema formalmente congelado. O núcleo e suas dependências imutáveis são restaurados da 5.6 e verificados por SHA-256; a Ronda editorial continua com Quality-First 5M, Cost Governor e Crawl read-only.
 
@@ -10,7 +10,7 @@ Esta release transforma a mecânica de carrossel da `0.9.7.5.6` em um subsistema
 - nenhuma migration D1 foi adicionada;
 - `scripts/test-097512-carousel-56-full-lock.mjs` bloqueia regressões.
 
-Veja `docs/CAROUSEL-56-FULL-LOCK-v0.9.7.5.12.md`.
+Veja `docs/EXTERNAL-URL-FRESH-RESET-v0.9.7.5.13.md` e `docs/CAROUSEL-56-FULL-LOCK-v0.9.7.5.12.md`.
 
 ## Baseline anterior
 
