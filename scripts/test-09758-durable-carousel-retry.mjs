@@ -7,7 +7,7 @@ const bytes=(p)=>fs.readFileSync(new URL(`../${p}`,import.meta.url));
 const engine=read('src/production/engine.js');
 const pkg=JSON.parse(read('package.json'));
 
-assert.equal(pkg.version,'0.9.7.5.8');
+assert.ok(['0.9.7.5.8','0.9.7.5.9'].includes(pkg.version));
 assert.match(engine,/retryMode:body\.retryMode\|\|null/,'ARTICLE_READ_QUEUE deve preservar a estratégia do retry manual');
 assert.match(engine,/readQueue\.send\(\{type:"production-read",jobId:id,force:retryMode!=="snapshot",retryMode,manualRetry:true,retryNumber\}\)/,'retry manual deve ser durável na ARTICLE_READ_QUEUE');
 assert.match(engine,/Retry manual \$\{retryNumber\} entregue à ARTICLE_READ_QUEUE/);

@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.8";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.9";
 const PRODUCTION_READ_STALE_MS = 15_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 45_000;
@@ -699,7 +699,7 @@ export async function runProductionQueue(batch,env){
           if(q?.send){try{await q.send({type:"production-generate",jobId:body.jobId});}catch(error){await event(env.DB,body.jobId,"generating","completed_fallback","CAROUSEL_AI_QUEUE indisponível; geração no consumidor de leitura",{error:String(error?.message||error).slice(0,180)}).catch(()=>null);await processProductionGenerate(env,body.jobId);}}
           else await processProductionGenerate(env,body.jobId);
         }
-      }else if(body.type==="production-generate") await processProductionGenerate(env,body.jobId);
+      }else if(body.type==="production-generate") await processProductionGenerate(env,body.jobId,{deterministicOnly:Boolean(body.deterministicOnly)});
       message?.ack?.();
     }catch(error){
       const attempts=Number(message?.attempts||1);
@@ -776,8 +776,18 @@ export async function recoverStalledProductionJob(env,id,{ctx=null,forceFallback
     if(await hasActiveProductionLease(db,id,"generating"))return job;
     const count=await productionRecoveryCount(db,id,"generating");
     if(count<1){
-      await updateJob(db,id,{status:"running",stage:"generating",progress:Math.max(58,job.progress||0),error:null,fallbackLevel:Math.max(1,job.fallbackLevel||0)});
-      await event(db,id,"generating","recovery","Queue de IA sem progresso; geração direta retomada",{idleMs,ageMs});
+      await updateJob(db,id,{status:"queued",stage:"generating",progress:Math.max(54,job.progress||0),error:null,fallbackLevel:Math.max(1,job.fallbackLevel||0)});
+      await event(db,id,"generating","recovery","Queue de IA sem progresso; reenfileiramento durável iniciado",{idleMs,ageMs,durableQueue:true});
+      const q=queueForCarousel(env);
+      if(q?.send){
+        try{
+          await q.send({type:"production-generate",jobId:id,recovery:true});
+          await event(db,id,"generating","queued","Recovery automático entregue à CAROUSEL_AI_QUEUE",{idleMs,ageMs,durableQueue:true}).catch(()=>null);
+          return getProductionJob(db,id);
+        }catch(error){
+          await event(db,id,"generating","completed_fallback","CAROUSEL_AI_QUEUE indisponível no recovery automático; contingência direta acionada",{idleMs,ageMs,error:String(error?.message||error).slice(0,180)}).catch(()=>null);
+        }
+      }
       return runDirectProductionRecovery(env,id,{stage:"generating",ctx});
     }
   }
@@ -885,7 +895,18 @@ export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
   if(stage==="generate"&&job.evidenceId){
     const revoked=await revokeProductionLease(env.DB,id,"generating").catch(()=>({revoked:false,active:false}));
     await updateJob(env.DB,id,{status:"queued",stage:"generating",progress:52,error:null});
-    await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; retomando diretamente do Evidence Pack",{sameJob:true,transport:"waitUntil-direct",leaseRevoked:Boolean(revoked?.revoked),previousLeaseActive:Boolean(revoked?.active)}).catch(()=>null);
+    const carouselQueue=queueForCarousel(env);
+    if(carouselQueue?.send){
+      try{
+        await carouselQueue.send({type:"production-generate",jobId:id,manualRetry:true,recovery:true});
+        await event(env.DB,id,"generating","recovery","Nova tentativa solicitada pelo operador; geração reenfileirada a partir do Evidence Pack",{sameJob:true,transport:"CAROUSEL_AI_QUEUE",durableQueue:true,leaseRevoked:Boolean(revoked?.revoked),previousLeaseActive:Boolean(revoked?.active)}).catch(()=>null);
+        await event(env.DB,id,"generating","queued","Retry manual de geração entregue à CAROUSEL_AI_QUEUE",{sameJob:true,durableQueue:true,manualRetry:true}).catch(()=>null);
+        return getProductionJob(env.DB,id);
+      }catch(error){
+        await event(env.DB,id,"generating","completed_fallback","CAROUSEL_AI_QUEUE indisponível no retry manual de geração; contingência direta acionada",{sameJob:true,error:String(error?.message||error).slice(0,180),leaseRevoked:Boolean(revoked?.revoked)}).catch(()=>null);
+      }
+    }
+    await event(env.DB,id,"generating","recovery","Contingência direta usada somente porque CAROUSEL_AI_QUEUE não está disponível",{sameJob:true,transport:"waitUntil-direct-fallback",leaseRevoked:Boolean(revoked?.revoked),previousLeaseActive:Boolean(revoked?.active)}).catch(()=>null);
     return runDirectProductionRecovery(env,id,{stage:"generating",ctx});
   }
   const retryRows=(await env.DB.prepare("SELECT metadata_json FROM production_stage_events WHERE job_id=? AND stage='reading' AND status='recovery' AND detail LIKE 'Nova tentativa %' ORDER BY created_at ASC LIMIT 12").bind(id).all().catch(()=>({results:[]})))?.results||[];

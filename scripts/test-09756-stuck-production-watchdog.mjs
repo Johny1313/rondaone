@@ -31,5 +31,5 @@ assert.match(db,/CREATE TABLE IF NOT EXISTS production_workflow/);
 assert.match(db,/CREATE TABLE IF NOT EXISTS editorial_production_tracking/);
 assert.match(engine,/CREATE TABLE IF NOT EXISTS production_jobs/);
 
-assert.match(engine,/PRODUCTION_SCHEMA_VERSION = "0\.9\.7\.5\.[68]"/);
+assert.match(engine,/PRODUCTION_SCHEMA_VERSION = "0\.9\.7\.5\.[689]"/);
 console.log('OK 0.9.7.5.6 stuckProduction watchdog hotfix');

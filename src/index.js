@@ -69,7 +69,7 @@ export async function buildPlatformStatus(env){
   const coveragePercent=total?Math.round(available/total*100):0;
   const ok=database==='connected'&&queues.ROUND==='available'&&queues.INTELLIGENT==='available';
   return {
-    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.8',database,schedulerHealthy,lastSuccessAt,generatedAt,
+    ok,ready:ok&&schedulerHealthy,service:'ronda-one',version:'0.9.7.5.9',database,schedulerHealthy,lastSuccessAt,generatedAt,
     queues,
     sources:{total,healthy,degraded,unavailable,cacheOnly,coveragePercent},
     jobs:{stuckIntelligent,stuckProduction,activeProduction,recoveringProduction,oldestActiveAgeSeconds,oldestHeartbeatAgeSeconds,healthy:stuckIntelligent===0&&stuckProduction===0},
@@ -89,7 +89,7 @@ export default {
     if(url.pathname==='/api/platform/status'){ const operational=await buildPlatformStatus(env); return json({
       ...operational,
       platform:'RONDA ONE',
-      version:'0.9.7.5.8',
+      version:'0.9.7.5.9',
       modules:{
         ronda:true,
         editorialVersion:'2.9.7.5.8',
@@ -282,6 +282,7 @@ export default {
       qualityFirstV09757:{enabled:true,roundCadenceMinutes:5,singleFlight:true,coalescing:true,maxPendingRounds:1,registeredSources:39,sourceCadenceMinutes:{high:5,medium:10,normal:15},newItemLimits:{veryHigh:24,high:18,normal:12,world:10},dedupeBeforeExpensiveWork:true,sourceMemoryFirst:true,automaticFastLane:false,legacyQueueMessagesSafeDrain:true},
       costGovernorV09757:{enabled:true,targetAdditionalUsdPerWeek:1,automaticSpendTarget:true,externalRequestBudget:Number(env.ROUND_EXTERNAL_REQUEST_BUDGET)||70,browserDailyLimit:Number(env.ROUND_BROWSER_DAILY_LIMIT)||48,browserPerRoundLimit:1,translationDailyLimit:Number(env.ROUND_TRANSLATION_DAILY_LIMIT)||192,browserRecoveryOnly:true,backgroundSourceBrowser:false,carouselQualityBudgetExempt:true,billingApiRequiredForHardDollarGuarantee:true},
       crawlReadOnlyV09757:{enabled:true,endpoint:'/api/crawl',source:'D1 source_discovery_items',scraping:false,browser:false,ai:false,translation:false,originalArticleLinks:true,cacheSeconds:30},
+      durableAiGenerationRetryV09759:{enabled:true,manualRetryQueue:'CAROUSEL_AI_QUEUE',automaticRecoveryQueue:'CAROUSEL_AI_QUEUE',sameJob:true,evidencePackReused:true,directExecutionOnlyOnQueueFailure:true,qualityPipelineUnchanged:true},
       workflowV095:{enabled:true,statuses:['draft','in_review','approved','published','rejected'],roles:['editor','reviewer','publisher','admin'],auditTrail:true,groups:true,formaSubmitForReview:true},
       sourceRecovery:{
         cronMinutes:5,

@@ -11,8 +11,8 @@ assert.match(design,/same job|mesmo job/i);
 assert.match(design,/\/api\/production\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/retry/);
 assert.match(engine,/Nova tentativa solicitada pelo operador/);
 assert.match(engine,/sameJob:true/);
-assert.match(engine,/runDirectProductionRecovery\(env,id,\{stage:"generating",ctx\}\)/);
+assert.match(engine,/runDirectProductionRecovery\(env,id,\{stage:"generating",ctx\}\)/); // preservado apenas como contingência se a Queue falhar
 assert.match(engine,/launchInteractiveProduction\(env,id,\{force:[^,}]+,ctx(?:,retryMode)?\}\)/);
-assert.doesNotMatch(engine,/if\(stage==="generate"&&job\.evidenceId\).*queueForCarousel/s);
+assert.match(engine,/if\(stage==="generate"&&job\.evidenceId\).*queueForCarousel.*CAROUSEL_AI_QUEUE/s); // desde 5.9 o mesmo job usa retry durável
 assert.match(worker,/productionRetryMatch/);
 console.log('v0.9.7.4.2 Retry UX + Same Job Recovery OK');
