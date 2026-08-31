@@ -1,3 +1,9 @@
+# RONDA ONE Cloud v0.9.7.5.11 — External Link Browser Read Hotfix
+
+Hotfix derivado diretamente da v0.9.7.5.10 para reduzir inconsistências de carrossel em links externos. A mudança é restrita à camada de transporte do Browser Run: páginas JS-heavy passam a aguardar `networkidle2`, com fallback para `domcontentloaded`, validação explícita da resposta e budget maior. O motor editorial, Evidence Pack, Multi-AI, Quality Gate, FORMA e a coordenação Quality-First 5M permanecem preservados.
+
+Rollback seguro: v0.9.7.5.10.
+
 # RONDA ONE Cloud v0.9.7.5.10 — Carousel Stability Baseline 5.6 + Quality-First 5M
 
 Esta é uma **stability release**. O pipeline de carrossel volta integralmente à baseline comprovada da `0.9.7.5.6`, enquanto mantém as melhorias de operação da `0.9.7.5.7`: Ronda Quality-First a cada 5 minutos, single-flight/coalescing, Cost Governor com meta adicional de US$ 1/semana e Crawl somente leitura.

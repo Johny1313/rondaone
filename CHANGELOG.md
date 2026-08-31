@@ -1,3 +1,12 @@
+## 0.9.7.5.11 — External Link Browser Read Hotfix
+
+- mantém a v0.9.7.5.10 como baseline de rollback;
+- corrige leitura Browser Run de links externos JS-heavy com `networkidle2`;
+- faz fallback automático para `domcontentloaded` quando a página não estabiliza;
+- valida `response.ok` e envelopes `success:false` antes de tratar a resposta como HTML;
+- amplia o budget padrão do Browser Run de 5,5 s para 9,5 s apenas no fluxo de leitura de produção;
+- não altera `article-reader.js`, FORMA, Multi-AI, Quality Gate, quantidade de slides ou Quality-First 5M.
+
 ## 0.9.7.5.10 — Carousel Stability Baseline 5.6 + Quality-First 5M
 
 - carrossel revertido à baseline comportamental e binária da 0.9.7.5.6;
