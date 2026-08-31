@@ -10,7 +10,7 @@ import { stableHash, plainText } from "../ronda/v285/parser.js";
 import { isLikelyPortuguese, translateText } from "../ronda/v285/translation.js";
 import { buildEvidencePack, normalizeArticleIdentity, scrapeArticle, scrapeTopicToEvidence } from "./scraping-engine.js";
 
-const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.6";
+const PRODUCTION_SCHEMA_VERSION = "0.9.7.5.8";
 const PRODUCTION_READ_STALE_MS = 15_000;
 const PRODUCTION_GENERATE_STALE_MS = 10_000;
 const PRODUCTION_HARD_DEADLINE_MS = 45_000;
@@ -687,8 +687,14 @@ export async function runProductionQueue(batch,env){
     if(!String(body.type||"").startsWith("production-"))continue;
     try{
       if(body.type==="production-read"){
-        const job=await processProductionRead(env,body.jobId,{force:Boolean(body.force)});
-        if(job.status!=="failed"){
+        const job=await processProductionRead(env,body.jobId,{force:Boolean(body.force),retryMode:body.retryMode||null});
+        if(job.status!=="failed"&&!job.evidenceId){
+          const attempts=Number(message?.attempts||1);
+          await event(env.DB,body.jobId,"reading","deduplicated","Consumer de leitura terminou sem Evidence Pack; geração bloqueada",{attempts,retryMode:body.retryMode||null,leaseBusy:Boolean(job?.leaseBusy),manualRetry:Boolean(body.manualRetry)}).catch(()=>null);
+          if(attempts<3&&message?.retry){message.retry({delaySeconds:Math.min(12,3*attempts)});continue;}
+          throw new Error("Leitura terminou sem Evidence Pack; geração bloqueada para evitar carrossel sem evidências.");
+        }
+        if(job.status!=="failed"&&job.evidenceId){
           const q=queueForCarousel(env);
           if(q?.send){try{await q.send({type:"production-generate",jobId:body.jobId});}catch(error){await event(env.DB,body.jobId,"generating","completed_fallback","CAROUSEL_AI_QUEUE indisponível; geração no consumidor de leitura",{error:String(error?.message||error).slice(0,180)}).catch(()=>null);await processProductionGenerate(env,body.jobId);}}
           else await processProductionGenerate(env,body.jobId);
@@ -892,6 +898,16 @@ export async function retryProductionJob(env,id,{ctx=null,stage=null}={}){
   const revoked=await revokeProductionLease(env.DB,id,"reading").catch(()=>({revoked:false,active:false}));
   await updateJob(env.DB,id,{status:"queued",stage:"reading",progress:3,error:null});
   await event(env.DB,id,"reading","recovery",`Nova tentativa ${retryNumber}: ${labels[retryMode]}; mesmo job, estratégia diferente`,{sameJob:true,retryNumber,retryMode,avoidRepeat:true,manualRetry:true,leaseRevoked:Boolean(revoked?.revoked),previousLeaseActive:Boolean(revoked?.active)}).catch(()=>null);
+  const readQueue=queueForRead(env);
+  if(readQueue?.send){
+    try{
+      await readQueue.send({type:"production-read",jobId:id,force:retryMode!=="snapshot",retryMode,manualRetry:true,retryNumber});
+      await event(env.DB,id,"reading","queued",`Retry manual ${retryNumber} entregue à ARTICLE_READ_QUEUE`,{sameJob:true,retryNumber,retryMode,durableQueue:true,avoidRepeat:true}).catch(()=>null);
+      return getProductionJob(env.DB,id);
+    }catch(error){
+      await event(env.DB,id,"reading","completed_fallback","ARTICLE_READ_QUEUE indisponível no retry manual; contingência direta acionada",{retryNumber,retryMode,error:String(error?.message||error).slice(0,180)}).catch(()=>null);
+    }
+  }
   const launched=await launchInteractiveProduction(env,id,{force:retryMode!=='snapshot',ctx,retryMode});
   return launched.job||getProductionJob(env.DB,id);
 }
