@@ -72,10 +72,11 @@ assert.equal(portalAdapterForUrl('https://www.band.com.br/noticias/x')?.id,'band
 
 // 5) Produção está ligada ao Browser Run, mas preserva fallback quando binding não existir.
 const engine=fs.readFileSync(new URL('../src/production/engine.js',import.meta.url),'utf8');
+const hybrid=fs.readFileSync(new URL('../src/production/hybrid-browser-reader.js',import.meta.url),'utf8');
 const wrangler=JSON.parse(fs.readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8'));
 const platform=fs.readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 assert.equal(wrangler.browser?.binding,'BROWSER');
-assert.match(engine,/BROWSER\.quickAction\("content"/);
+assert.match(hybrid,/BROWSER\.quickAction\("content"/);
 assert.match(engine,/production_transport_stats/);
 assert.match(engine,/browser-first/);
 assert.match(platform,/hybridMultiTransportV09746/);

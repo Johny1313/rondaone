@@ -1,12 +1,17 @@
-## 0.9.7.5.13 — Carousel 5.6 Fresh URL Reset + Quality-First 5M
+## 0.9.7.6.0 — Carousel Stability Baseline Definitiva
 
-- mantém o motor de carrossel byte a byte na baseline 0.9.7.5.6;
-- URLs externas recebem o namespace `carousel-5.6-fresh-url-v1`;
-- jobs `ready` e jobs ativos de versões anteriores não são reutilizados para uma nova URL;
-- a primeira leitura de uma URL nova ignora Evidence Pack legado e refaz a matéria com o motor 5.6;
-- depois da primeira geração 5.13, dedupe/cache voltam a funcionar dentro da nova baseline;
-- nenhum registro D1 é apagado e nenhuma migration é adicionada;
-- Ronda Quality-First 5M, Mesa, Produção e FORMA permanecem preservados.
+- reconstrói a baseline sobre a linha 5.12, preservando engine operacional 5.6 + Quality-First/Cost Governor 5.7;
+- isola Browser Run em `src/production/hybrid-browser-reader.js`;
+- mantém direct/JSON-LD/adapter/parser/AMP como caminho prioritário e Browser como fallback normal;
+- Browser usa uma única Quick Action `/content`, JavaScript habilitado, `domcontentloaded` + estabilização curta e bloqueio de recursos caros;
+- remove browser-first automático baseado em histórico do domínio do caminho normal;
+- adiciona `readerVersion`, `evidenceVersion` e `carouselPipelineVersion` para impedir reutilização silenciosa de estado legado;
+- preserva D1 histórico sem deleção e sem migration destrutiva;
+- adiciona `/api/admin/carousel/diagnostics`;
+- remove funções mortas/duplicadas do engine;
+- remove locks/testes parciais 5.10 e 5.12 e substitui por um único `carousel-stability-lock.json`;
+- mantém retry/recovery 5.6 e não incorpora os coordenadores de retry durável 5.8/5.9;
+- suíte completa `npm run test:all` aprovada localmente.
 
 ## 0.9.7.5.12 — Carousel 5.6 Full Lock + Quality-First 5M
 

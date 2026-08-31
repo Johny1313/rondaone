@@ -22,6 +22,6 @@ assert.match(forma,/clientSafetyCeiling=startedAt\+65\*1000/);
 assert.doesNotMatch(waitBlock,/\/retry/);
 assert.doesNotMatch(waitBlock,/\/fallback/);
 assert.match(forma,/backend está executando a recuperação do mesmo job/);
-assert.match(index,/engineVersion:"0\.9\.7\.5\.[1-6]"/);
+assert.match(index,/engineVersion:(?:"0\.9\.7\.5\.[1-6]"|PRODUCTION_VERSIONS\.engineBaseline)/);
 
 console.log('v0.9.7.4.3 Terminal Completion preservado com coordenador único atual OK');

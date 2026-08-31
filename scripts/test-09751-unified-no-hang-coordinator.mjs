@@ -22,5 +22,5 @@ const getStart=api.indexOf('if (productionJobMatch && request.method === \"GET\"
 const getEnd=api.indexOf('const productionRetryMatch',getStart);
 assert.ok(getStart>0&&getEnd>getStart);
 assert.doesNotMatch(api.slice(getStart,getEnd),/recoverStalledProductionJob/,'GET deve permanecer read-only; recovery pertence ao coordenador agendado');
-assert.match(api,/engineVersion:"0\.9\.7\.5\.[1-6]"/);
+assert.match(api,/engineVersion:(?:"0\.9\.7\.5\.[1-6]"|PRODUCTION_VERSIONS\.engineBaseline)/);
 console.log('RONDA ONE Unified No-Hang Coordinator invariants: OK');
